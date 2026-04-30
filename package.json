@@ -1,0 +1,16 @@
+{
+  "name": "sn110-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local Taostats SN110 dashboard with SQLite history tracking.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "ingest": "node src/cli.js --once",
+    "backfill": "node src/cli.js --backfill",
+    "test": "node --test"
+  }
+}
