@@ -5,14 +5,18 @@ const {
   fetchHistoricalSnapshots,
   fetchTaoPriceLatest,
   fetchTaoPriceHistory,
+  fetchTaoFlowHistory,
 } = require('./taostats');
 const {
   insertSnapshot,
   insertTaoPriceSnapshot,
+  insertTaoFlowSnapshot,
   insertIngestRun,
   snapshotExists,
+  taoFlowSnapshotExists,
   deleteSnapshotsInRange,
   deleteTaoPriceHistoryInRange,
+  deleteTaoFlowHistoryInRange,
 } = require('./db');
 
 function createIngestService({ db, config }) {
@@ -137,6 +141,9 @@ function createIngestService({ db, config }) {
     let priceInserted = 0;
     let priceDeleted = 0;
     let priceSkipped = 0;
+    let flowInserted = 0;
+    let flowDeleted = 0;
+    let flowSkipped = 0;
 
     try {
       if (!config.taostatsAuthHeader) {
@@ -172,6 +179,42 @@ function createIngestService({ db, config }) {
         detail.endIso = endIso;
       }
 
+      try {
+        const taoFlowHistory = await fetchTaoFlowHistory({
+          netuid,
+          taostatsBaseUrl: config.taostatsBaseUrl,
+          taostatsAuthHeader: config.taostatsAuthHeader,
+          rateLimiter: config.taostatsRateLimiter || null,
+          days,
+        });
+
+        detail.flowFetched = taoFlowHistory.length;
+
+        if (overwrite && taoFlowHistory.length > 0) {
+          const capturedAts = taoFlowHistory
+            .map((row) => row.captured_at)
+            .filter(Boolean)
+            .sort();
+          const flowStartIso = capturedAts[0];
+          const flowEndIso = capturedAts[capturedAts.length - 1];
+          flowDeleted = deleteTaoFlowHistoryInRange(db, netuid, flowStartIso, flowEndIso);
+          detail.flowDeleted = flowDeleted;
+          detail.flowStartIso = flowStartIso;
+          detail.flowEndIso = flowEndIso;
+        }
+
+        for (const flowSnapshot of taoFlowHistory) {
+        if (!overwrite && flowSnapshot.block_number !== null && flowSnapshot.block_number !== undefined && taoFlowSnapshotExists(db, netuid, flowSnapshot.block_number)) {
+          flowSkipped += 1;
+          continue;
+        }
+          insertTaoFlowSnapshot(db, flowSnapshot);
+          flowInserted += 1;
+        }
+      } catch (flowError) {
+        detail.flowError = flowError instanceof Error ? flowError.message : String(flowError);
+      }
+
       for (const snapshot of snapshots) {
         if (!overwrite && snapshot.block_number !== null && snapshotExists(db, netuid, snapshot.block_number)) {
           skipped += 1;
@@ -205,6 +248,9 @@ function createIngestService({ db, config }) {
       detail.priceInserted = priceInserted;
       detail.priceDeleted = priceDeleted;
       detail.priceSkipped = priceSkipped;
+      detail.flowInserted = flowInserted;
+      detail.flowDeleted = flowDeleted;
+      detail.flowSkipped = flowSkipped;
       return {
         ok,
         source,
@@ -214,6 +260,9 @@ function createIngestService({ db, config }) {
         priceInserted,
         priceDeleted,
         priceSkipped,
+        flowInserted,
+        flowDeleted,
+        flowSkipped,
         snapshotId,
         detail,
         message,
@@ -230,6 +279,9 @@ function createIngestService({ db, config }) {
         priceInserted,
         priceDeleted,
         priceSkipped,
+        flowInserted,
+        flowDeleted,
+        flowSkipped,
         snapshotId: null,
         detail,
         error: errorMessage,

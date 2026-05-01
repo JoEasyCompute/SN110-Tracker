@@ -10,6 +10,7 @@ const {
   extractEscapedJsonObject,
   normalizeSnapshot,
   normalizeTaoPriceSnapshot,
+  normalizeTaoFlowSnapshot,
   pickRecord,
   createRateLimiter,
 } = require('../src/taostats');
@@ -17,16 +18,18 @@ const {
   openDatabase,
   insertSnapshot,
   insertTaoPriceSnapshot,
+  insertTaoFlowSnapshot,
   getLatestSnapshot,
   getRecentSnapshots,
   getHistory,
   getLatestTaoPrice,
   getTaoPriceHistory,
+  getTaoFlowHistory,
   deleteSnapshotsInRange,
   getSetting,
   setSetting,
 } = require('../src/db');
-const { buildPageModel, renderPage, numericMetricValue, createDashboardServer } = require('../src/server');
+const { buildPageModel, renderPage, numericMetricValue, createDashboardServer, formatChartDate } = require('../src/server');
 const { loadConfig } = require('../src/config');
 
 test('extractEscapedJsonObject parses the Taostats page payload', () => {
@@ -48,6 +51,7 @@ test('normalizeSnapshot produces a stable DB-ready shape', () => {
     price: '0.005709859',
     market_cap: '10094190385726.221994149',
     liquidity: '7326003373188',
+    total_tao: '3738214651815',
     root_prop: '0.28069856591017118363',
     emission: '2854905',
     projected_emission: '0.00727172634236777466',
@@ -63,6 +67,7 @@ test('normalizeSnapshot produces a stable DB-ready shape', () => {
     net_flow_30_days: '567680736182',
     root_sell: 'YES',
     price_change_1_day: '2.680697764041122927',
+    ssi: '61.4',
     startup_mode: false,
     swap_v3_initialized: true,
     enabled_user_liquidity: false,
@@ -73,6 +78,7 @@ test('normalizeSnapshot produces a stable DB-ready shape', () => {
   assert.equal(snapshot.source, 'scrape');
   assert.equal(snapshot.price_text, '0.005709859');
   assert.equal(snapshot.price_num, 0.005709859);
+  assert.equal(snapshot.total_tao_num, 3738214651815);
   assert.equal(snapshot.emission_num, 2854905);
   assert.equal(Math.round(snapshot.emission_percent_num * 100) / 100, 0.57);
   assert.equal(Math.round(snapshot.emission_per_day_tao_num * 100) / 100, 41.11);
@@ -85,6 +91,8 @@ test('normalizeSnapshot produces a stable DB-ready shape', () => {
   assert.equal(snapshot.projected_emission_num, 0.00727172634236777466);
   assert.equal(snapshot.net_flow_7_days_num, -324821553991);
   assert.equal(snapshot.root_sell_bool, true);
+  assert.equal(snapshot.sentiment_index_num, 61.4);
+  assert.equal(snapshot.sentiment_index_source_text, 'ssi');
   assert.equal(snapshot.swap_v3_initialized, true);
   assert.equal(snapshot.raw_json.includes('Green Compute'), true);
 });
@@ -110,6 +118,8 @@ test('sqlite persistence stores and retrieves snapshot history', () => {
     net_flow_1_day: '20',
     net_flow_7_days: '30',
     net_flow_30_days: '40',
+    fear_and_greed_index: '46.2',
+    fear_and_greed_sentiment: 'Neutral',
     root_sell: 'NO',
   }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
   snapshot1.captured_at = '2026-04-29T00:00:00.000Z';
@@ -155,7 +165,7 @@ test('sqlite persistence stores and retrieves snapshot history', () => {
   assert.equal(history[1].price_num, 2);
 
   const columns = db.prepare('PRAGMA table_info(snapshots)').all().map((row) => row.name);
-  for (const name of ['emission_text', 'emission_percent_text', 'emission_per_day_tao_text', 'registration_cost_text', 'active_keys_text', 'projected_emission_text', 'net_flow_1_day_text', 'root_sell_text']) {
+  for (const name of ['emission_text', 'emission_percent_text', 'emission_per_day_tao_text', 'registration_cost_text', 'active_keys_text', 'projected_emission_text', 'net_flow_1_day_text', 'sentiment_index_text', 'sentiment_index_source_text', 'root_sell_text', 'total_tao_num']) {
     assert.equal(columns.includes(name), true);
   }
 
@@ -191,6 +201,36 @@ test('sqlite persistence stores and retrieves tao price history', () => {
   assert.equal(history.length, 2);
   assert.equal(history[0].price_usd, 100.25);
   assert.equal(history[1].price_usd, 110.25);
+
+  db.close();
+});
+
+test('sqlite persistence stores and retrieves tao flow history', () => {
+  const db = openDatabase(':memory:');
+  const flow1 = normalizeTaoFlowSnapshot({
+    block_number: 10,
+    timestamp: '2026-04-29T00:00:00Z',
+    netuid: 110,
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    tao_flow: '1000',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', netuid: 110, capturedAt: '2026-04-29T00:00:00.000Z' });
+  insertTaoFlowSnapshot(db, flow1);
+
+  const flow2 = normalizeTaoFlowSnapshot({
+    block_number: 11,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 110,
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    tao_flow: '1100',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', netuid: 110, capturedAt: '2026-04-30T00:00:00.000Z' });
+  insertTaoFlowSnapshot(db, flow2);
+
+  const history = getTaoFlowHistory(db, 110, '2026-04-29T00:00:00.000Z');
+  assert.equal(history.length, 2);
+  assert.equal(history[0].tao_flow_num, 1000);
+  assert.equal(history[1].tao_flow_num, 1100);
 
   db.close();
 });
@@ -244,6 +284,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     net_flow_30_days: '40',
     root_prop: '0.25',
     root_sell: 'YES',
+    fear_and_greed_index: '46.2',
+    fear_and_greed_sentiment: 'Neutral',
   }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
   insertSnapshot(db, snapshot);
   insertTaoPriceSnapshot(db, normalizeTaoPriceSnapshot({
@@ -259,6 +301,11 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="history-modal"'), true);
   assert.equal(html.includes('history-modal-info'), true);
   assert.equal(html.includes('history-modal-explanation'), true);
+  assert.equal(html.includes('Admin panel'), true);
+  assert.equal(html.includes('id="backfill-days"'), true);
+  assert.equal(html.includes('id="backfill-frequency"'), true);
+  assert.equal(html.includes('id="backfill-overwrite"'), true);
+  assert.equal(html.includes('id="backfill-btn"'), true);
   assert.equal(html.includes('data-history-range="1"'), true);
   assert.equal(html.includes('data-history-range="7"'), true);
   assert.equal(html.includes('data-history-range="30"'), true);
@@ -267,6 +314,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="currency-toggle"'), true);
   assert.equal(html.includes('id="tao-price-label"'), true);
   assert.equal(html.includes('title="Click to view TAO price history"'), true);
+  assert.equal(html.includes('tao-flow'), true);
   assert.equal(html.includes('data-poll-interval="60"'), true);
   assert.equal(html.includes('data-poll-interval="120"'), true);
   assert.equal(html.includes('data-poll-interval="240"'), true);
@@ -277,17 +325,22 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('title="Percentage of the whole pool"'), true);
   assert.equal(html.includes('title="Percentage change"'), true);
   assert.equal(html.includes('chart-note'), true);
+  assert.equal(html.includes('Latest JSON'), true);
+  assert.equal(html.includes('History JSON'), true);
+  assert.equal(html.includes('sn110-admin-panel-open'), true);
   assert.equal(html.includes('data-metric='), true);
   assert.equal(html.includes('card-info-badge'), true);
   assert.equal(html.includes('Subnet data'), true);
   assert.equal(html.includes('New TAO / Day'), true);
   assert.equal(html.includes('UIDs'), true);
   assert.equal(html.includes('Token Price'), true);
-  assert.equal(html.includes('This is a simple market mood score.'), true);
+  assert.equal(html.includes('Subnet Sentiment (SSI)'), true);
+  assert.equal(html.includes('Source: Fear &amp; Greed'), true);
   assert.equal(html.includes('TAO price used:'), true);
   assert.equal(html.includes('Gaps in this chart mean no historical sample was stored for that time.'), true);
   assert.equal(html.includes('displayMetricText(metric)'), true);
   assert.equal(html.includes('Click a latest snapshot card'), true);
+  assert.equal(html.includes("historySource: 'subnet'"), true);
   assert.equal(model.latest.tao_price_usd, 100);
   db.close();
 });
@@ -325,6 +378,43 @@ test('tao price history endpoint returns stored price history', async () => {
   assert.equal(payload.history.length, 2);
   assert.equal(payload.history[0].price_usd, 100.25);
   assert.equal(payload.history[1].price_usd, 110.25);
+  await app.close();
+  db.close();
+});
+
+test('tao flow history endpoint returns stored flow history', async () => {
+  const db = openDatabase(':memory:');
+  insertTaoFlowSnapshot(db, normalizeTaoFlowSnapshot({
+    block_number: 1,
+    timestamp: '2026-04-29T00:00:00Z',
+    netuid: 110,
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    tao_flow: '1000',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-29T00:00:00.000Z', netuid: 110 }));
+  insertTaoFlowSnapshot(db, normalizeTaoFlowSnapshot({
+    block_number: 2,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 110,
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    tao_flow: '1100',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z', netuid: 110 }));
+
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: { netuid: 110, taostatsAuthHeader: '', pollIntervalMinutes: 60, nextPollAtIso: null },
+  });
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/flow-history?days=30`);
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.days, 30);
+  assert.equal(payload.history.length, 2);
+  assert.equal(payload.history[0].tao_flow_num, 1000);
+  assert.equal(payload.history[1].tao_flow_num, 1100);
   await app.close();
   db.close();
 });
@@ -369,6 +459,49 @@ test('poll interval selector endpoint updates the interval setting', async () =>
   db.close();
 });
 
+test('admin backfill endpoint runs backfill and live ingest', async () => {
+  const db = openDatabase(':memory:');
+  let backfillArgs = null;
+  let liveArgs = null;
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      backfillHistoricalSnapshots: async (args) => {
+        backfillArgs = args;
+        return { ok: true, inserted: 2, flowInserted: 3, priceInserted: 4 };
+      },
+      ingestOnce: async (args) => {
+        liveArgs = args;
+        return { ok: true, source: 'api' };
+      },
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      pollIntervalMinutes: 60,
+      taostatsBackfillDays: 30,
+      taostatsBackfillFrequency: 'by_hour',
+      taostatsBackfillOverwrite: true,
+    },
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/backfill`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ days: 60, frequency: 'by_day', overwrite: false }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(backfillArgs, { netuid: 110, days: 60, frequency: 'by_day', overwrite: false });
+  assert.deepEqual(liveArgs, { netuid: 110 });
+  assert.equal(payload.backfill.ok, true);
+  assert.equal(payload.live.ok, true);
+  await app.close();
+  db.close();
+});
+
 test('percent metrics render with enough precision for small values', () => {
   const db = openDatabase(':memory:');
   const snapshot = normalizeSnapshot({
@@ -409,6 +542,12 @@ test('percent metrics render with enough precision for small values', () => {
   assert.equal(html.includes('0.004%'), true);
   assert.equal(html.includes('28.07%'), true);
   db.close();
+});
+
+test('formatChartDate includes time for one-day charts', () => {
+  const label = formatChartDate('2026-04-30T15:14:29.000Z', 1);
+  assert.match(label, /^\d{1,2} [A-Za-z]{3} \d{2}:\d{2}$/);
+  assert.equal(label.includes(':'), true);
 });
 
 test('numericMetricValue keeps missing values as null instead of zero', () => {

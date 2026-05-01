@@ -15,6 +15,9 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Shows the next scheduled poll time in the top bar
 - Lets you switch historical metric charts between 24H / 7D / 30D / 60D in the modal
 - Lets you click any latest snapshot card to open a historical modal with metric help text
+- Keeps operational JSON/debug views inside a collapsible admin panel so the main dashboard stays clean
+- Includes a subnet sentiment card that prefers Taostats SSI when available and falls back to the legacy Fear & Greed value on older rows
+- Money In/Out charts use Taostats Tao Flow history so the historical view stays available even when the subnet snapshot history is sparse
 
 ## Requirements
 
@@ -58,6 +61,7 @@ The dashboard also shows the current TAO price used for USD conversion and uses 
 
 You can seed SQLite with historical API data before the live poller starts.
 The backfill command pulls Taostats history, replaces overlapping local rows by default, and then runs one live ingest so the latest snapshot still ends on the current API row.
+The dashboard also exposes a matching admin-panel backfill form that posts to the same backfill flow, so you can trigger the import from the browser during testing.
 
 ```bash
 npm run backfill -- --days 30 --frequency by_hour
@@ -88,6 +92,8 @@ TAOSTATS_BACKFILL_DAYS=30 TAOSTATS_BACKFILL_FREQUENCY=by_hour TAOSTATS_BACKFILL_
 Backfill mode pulls Taostats historical subnet, pool, and registration-cost data, merges it into the same snapshot schema, and skips rows already stored for a block number when overwrite is disabled.
 By default it deletes overlapping local rows in the requested time window before inserting the historical API snapshots, so the local chart stays continuous during testing.
 It also backfills TAO price history so USD toggles keep working for historical values.
+It also backfills Tao Flow history so the Money In/Out charts can render historical values from dedicated flow data.
+Sentiment history will use SSI when Taostats provides it, with legacy Fear & Greed as a fallback for older live rows.
 
 ## Live polling interval
 
@@ -109,6 +115,8 @@ The top bar also shows the next scheduled poll time.
 - `/subnets/110` - dashboard
 - `/api/subnets/110/latest` - latest stored snapshot
 - `/api/subnets/110/history?days=30` - historical snapshots
+- `/api/subnets/110/flow-history?days=30` - historical Tao Flow series used by Money In/Out charts
 - `/api/tao-price/history?days=30` - stored TAO/USD price history
 - `POST /api/subnets/110/ingest` - manual ingest trigger
+- `POST /api/subnets/110/backfill` - browser/admin backfill trigger
 - `/health` - current poll interval and next poll timestamp

@@ -8,6 +8,7 @@ const {
   getHistory,
   getLatestTaoPrice,
   getTaoPriceHistory,
+  getTaoFlowHistory,
   getLatestIngestRun,
   countSnapshots,
 } = require('./db');
@@ -93,6 +94,24 @@ function formatRelativeIso(value) {
     }
   }
   return 'just now';
+}
+
+function formatChartDate(value, days) {
+  const numericValue = Number(value);
+  const date = Number.isFinite(numericValue) ? new Date(numericValue) : new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  if (days <= 1) {
+    const dateLabel = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    const timeLabel = date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    return `${dateLabel} ${timeLabel}`;
+  }
+  if (days <= 7) {
+    return date.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  }
+  if (days <= 30) {
+    return date.toLocaleDateString('en-GB', { month: 'short', day: 'numeric' });
+  }
+  return date.toLocaleDateString('en-GB', { month: 'short', day: 'numeric', year: '2-digit' });
 }
 
 function compact(value, digits = 2) {
@@ -251,6 +270,83 @@ function numericMetricValue(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function resolveSentimentValue(row) {
+  if (!row) return null;
+  const candidates = [
+    row.sentiment_index_num,
+    row.ssi_num,
+    row.sentiment_index_text,
+    row.ssi_text,
+    row.subnet_sentiment_index_num,
+    row.subnet_sentiment_index_text,
+    row.sentiment_score_num,
+    row.sentiment_score_text,
+    row.fear_and_greed_index,
+  ];
+  for (const candidate of candidates) {
+    const num = numericMetricValue(candidate);
+    if (num !== null) return num;
+  }
+  if (row.raw_json) {
+    try {
+      const payload = JSON.parse(row.raw_json);
+      const payloadCandidates = [
+        payload?.ssi,
+        payload?.sentiment_index,
+        payload?.subnet_sentiment_index,
+        payload?.sentiment_score,
+        payload?.fear_and_greed_index,
+      ];
+      for (const candidate of payloadCandidates) {
+        const num = numericMetricValue(candidate);
+        if (num !== null) return num;
+      }
+    } catch {
+      // ignore parse errors and fall back to null
+    }
+  }
+  return null;
+}
+
+function resolveSentimentSource(row) {
+  if (!row) return null;
+  const source = String(row.sentiment_index_source_text || '').trim().toLowerCase();
+  if (source === 'ssi') return 'SSI';
+  if (source === 'fear_and_greed' || source === 'fear-and-greed' || source === 'fear & greed') return 'Fear & Greed';
+  if (numericMetricValue(row.sentiment_index_num) !== null || numericMetricValue(row.ssi_num) !== null || numericMetricValue(row.sentiment_index_text) !== null || numericMetricValue(row.ssi_text) !== null || numericMetricValue(row.subnet_sentiment_index_num) !== null || numericMetricValue(row.subnet_sentiment_index_text) !== null || numericMetricValue(row.sentiment_score_num) !== null || numericMetricValue(row.sentiment_score_text) !== null) {
+    return 'SSI';
+  }
+  if (numericMetricValue(row.fear_and_greed_index) !== null) return 'Fear & Greed';
+  if (row.raw_json) {
+    try {
+      const payload = JSON.parse(row.raw_json);
+      if (numericMetricValue(payload?.ssi) !== null || numericMetricValue(payload?.sentiment_index) !== null || numericMetricValue(payload?.subnet_sentiment_index) !== null || numericMetricValue(payload?.sentiment_score) !== null) {
+        return 'SSI';
+      }
+      if (numericMetricValue(payload?.fear_and_greed_index) !== null) return 'Fear & Greed';
+    } catch {
+      // ignore parse errors and fall back to null
+    }
+  }
+  return null;
+}
+
+function resolveSentimentRawText(row) {
+  if (!row) return '—';
+  const source = resolveSentimentSource(row);
+  const value = resolveSentimentValue(row);
+  if (source && value !== null) return `${source} ${value}`;
+  if (source) return source;
+  return row.sentiment_index_text ?? row.fear_and_greed_index ?? (row.raw_json ? (() => {
+    try {
+      const payload = JSON.parse(row.raw_json);
+      return payload?.ssi ?? payload?.sentiment_index ?? payload?.subnet_sentiment_index ?? payload?.sentiment_score ?? payload?.fear_and_greed_index ?? '—';
+    } catch {
+      return '—';
+    }
+  })() : '—');
+}
+
 function attachTaoPrice(rows, priceRows) {
   if (!rows.length) return rows;
   const indexedRows = rows.map((row, index) => ({
@@ -308,9 +404,9 @@ function getLatestMetricDefs() {
     { key: 'liquidity_num', label: 'Pool Liquidity', description: 'This tells you how much TAO is sitting in the pool, ready for buyers and sellers. More liquidity usually means smoother trading.', valueField: 'liquidity_num', valueFormat: 'tao', valueScale: 1 / TAO_PER_RAO, rawField: 'liquidity_text', historyField: 'liquidity_num', chartLabel: 'Pool Liquidity', chartColor: '#6c8cff', clickable: true, currencyMode: 'tao' },
     { key: 'emission_num', label: 'Raw Emission', description: 'This is the raw emission number from Taostats before we convert it into the friendlier percent and TAO/day views.', valueField: 'emission_num', valueFormat: 'compact', rawField: 'emission_text', historyField: 'emission_num', chartLabel: 'Raw Emission', chartColor: '#f59e0b', clickable: true },
     { key: 'projected_emission_num', label: 'Emission Forecast', description: 'This is Taostats’ best guess for where the emission rate is heading next.', valueField: 'projected_emission_num', valueFormat: 'number', rawField: 'projected_emission_text', historyField: 'projected_emission_num', chartLabel: 'Emission Forecast', chartColor: '#c084fc', clickable: true },
-    { key: 'net_flow_1_day_num', label: 'Money In/Out (1d)', description: 'This shows whether TAO flowed into the subnet or out of it over the last day.', valueField: 'net_flow_1_day_num', valueFormat: 'signedTao', valueScale: 1 / TAO_PER_RAO, rawField: 'net_flow_1_day_text', historyField: 'net_flow_1_day_num', chartLabel: 'Money In/Out (1d)', chartColor: '#ef4444', clickable: true, currencyMode: 'tao' },
-    { key: 'net_flow_7_days_num', label: 'Money In/Out (7d)', description: 'This shows the same idea, but over the last week instead of just one day.', valueField: 'net_flow_7_days_num', valueFormat: 'signedTao', valueScale: 1 / TAO_PER_RAO, rawField: 'net_flow_7_days_text', historyField: 'net_flow_7_days_num', chartLabel: 'Money In/Out (7d)', chartColor: '#a855f7', clickable: true, currencyMode: 'tao' },
-    { key: 'net_flow_30_days_num', label: 'Money In/Out (30d)', description: 'This shows the longer-term net movement of TAO over the last month.', valueField: 'net_flow_30_days_num', valueFormat: 'signedTao', valueScale: 1 / TAO_PER_RAO, rawField: 'net_flow_30_days_text', historyField: 'net_flow_30_days_num', chartLabel: 'Money In/Out (30d)', chartColor: '#f97316', clickable: true, currencyMode: 'tao' },
+    { key: 'net_flow_1_day_num', label: 'Money In/Out (1d)', description: 'This shows whether TAO flowed into the subnet or out of it over the last day.', valueField: 'net_flow_1_day_num', valueFormat: 'signedTao', valueScale: 1 / TAO_PER_RAO, rawField: 'net_flow_1_day_text', historyField: 'net_flow_1_day_num', chartLabel: 'Money In/Out (1d)', chartColor: '#ef4444', clickable: true, currencyMode: 'tao', historySource: 'subnet' },
+    { key: 'net_flow_7_days_num', label: 'Money In/Out (7d)', description: 'This shows the same idea, but over the last week instead of just one day.', valueField: 'net_flow_7_days_num', valueFormat: 'signedTao', valueScale: 1 / TAO_PER_RAO, rawField: 'net_flow_7_days_text', historyField: 'net_flow_7_days_num', chartLabel: 'Money In/Out (7d)', chartColor: '#a855f7', clickable: true, currencyMode: 'tao', historySource: 'subnet' },
+    { key: 'net_flow_30_days_num', label: 'Money In/Out (30d)', description: 'This shows the longer-term net movement of TAO over the last month.', valueField: 'net_flow_30_days_num', valueFormat: 'signedTao', valueScale: 1 / TAO_PER_RAO, rawField: 'net_flow_30_days_text', historyField: 'net_flow_30_days_num', chartLabel: 'Money In/Out (30d)', chartColor: '#f97316', clickable: true, currencyMode: 'tao', historySource: 'subnet' },
     { key: 'tao_volume_24_hr_num', label: 'Trading Volume', description: 'This is how much TAO changed hands in the pool during the last 24 hours.', valueField: 'tao_volume_24_hr_num', valueFormat: 'tao', valueScale: 1 / TAO_PER_RAO, rawField: 'tao_volume_24_hr_text', historyField: 'tao_volume_24_hr_num', chartLabel: 'Trading Volume', chartColor: '#22c55e', clickable: true, currencyMode: 'tao' },
     { key: 'price_change_1_hour_text', label: 'Price Move (1h)', description: 'This is the price move over the last hour, shown as a percentage.', valueField: 'price_change_1_hour_text', valueFormat: 'signedPercent', historyField: 'price_change_1_hour_text', chartLabel: 'Price Move (1h)', chartColor: '#38bdf8', clickable: true },
     { key: 'price_change_1_day_text', label: 'Price Move (24h)', description: 'This is the price move over the last 24 hours, shown as a percentage.', valueField: 'price_change_1_day_text', valueFormat: 'signedPercent', historyField: 'price_change_1_day_text', chartLabel: 'Price Move (24h)', chartColor: '#60a5fa', clickable: true },
@@ -335,15 +431,24 @@ function getLatestMetricDefs() {
       rawValue: (row) => row.root_sell_bool === null || row.root_sell_bool === undefined ? '—' : String(Boolean(row.root_sell_bool)),
     },
     {
-      key: 'fear_and_greed_index',
-      label: 'Market Mood',
-      description: 'This is a simple market mood score. Think of it like a crowd sentiment meter: low values usually mean traders are nervous and may be selling, while high values mean traders are more optimistic and may be buying. It does not predict the future, but it can help you understand whether the market feels fearful or greedy.',
-      valueField: 'fear_and_greed_index',
+      key: 'sentiment_index_num',
+      label: 'Subnet Sentiment (SSI)',
+      description: 'This is Taostats’ sentiment score for the subnet. Think of it like a market mood meter for the subnet: lower values usually mean traders are more cautious or selling, while higher values mean they are more optimistic or buying. Taostats now prefers SSI when it is available and falls back to the older Fear & Greed score on legacy rows.',
+      valueField: 'sentiment_index_num',
       valueFormat: 'number',
-      historyField: 'fear_and_greed_index',
-      chartLabel: 'Market Mood',
+      rawField: 'sentiment_index_text',
+      historyField: 'sentiment_index_num',
+      chartLabel: 'Subnet Sentiment (SSI)',
       chartColor: '#eab308',
       clickable: true,
+      latestValue: (row, scaledLatestValue) => formatMetricValue(resolveSentimentValue(row) ?? scaledLatestValue, 'number'),
+      rawValue: (row) => resolveSentimentRawText(row),
+      sourceText: (row) => resolveSentimentSource(row) || 'Unavailable',
+      subtext: (row) => {
+        const source = resolveSentimentSource(row);
+        if (source) return `Source: ${source}`;
+        return 'Sentiment data unavailable';
+      },
     },
     { key: 'source', label: 'Source', valueField: 'source', valueFormat: 'text', clickable: false, latestValue: (row) => row.source || '—' },
   ];
@@ -409,11 +514,13 @@ function renderMetricCards(latest, defs, { defaultSubtext = true } = {}) {
       chartColor: def.chartColor || '#00dbbc',
       valueScale: def.valueScale || 1,
       currencyMode: def.currencyMode || (['tao', 'signedTao'].includes(def.valueFormat) ? 'tao' : 'none'),
+      historySource: def.historySource || 'subnet',
       taoValue,
       taoPriceUsd: latest.tao_price_usd ?? null,
       clickable: Boolean(def.clickable),
       latestValue,
       rawValue,
+      sourceText: typeof def.sourceText === 'function' ? def.sourceText(latest, latestValue, rawValue) : null,
     };
     const subtext = typeof def.subtext === 'function'
       ? def.subtext(latest, latestValue, rawValue)
@@ -424,7 +531,7 @@ function renderMetricCards(latest, defs, { defaultSubtext = true } = {}) {
             ? `Raw: ${rawValue ?? '—'}`
             : def.key === 'root_sell_text'
               ? 'Tap to inspect historical root-sell state'
-              : def.key === 'fear_and_greed_index'
+              : def.key === 'sentiment_index_num' || def.key === 'fear_and_greed_index'
                 ? 'Tap to inspect historical sentiment'
                 : def.key === 'rank'
                   ? 'Tap to inspect rank history'
@@ -1039,6 +1146,81 @@ function renderPage(model) {
       .modal-chart {
         min-height: 360px;
       }
+      .admin-panel {
+        margin-top: 16px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        background: rgba(10, 15, 23, 0.72);
+        overflow: hidden;
+      }
+      .admin-panel > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 16px 18px;
+        font-weight: 700;
+        color: var(--text);
+        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+      }
+      .admin-panel > summary::-webkit-details-marker {
+        display: none;
+      }
+      .admin-panel[open] > summary {
+        border-bottom-color: rgba(143, 163, 184, 0.18);
+      }
+      .admin-panel-body {
+        padding: 16px;
+      }
+      .admin-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .admin-form {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .admin-form-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .admin-form label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .admin-form input,
+      .admin-form select {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(6, 10, 16, 0.85);
+        color: var(--text);
+        padding: 10px 12px;
+        font: inherit;
+      }
+      .admin-form .admin-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--text);
+      }
+      .admin-form .admin-checkbox input {
+        width: auto;
+        margin: 0;
+      }
+      .admin-grid {
+        display: grid;
+        gap: 14px;
+      }
       body.modal-open {
         overflow: hidden;
       }
@@ -1063,8 +1245,6 @@ function renderPage(model) {
             ${pollIntervalButtons}
           </div>
           <button class="button primary" id="refresh-btn">Refresh now</button>
-          <a class="button" href="/api/subnets/${netuid}/latest">Latest JSON</a>
-          <a class="button" href="/api/subnets/${netuid}/history?days=30">History JSON</a>
         </div>
       </div>
 
@@ -1101,19 +1281,55 @@ function renderPage(model) {
         </div>
       </section>
 
-      <section class="section stack">
-        <div class="panel">
-          <h3>Recent snapshots</h3>
-          ${renderHistoryTable(recent)}
-        </div>
-        <div class="panel">
-          <h3>Latest ingest run</h3>
-          <div class="grid compact">
-            ${latestRunCard}
+      <details class="admin-panel">
+        <summary>Admin panel</summary>
+        <div class="admin-panel-body">
+          <div class="admin-actions">
+            <a class="button" href="/api/subnets/${netuid}/latest">Latest JSON</a>
+            <a class="button" href="/api/subnets/${netuid}/history?days=30">History JSON</a>
           </div>
-          ${ingestRun && ingestRun.error ? `<p class="empty"><strong>Error:</strong> ${escapeHtml(ingestRun.error)}</p>` : ''}
+          <div class="panel">
+            <h3>Backfill</h3>
+            <div class="admin-form">
+              <div class="admin-form-row">
+                <label>
+                  Days
+                  <input type="number" id="backfill-days" min="1" max="3650" step="1" value="${escapeHtml(String(config.taostatsBackfillDays || 30))}">
+                </label>
+                <label>
+                  Frequency
+                  <select id="backfill-frequency">
+                    <option value="by_hour" ${config.taostatsBackfillFrequency === 'by_hour' ? 'selected' : ''}>by_hour</option>
+                    <option value="by_day" ${config.taostatsBackfillFrequency === 'by_day' ? 'selected' : ''}>by_day</option>
+                    <option value="by_block" ${config.taostatsBackfillFrequency === 'by_block' ? 'selected' : ''}>by_block</option>
+                  </select>
+                </label>
+                <label class="admin-checkbox">
+                  <input type="checkbox" id="backfill-overwrite" ${config.taostatsBackfillOverwrite ? 'checked' : ''}>
+                  Overwrite overlapping data
+                </label>
+              </div>
+              <div class="admin-actions">
+                <button class="button primary" type="button" id="backfill-btn">Run backfill</button>
+              </div>
+              <p class="empty" id="backfill-status" hidden></p>
+            </div>
+          </div>
+          <div class="admin-grid">
+            <div class="panel">
+              <h3>Recent snapshots</h3>
+              ${renderHistoryTable(recent)}
+            </div>
+            <div class="panel">
+              <h3>Latest ingest run</h3>
+              <div class="grid compact">
+                ${latestRunCard}
+              </div>
+              ${ingestRun && ingestRun.error ? `<p class="empty"><strong>Error:</strong> ${escapeHtml(ingestRun.error)}</p>` : ''}
+            </div>
+          </div>
         </div>
-      </section>
+      </details>
 
       <div class="footer">
         <div>Database snapshots: ${totalSnapshots}</div>
@@ -1178,6 +1394,7 @@ function renderPage(model) {
         nextPollAtIso: shell?.dataset.nextPollAt || null,
         pollIntervalMinutes: ${JSON.stringify(config.pollIntervalMinutes)},
         history: null,
+        flowHistory: null,
         loading: null,
         historyCache: new Map(),
         historyLoading: new Map(),
@@ -1208,6 +1425,7 @@ function renderPage(model) {
         explanation: document.getElementById('history-modal-explanation'),
         canvas: document.getElementById('history-modal-canvas'),
         empty: document.getElementById('history-modal-empty'),
+        note: document.getElementById('history-modal-note'),
         close: document.getElementById('history-modal-close'),
       };
 
@@ -1218,14 +1436,20 @@ function renderPage(model) {
       const taoPriceLabel = document.getElementById('tao-price-label');
       const pollIntervalLabel = document.getElementById('poll-interval-label');
       const nextPollLabel = document.getElementById('next-poll-label');
+      const adminPanel = document.querySelector('.admin-panel');
+      const backfillDaysInput = document.getElementById('backfill-days');
+      const backfillFrequencySelect = document.getElementById('backfill-frequency');
+      const backfillOverwriteInput = document.getElementById('backfill-overwrite');
+      const backfillButton = document.getElementById('backfill-btn');
+      const backfillStatus = document.getElementById('backfill-status');
 
       const chartConfigs = [
         { id: 'price-chart', label: 'Token Price', field: 'price_num', valueScale: 1, valueFormat: 'tao', currencyMode: 'tao', color: '#00dbbc' },
         { id: 'market-cap-chart', label: 'Subnet Market Cap', field: 'market_cap_num', valueScale: 0.000000001, valueFormat: 'tao', currencyMode: 'tao', color: '#1db954' },
         { id: 'liquidity-chart', label: 'Pool Liquidity', field: 'liquidity_num', valueScale: 0.000000001, valueFormat: 'tao', currencyMode: 'tao', color: '#6c8cff' },
         { id: 'emission-chart', label: 'Raw Emission', field: 'emission_num', valueScale: 1, valueFormat: 'compact', currencyMode: 'none', color: '#f59e0b' },
-        { id: 'net-flow-1d-chart', label: 'Money In/Out (1d)', field: 'net_flow_1_day_num', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#ef4444' },
-        { id: 'net-flow-7d-chart', label: 'Money In/Out (7d)', field: 'net_flow_7_days_num', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#a855f7' },
+        { id: 'net-flow-1d-chart', label: 'Money In/Out (1d)', field: 'net_flow_1_day_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#ef4444' },
+        { id: 'net-flow-7d-chart', label: 'Money In/Out (7d)', field: 'net_flow_7_days_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#a855f7' },
       ];
 
       function isFiniteNumber(value) {
@@ -1527,6 +1751,59 @@ function renderPage(model) {
         nextPollLabel.title = 'Scheduled for ' + nextPollAt.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
       }
 
+      function updateBackfillStatus(message, kind = 'info') {
+        if (!backfillStatus) return;
+        if (!message) {
+          backfillStatus.hidden = true;
+          backfillStatus.textContent = '';
+          backfillStatus.dataset.status = '';
+          return;
+        }
+        backfillStatus.hidden = false;
+        backfillStatus.textContent = message;
+        backfillStatus.dataset.status = kind;
+      }
+
+      function readBackfillOptions() {
+        return {
+          days: Number.parseInt(String(backfillDaysInput?.value || ''), 10),
+          frequency: String(backfillFrequencySelect?.value || 'by_hour'),
+          overwrite: Boolean(backfillOverwriteInput?.checked),
+        };
+      }
+
+      async function runAdminBackfill() {
+        if (!backfillButton) return;
+        const options = readBackfillOptions();
+        if (!Number.isFinite(options.days) || options.days <= 0) {
+          updateBackfillStatus('Backfill days must be a positive integer.', 'error');
+          return;
+        }
+        backfillButton.disabled = true;
+        updateBackfillStatus('Backfill is running… this may take a while.', 'info');
+        try {
+          const response = await fetch('/api/subnets/' + netuid + '/backfill', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(options),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload.error || 'Backfill failed');
+          }
+          const snapshotCount = Number(payload.backfill?.inserted ?? 0);
+          const flowCount = Number(payload.backfill?.flowInserted ?? 0);
+          const priceCount = Number(payload.backfill?.priceInserted ?? 0);
+          updateBackfillStatus('Backfill complete: ' + snapshotCount + ' snapshot rows, ' + flowCount + ' flow rows, and ' + priceCount + ' TAO price rows imported.', 'success');
+          window.location.reload();
+        } catch (error) {
+          updateBackfillStatus(error?.message || 'Backfill failed', 'error');
+          console.error(error);
+        } finally {
+          backfillButton.disabled = false;
+        }
+      }
+
       async function syncSchedulerState() {
         try {
           const response = await fetch('/health');
@@ -1633,7 +1910,9 @@ function renderPage(model) {
         if (!state.historyLoading.has(key)) {
           const endpoint = source === 'tao-price'
             ? '/api/tao-price/history?days=' + encodeURIComponent(days)
-            : '/api/subnets/' + netuid + '/history?days=' + encodeURIComponent(days);
+            : source === 'tao-flow'
+              ? '/api/subnets/' + netuid + '/flow-history?days=' + encodeURIComponent(days)
+              : '/api/subnets/' + netuid + '/history?days=' + encodeURIComponent(days);
           const loading = fetch(endpoint)
             .then((response) => response.json())
             .then((payload) => {
@@ -1641,6 +1920,9 @@ function renderPage(model) {
               state.historyCache.set(key, history);
               if (source === 'subnet' && days === 30) {
                 state.history = history;
+              }
+              if (source === 'tao-flow' && days === 30) {
+                state.flowHistory = history;
               }
               return history;
             })
@@ -1671,8 +1953,301 @@ function renderPage(model) {
         return Number.isFinite(num) ? num : null;
       }
 
+      function resolveSentimentValue(row) {
+        if (!row) return null;
+        const candidates = [
+          row.sentiment_index_num,
+          row.ssi_num,
+          row.sentiment_index_text,
+          row.ssi_text,
+          row.subnet_sentiment_index_num,
+          row.subnet_sentiment_index_text,
+          row.sentiment_score_num,
+          row.sentiment_score_text,
+          row.fear_and_greed_index,
+        ];
+        for (const candidate of candidates) {
+          const num = numericMetricValue(candidate);
+          if (num !== null) return num;
+        }
+        if (row.raw_json) {
+          try {
+            const payload = JSON.parse(row.raw_json);
+            const payloadCandidates = [
+              payload?.ssi,
+              payload?.sentiment_index,
+              payload?.subnet_sentiment_index,
+              payload?.sentiment_score,
+              payload?.fear_and_greed_index,
+            ];
+            for (const candidate of payloadCandidates) {
+              const num = numericMetricValue(candidate);
+              if (num !== null) return num;
+            }
+          } catch {
+            // ignore parse errors and fall back to null
+          }
+        }
+        return null;
+      }
+
+      function resolveSentimentSource(row) {
+        if (!row) return null;
+        const source = String(row.sentiment_index_source_text || '').trim().toLowerCase();
+        if (source === 'ssi') return 'SSI';
+        if (source === 'fear_and_greed' || source === 'fear-and-greed' || source === 'fear & greed') return 'Fear & Greed';
+        if (numericMetricValue(row.sentiment_index_num) !== null || numericMetricValue(row.ssi_num) !== null || numericMetricValue(row.sentiment_index_text) !== null || numericMetricValue(row.ssi_text) !== null || numericMetricValue(row.subnet_sentiment_index_num) !== null || numericMetricValue(row.subnet_sentiment_index_text) !== null || numericMetricValue(row.sentiment_score_num) !== null || numericMetricValue(row.sentiment_score_text) !== null) {
+          return 'SSI';
+        }
+        if (numericMetricValue(row.fear_and_greed_index) !== null) return 'Fear & Greed';
+        if (row.raw_json) {
+          try {
+            const payload = JSON.parse(row.raw_json);
+            if (numericMetricValue(payload?.ssi) !== null || numericMetricValue(payload?.sentiment_index) !== null || numericMetricValue(payload?.subnet_sentiment_index) !== null || numericMetricValue(payload?.sentiment_score) !== null) {
+              return 'SSI';
+            }
+            if (numericMetricValue(payload?.fear_and_greed_index) !== null) return 'Fear & Greed';
+          } catch {
+            // ignore parse errors and fall back to null
+          }
+        }
+        return null;
+      }
+
+      function resolveSentimentRawText(row) {
+        if (!row) return '—';
+        const source = resolveSentimentSource(row);
+        const value = resolveSentimentValue(row);
+        if (source && value !== null) return source + ' ' + value;
+        if (source) return source;
+        if (row.sentiment_index_text !== null && row.sentiment_index_text !== undefined) return row.sentiment_index_text;
+        if (row.fear_and_greed_index !== null && row.fear_and_greed_index !== undefined) return row.fear_and_greed_index;
+        if (row.raw_json) {
+          try {
+            const payload = JSON.parse(row.raw_json);
+            return payload?.ssi ?? payload?.sentiment_index ?? payload?.subnet_sentiment_index ?? payload?.sentiment_score ?? payload?.fear_and_greed_index ?? '—';
+          } catch {
+            return '—';
+          }
+        }
+        return '—';
+      }
+
+      function chartNumericValue(value) {
+        if (value === null || value === undefined || value === '') return null;
+        if (typeof value === 'number') {
+          return Number.isFinite(value) ? value : null;
+        }
+        const text = String(value).trim();
+        if (!text) return null;
+        if (text.includes('%')) {
+          const pct = Number.parseFloat(text.replace(/,/g, ''));
+          return Number.isFinite(pct) ? pct : null;
+        }
+        const num = Number(text.replace(/,/g, ''));
+        return Number.isFinite(num) ? num : null;
+      }
+
+      function isPriceMoveMetric(metric) {
+        if (!metric) return false;
+        const key = String(metric.key || metric.historyField || '');
+        return key.startsWith('price_change_') || String(metric.label || '').toLowerCase().includes('price move');
+      }
+
+      function isSentimentMetric(metric) {
+        if (!metric) return false;
+        const key = String(metric.key || metric.historyField || '');
+        return key === 'sentiment_index_num' || key === 'fear_and_greed_index' || String(metric.label || '').toLowerCase().includes('sentiment');
+      }
+
+      function isTaoFlowMetric(metric) {
+        if (!metric) return false;
+        const key = String(metric.key || metric.historyField || '');
+        return key.startsWith('net_flow_') || String(metric.label || '').toLowerCase().includes('money in/out');
+      }
+
+      function priceMoveLookbackMs(metric) {
+        const key = String(metric?.key || metric?.historyField || '');
+        if (key.includes('_1_hour')) return 60 * 60 * 1000;
+        if (key.includes('_1_day')) return 24 * 60 * 60 * 1000;
+        if (key.includes('_1_week')) return 7 * 24 * 60 * 60 * 1000;
+        if (key.includes('_1_month')) return 30 * 24 * 60 * 60 * 1000;
+        return null;
+      }
+
+      function priceMoveFetchDays(metric, days) {
+        const lookbackMs = priceMoveLookbackMs(metric);
+        if (!lookbackMs) return days;
+        return Math.max(days, days + Math.ceil(lookbackMs / 86400000));
+      }
+
+      function taoFlowLookbackMs(metric) {
+        const key = String(metric?.key || metric?.historyField || metric?.field || '');
+        if (key.includes('_1_day')) return 24 * 60 * 60 * 1000;
+        if (key.includes('_7_days')) return 7 * 24 * 60 * 60 * 1000;
+        if (key.includes('_30_days')) return 30 * 24 * 60 * 60 * 1000;
+        return null;
+      }
+
+      function resolveTaoFlowBalanceValue(row) {
+        if (!row) return null;
+        const candidates = [
+          row.total_tao_num,
+          row.total_tao_text,
+          row.tao_in_pool_num,
+          row.tao_in_pool_text,
+          row.raw_json,
+        ];
+        for (const candidate of candidates) {
+          if (candidate === row.raw_json && row.raw_json) {
+            try {
+              const payload = JSON.parse(row.raw_json);
+              const payloadCandidates = [payload?.total_tao, payload?.tao_in_pool];
+              for (const payloadCandidate of payloadCandidates) {
+                const num = chartNumericValue(payloadCandidate);
+                if (Number.isFinite(num)) return num;
+              }
+            } catch {
+              // ignore parse errors
+            }
+            continue;
+          }
+          const num = chartNumericValue(candidate);
+          if (Number.isFinite(num)) return num;
+        }
+        return null;
+      }
+
+      function buildTaoFlowHistory(history, metric) {
+        const lookbackMs = taoFlowLookbackMs(metric);
+        if (!lookbackMs) return [];
+        const rows = [...history]
+          .map((row) => ({
+            row,
+            time: new Date(row.captured_at).getTime(),
+            balanceValue: resolveTaoFlowBalanceValue(row),
+            priceUsd: resolveUsdPrice(row.tao_price_usd, state.latestTaoPriceUsd),
+          }))
+          .filter((entry) => Number.isFinite(entry.time))
+          .sort((a, b) => a.time - b.time);
+        const points = [];
+        const valueScale = Number(metric?.valueScale || 1);
+        for (let index = 0; index < rows.length; index += 1) {
+          const current = rows[index];
+          const cutoff = current.time - lookbackMs;
+          let prior = null;
+          for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+            const candidate = rows[priorIndex];
+            if (candidate.time <= cutoff) {
+              prior = candidate;
+              break;
+            }
+          }
+          if (!prior) continue;
+          if (!Number.isFinite(current.balanceValue) || !Number.isFinite(prior.balanceValue)) continue;
+          const deltaRaw = current.balanceValue - prior.balanceValue;
+          if (!Number.isFinite(deltaRaw)) continue;
+          let y = deltaRaw * valueScale;
+          if (metric.currencyMode === 'tao' && state.displayCurrency === 'usd') {
+            if (!Number.isFinite(current.priceUsd)) continue;
+            y *= current.priceUsd;
+          }
+          if (!Number.isFinite(y)) continue;
+          points.push({ x: current.time, y });
+        }
+        return points;
+      }
+
+      function buildPriceMoveHistory(history, metric) {
+        const lookbackMs = priceMoveLookbackMs(metric);
+        if (!lookbackMs) return [];
+        const rows = [...history]
+          .map((row) => ({
+            row,
+            time: new Date(row.captured_at).getTime(),
+            price: chartNumericValue(row.price_num),
+          }))
+          .filter((entry) => Number.isFinite(entry.time) && Number.isFinite(entry.price))
+          .sort((a, b) => a.time - b.time);
+        const points = [];
+        for (let index = 0; index < rows.length; index += 1) {
+          const current = rows[index];
+          const cutoff = current.time - lookbackMs;
+          let prior = null;
+          for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+            const candidate = rows[priorIndex];
+            if (candidate.time <= cutoff) {
+              prior = candidate;
+              break;
+            }
+          }
+          if (!prior || !Number.isFinite(prior.price) || prior.price === 0) continue;
+          const pct = ((current.price - prior.price) / prior.price) * 100;
+          if (!Number.isFinite(pct)) continue;
+          points.push({ x: current.time, y: pct });
+        }
+        return points;
+      }
+
+      function metricHistoryNote(metric, visiblePoints, rangeDays) {
+        if (isPriceMoveMetric(metric)) {
+          return 'Price Move is derived from historical Token Price, so it needs enough earlier price samples to calculate the window.';
+        }
+        if (isTaoFlowMetric(metric)) {
+          if (!visiblePoints.length) {
+            return 'Money In/Out is derived from the historical subnet snapshots, so older backfilled rows may still be sparse until more samples are stored locally.';
+          }
+          if (visiblePoints.length < Math.max(5, Math.min(rangeDays, 10))) {
+            return 'Money In/Out is derived from the historical subnet snapshots and can look sparse if the local database does not yet have enough earlier samples.';
+          }
+        }
+        if (isSentimentMetric(metric)) {
+          if (!visiblePoints.length) {
+            return 'Subnet Sentiment uses SSI when Taostats provides it, with legacy Fear & Greed as a fallback. Older backfilled rows may still be sparse until more sentiment history is stored locally.';
+          }
+          if (visiblePoints.length < Math.max(5, Math.min(rangeDays, 10))) {
+            return 'Subnet Sentiment can look sparse if older rows only have the legacy Fear & Greed score. Taostats now prefers SSI when available, but backfilled history may not include every sentiment sample yet.';
+          }
+        }
+        return '';
+      }
+
+      function historySeriesForMetric(metric, history) {
+        const sourceHistory = Array.isArray(history) ? history : [];
+        if (isPriceMoveMetric(metric)) {
+          return buildPriceMoveHistory(sourceHistory, metric);
+        }
+        if (isTaoFlowMetric(metric)) {
+          return buildTaoFlowHistory(sourceHistory, metric);
+        }
+        if (isSentimentMetric(metric)) {
+          return sourceHistory
+            .map((row) => ({
+              x: new Date(row.captured_at).getTime(),
+              y: resolveSentimentChartValue(row),
+            }))
+            .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+        }
+        return sourceHistory
+          .map((row) => ({
+            x: new Date(row.captured_at).getTime(),
+            y: chartValue(row, {
+              field: metric.field || metric.historyField || metric.valueField,
+              valueScale: metric.valueScale || 1,
+              currencyMode: metric.currencyMode || 'none',
+              valueFormat: metric.valueFormat || 'text',
+            }),
+          }))
+          .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+      }
+
+      function resolveSentimentChartValue(row) {
+        const value = resolveSentimentValue(row);
+        return Number.isFinite(Number(value)) ? Number(value) : null;
+      }
+
       function chartValue(row, config) {
-        const raw = numericMetricValue(row?.[config.field]);
+        const raw = chartNumericValue(row?.[config.field]);
         if (raw === null) return null;
         const base = raw * Number(config.valueScale || 1);
         if (!Number.isFinite(base)) return null;
@@ -1697,20 +2272,7 @@ function renderPage(model) {
         note.textContent = 'Gaps in this chart mean no historical sample was stored for that time.';
       }
 
-      function formatChartDate(value, days) {
-        const date = new Date(Number(value));
-        if (Number.isNaN(date.getTime())) return '—';
-        if (days <= 1) {
-          return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-        }
-        if (days <= 7) {
-          return date.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        }
-        if (days <= 30) {
-          return date.toLocaleDateString('en-GB', { month: 'short', day: 'numeric' });
-        }
-        return date.toLocaleDateString('en-GB', { month: 'short', day: 'numeric', year: '2-digit' });
-      }
+      ${formatChartDate.toString()}
 
       function chartRangeDays(history, fallbackDays = 30) {
         if (!Array.isArray(history) || history.length < 2) return fallbackDays;
@@ -1750,8 +2312,13 @@ function renderPage(model) {
 
       async function loadModalHistory(metric, days) {
         const requestId = ++state.modalHistoryRequestId;
-        const historySource = metric.kind === 'tao-price' ? 'tao-price' : 'subnet';
-        const history = await loadHistory(days, historySource);
+        const historySource = metric.historySource || (metric.kind === 'tao-price'
+          ? 'tao-price'
+          : isTaoFlowMetric(metric)
+            ? 'tao-flow'
+            : 'subnet');
+        const fetchDays = isPriceMoveMetric(metric) ? priceMoveFetchDays(metric, days) : days;
+        const history = await loadHistory(fetchDays, historySource);
         if (requestId !== state.modalHistoryRequestId) return null;
         if (state.modalMetric !== metric || state.modalHistoryDays !== days) return null;
         state.modalHistory = history;
@@ -1761,11 +2328,8 @@ function renderPage(model) {
       function renderLineChart(canvasId, config, history) {
         const canvas = document.getElementById(canvasId);
         if (!canvas || !window.Chart) return;
+        const points = historySeriesForMetric(config, history);
         const days = chartRangeDays(history, 30);
-        const points = history.map((row) => ({
-          x: new Date(row.captured_at).getTime(),
-          y: chartValue(row, config),
-        })).filter((point) => Number.isFinite(point.x));
         const values = points.map((point) => point.y);
         const pointTimes = points.map((point) => point.x);
         const xMin = pointTimes.length ? Math.min(...pointTimes) : null;
@@ -1855,23 +2419,9 @@ function renderPage(model) {
         const formatKey = metric.currencyMode === 'tao' && state.displayCurrency === 'usd'
           ? (metric.valueFormat === 'signedTao' ? 'signedUsd' : 'usd')
           : (metric.valueFormat || 'text');
-        const points = sourceHistory
-          .map((row) => ({
-            x: new Date(row.captured_at).getTime(),
-            y: chartValue(row, {
-              field: metric.historyField || metric.valueField,
-              valueScale: metric.valueScale || 1,
-              currencyMode: metric.currencyMode || 'none',
-              valueFormat: metric.valueFormat || 'text',
-            }),
-          }))
-          .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
-        const historyValues = sourceHistory.map((row) => chartValue(row, {
-          field: metric.historyField || metric.valueField,
-          valueScale: metric.valueScale || 1,
-          currencyMode: metric.currencyMode || 'none',
-          valueFormat: metric.valueFormat || 'text',
-        }));
+        const points = historySeriesForMetric(metric, sourceHistory)
+          .filter((point) => point.x >= rangeStart && point.x <= rangeEnd);
+        const historyValues = points.map((point) => point.y);
 
         if (state.modalChart) {
           state.modalChart.destroy();
@@ -1965,9 +2515,11 @@ function renderPage(model) {
         modalElements.explanation.textContent = metric.description || '';
         modalElements.explanation.hidden = !metric.description;
         modalElements.latestValue.textContent = displayMetricText(metric);
-        modalElements.latestRaw.textContent = metric.rawValue !== null && metric.rawValue !== undefined
-          ? ('Raw: ' + metric.rawValue)
-          : 'Loading historical field...';
+        modalElements.latestRaw.textContent = metric.sourceText
+          ? ('Source: ' + metric.sourceText)
+          : (metric.rawValue !== null && metric.rawValue !== undefined
+            ? ('Raw: ' + metric.rawValue)
+            : 'Loading historical field...');
         modalElements.samples.textContent = '—';
         if (modalElements.samplesNote) {
           modalElements.samplesNote.textContent = historyRangeSubtitle(state.modalHistoryDays);
@@ -1985,33 +2537,34 @@ function renderPage(model) {
         const history = await loadModalHistory(metric, days);
         if (!history) return;
         const field = metric.historyField || metric.valueField;
-        const points = history
-          .map((row) => chartValue(row, {
-            field,
-            valueScale: metric.valueScale || 1,
-            currencyMode: metric.currencyMode || 'none',
-            valueFormat: metric.valueFormat || 'text',
-          }))
-          .filter((value) => Number.isFinite(value));
-        const latestPoint = [...history].reverse().find((row) => Number.isFinite(chartValue(row, {
-          field,
-          valueScale: metric.valueScale || 1,
-          currencyMode: metric.currencyMode || 'none',
-          valueFormat: metric.valueFormat || 'text',
-        })));
+        const points = historySeriesForMetric(metric, history);
+        const rangeStart = Date.now() - Math.max(1, days) * 86400000;
+        const rangeEnd = Date.now();
+        const visiblePoints = points.filter((point) => point.x >= rangeStart && point.x <= rangeEnd);
+        const latestPoint = visiblePoints.length ? visiblePoints[visiblePoints.length - 1] : null;
 
         modalElements.subtitle.textContent = 'Historical view for ' + metric.label + ' over the last ' + days + ' day' + (days === 1 ? '' : 's') + ' from the local SQLite database.';
         modalElements.latestValue.textContent = displayMetricText(metric);
-        modalElements.latestRaw.textContent = metric.rawValue !== null && metric.rawValue !== undefined
-          ? ('Raw: ' + metric.rawValue)
-          : ('Tracked field: ' + field);
-        modalElements.samples.textContent = String(points.length);
+        modalElements.latestRaw.textContent = metric.sourceText
+          ? ('Source: ' + metric.sourceText)
+          : (isPriceMoveMetric(metric)
+            ? 'Derived from historical Token Price data'
+            : (metric.rawValue !== null && metric.rawValue !== undefined
+              ? ('Raw: ' + metric.rawValue)
+              : ('Tracked field: ' + field)));
+        modalElements.samples.textContent = String(visiblePoints.length);
         if (modalElements.samplesNote) {
           modalElements.samplesNote.textContent = historyRangeSubtitle(days);
         }
+        modalElements.note.hidden = true;
         modalElements.captured.textContent = latestPoint
           ? new Date(latestPoint.captured_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'medium' })
           : '—';
+        const historyNote = metricHistoryNote(metric, visiblePoints, days);
+        if (historyNote) {
+          modalElements.note.hidden = false;
+          modalElements.note.textContent = historyNote;
+        }
         modalElements.empty.hidden = true;
         renderHistoryChart(metric, history);
       }
@@ -2081,6 +2634,17 @@ function renderPage(model) {
         syncCurrencyMode();
       });
 
+      if (adminPanel) {
+        adminPanel.open = localStorage.getItem('sn110-admin-panel-open') === 'true';
+        adminPanel.addEventListener('toggle', () => {
+          localStorage.setItem('sn110-admin-panel-open', adminPanel.open ? 'true' : 'false');
+        });
+      }
+
+      backfillButton?.addEventListener('click', () => {
+        void runAdminBackfill();
+      });
+
       taoPriceLabel?.addEventListener('click', () => {
         openTaoPriceHistoryModal();
       });
@@ -2136,8 +2700,16 @@ function renderPage(model) {
         syncSchedulerState();
       }, 60000);
 
-      loadHistory().then((history) => {
-        state.history = history;
+      Promise.all([
+        loadHistory().then((history) => {
+          state.history = history;
+          return history;
+        }),
+        loadHistory(30, 'tao-flow').then((history) => {
+          state.flowHistory = history;
+          return history;
+        }),
+      ]).then(() => {
         syncCurrencyMode();
       }).catch((error) => console.error(error));
     </script>
@@ -2151,11 +2723,17 @@ function parseDays(searchParams) {
   return Math.min(raw, 3650);
 }
 
+function parseBackfillFrequency(value, fallback = 'by_hour') {
+  const allowed = new Set(['by_hour', 'by_day', 'by_block']);
+  const text = String(value || fallback || '').trim();
+  return allowed.has(text) ? text : fallback;
+}
+
 function createDashboardServer({ db, ingestService, config, onPollIntervalChange = null }) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
-      const match = url.pathname.match(/^\/subnets\/(\d+)$/) || url.pathname.match(/^\/api\/subnets\/(\d+)\/(latest|history|ingest)$/);
+      const match = url.pathname.match(/^\/subnets\/(\d+)$/) || url.pathname.match(/^\/api\/subnets\/(\d+)\/(latest|history|ingest|backfill)$/);
       const netuid = match ? Number(match[1]) : config.netuid;
 
       if (req.method === 'GET' && url.pathname === '/') {
@@ -2200,6 +2778,15 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === `/api/subnets/${netuid}/flow-history`) {
+        const days = parseDays(url.searchParams);
+        const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        const history = attachTaoPrice(getTaoFlowHistory(db, netuid, sinceIso), getTaoPriceHistory(db, sinceIso));
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ netuid, days, history }, null, 2));
+        return;
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/tao-price/history') {
         const days = parseDays(url.searchParams);
         const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -2214,6 +2801,19 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         const status = result.ok ? 200 : 500;
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ netuid, result }, null, 2));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === `/api/subnets/${netuid}/backfill`) {
+        const payload = await readJsonBody(req);
+        const days = parseDays(new URLSearchParams([['days', String(payload.days ?? config.taostatsBackfillDays ?? 30)]]));
+        const frequency = parseBackfillFrequency(payload.frequency, config.taostatsBackfillFrequency ?? 'by_hour');
+        const overwrite = typeof payload.overwrite === 'boolean' ? payload.overwrite : Boolean(config.taostatsBackfillOverwrite);
+        const backfill = await ingestService.backfillHistoricalSnapshots({ netuid, days, frequency, overwrite });
+        const live = await ingestService.ingestOnce({ netuid });
+        const status = backfill.ok && live.ok ? 200 : 500;
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ netuid, backfill, live }, null, 2));
         return;
       }
 
@@ -2279,6 +2879,7 @@ module.exports = {
   renderPage,
   formatIso,
   formatRelativeIso,
+  formatChartDate,
   compact,
   percent,
   signedPercent,

@@ -77,6 +77,30 @@ function asText(value) {
   return String(value);
 }
 
+function resolveSentimentSnapshot(payload) {
+  const candidates = [
+    { source: 'ssi', value: payload?.ssi ?? payload?.sentiment_index ?? payload?.subnet_sentiment_index ?? payload?.sentiment_score },
+    { source: 'fear_and_greed', value: payload?.fear_and_greed_index },
+  ];
+
+  for (const candidate of candidates) {
+    const num = asNumber(candidate.value);
+    if (num !== null) {
+      return {
+        text: asText(candidate.value),
+        num,
+        source: candidate.source,
+      };
+    }
+  }
+
+  return {
+    text: null,
+    num: null,
+    source: null,
+  };
+}
+
 function raoToTao(value) {
   const num = asNumber(value);
   return num === null ? null : num / TAO_PER_RAO;
@@ -248,6 +272,7 @@ function normalizeSnapshot(raw, { source, sourceUrl, netuid, capturedAt = nowIso
   const activeKeysNum = i(payload.active_keys);
   const maxNeuronsNum = i(payload.max_neurons);
   const incentiveBurnNum = n(payload.incentive_burn);
+  const sentiment = resolveSentimentSnapshot(payload);
 
   const snapshot = {
     netuid: i(payload.netuid) ?? netuid,
@@ -266,6 +291,7 @@ function normalizeSnapshot(raw, { source, sourceUrl, netuid, capturedAt = nowIso
     liquidity_text: t(payload.liquidity),
     liquidity_num: n(payload.liquidity),
     total_tao_text: t(payload.total_tao ?? payload.tao_in_pool),
+    total_tao_num: n(payload.total_tao ?? payload.tao_in_pool),
     total_alpha_text: t(payload.total_alpha ?? payload.alpha_in_pool),
     alpha_in_pool_text: t(payload.alpha_in_pool),
     alpha_staked_text: t(payload.alpha_staked),
@@ -320,6 +346,9 @@ function normalizeSnapshot(raw, { source, sourceUrl, netuid, capturedAt = nowIso
     alpha_volume_24_hr_text: t(payload.alpha_volume_24_hr),
     alpha_volume_24_hr_num: n(payload.alpha_volume_24_hr),
     alpha_volume_24_hr_change_1_day_text: t(payload.alpha_volume_24_hr_change_1_day),
+    sentiment_index_text: sentiment.text,
+    sentiment_index_num: sentiment.num,
+    sentiment_index_source_text: sentiment.source,
     fear_and_greed_index: t(payload.fear_and_greed_index),
     fear_and_greed_sentiment: t(payload.fear_and_greed_sentiment),
     startup_mode: b(payload.startup_mode),
@@ -364,6 +393,31 @@ function normalizeTaoPriceSnapshot(raw, { source, sourceUrl, capturedAt = nowIso
   };
 
   return snapshot;
+}
+
+function normalizeTaoFlowSnapshot(raw, { source, sourceUrl, netuid, capturedAt = nowIso() }) {
+  const payload = pickRecord(raw, netuid) || {};
+  const n = (value) => asNumber(value);
+  const t = (value) => asText(value);
+  return {
+    netuid: asInteger(payload.netuid) ?? netuid,
+    captured_at: capturedAt,
+    remote_timestamp: t(payload.timestamp ?? payload.last_updated ?? payload.updated_at ?? payload.created_at ?? null),
+    source,
+    source_url: sourceUrl,
+    block_number: asInteger(payload.block_number),
+    name: t(payload.name),
+    symbol: t(payload.symbol),
+    tao_flow_text: t(payload.tao_flow),
+    tao_flow_num: n(payload.tao_flow),
+    tao_in_pool_text: t(payload.tao_in_pool),
+    tao_in_pool_num: n(payload.tao_in_pool),
+    alpha_in_pool_text: t(payload.alpha_in_pool),
+    alpha_in_pool_num: n(payload.alpha_in_pool),
+    alpha_rewards_text: t(payload.alpha_rewards),
+    alpha_rewards_num: n(payload.alpha_rewards),
+    raw_json: JSON.stringify(payload),
+  };
 }
 
 function historyTimestampToIso(value) {
@@ -478,6 +532,48 @@ async function fetchTaoPriceHistory({
   return rows.map((row) => normalizeTaoPriceSnapshot(row, {
     source: 'api-history',
     sourceUrl: `${taostatsBaseUrl.replace(/\/$/, '')}/api/price/history/v1`,
+    capturedAt: historyTimestampToIso(row.timestamp ?? row.last_updated ?? row.updated_at ?? row.created_at) || nowIso(),
+  }));
+}
+
+async function fetchTaoFlowHistory({
+  netuid,
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  days = 30,
+  limit = 200,
+}) {
+  if (!taostatsAuthHeader) {
+    return [];
+  }
+
+  const now = Date.now();
+  const startIso = new Date(now - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString();
+  const timestampStart = Math.floor(new Date(startIso).getTime() / 1000);
+  const timestampEnd = Math.floor(now / 1000);
+  const headers = { authorization: taostatsAuthHeader };
+  const rows = [];
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL('/api/dtao/tao_flow/v1', taostatsBaseUrl);
+    url.searchParams.set('netuid', String(netuid));
+    url.searchParams.set('timestamp_start', String(timestampStart));
+    url.searchParams.set('timestamp_end', String(timestampEnd));
+    url.searchParams.set('order', 'timestamp_asc');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('page', String(page));
+    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+    const pageRows = extractRecords(json);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    if (pageRows.length < limit) break;
+  }
+
+  return rows.map((row) => normalizeTaoFlowSnapshot(row, {
+    source: 'api-history',
+    sourceUrl: `${taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/tao_flow/v1`,
+    netuid,
     capturedAt: historyTimestampToIso(row.timestamp ?? row.last_updated ?? row.updated_at ?? row.created_at) || nowIso(),
   }));
 }
@@ -642,10 +738,12 @@ module.exports = {
   fetchFromPublicPage,
   fetchTaoPriceLatest,
   fetchTaoPriceHistory,
+  fetchTaoFlowHistory,
   fetchHistoricalSnapshots,
   extractEscapedJsonObject,
   normalizeSnapshot,
   normalizeTaoPriceSnapshot,
+  normalizeTaoFlowSnapshot,
   pickRecord,
   extractRecords,
   asNumber,
