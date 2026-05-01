@@ -8,6 +8,7 @@
     "The dashboard now opens with a collapsible financial perspective panel that explains price, flow, sentiment, and supply pressure in plain language.",
     "The dashboard also includes a 'What matters most today' panel that highlights the main correlation points for beginners.",
     "The financial perspective area now also includes a watchlist panel that keeps the core alerts (price vs flow, sentiment watch, supply watch) visible in a stable beginner-friendly format.",
+    "The Token Price chart now appears in the hero area above the main dashboard sections so the latest trend is visible immediately.",
     "The TAO price badge opens a historical TAO/USD modal chart.",
     "Historical metric modals support 24H, 7D, 30D, and 60D windows and include beginner-friendly metric explanations.",
     "The main dashboard now keeps the Latest JSON, History JSON, Recent snapshots, and Latest ingest run inside a collapsible admin panel.",

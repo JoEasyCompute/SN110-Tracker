@@ -103,6 +103,7 @@ Picking one updates the background polling timer immediately and saves the choic
 The same setting is used on startup if it has already been stored locally.
 The top bar also shows the next scheduled poll time.
 The dashboard now starts with a collapsible financial perspective panel, followed by a beginner-friendly quick read and watchlist that highlight the main price, flow, sentiment, and supply relationships before the underlying charts.
+The Token Price chart is now also surfaced in the hero area so the latest price trend is visible before the rest of the dashboard sections.
 
 ## Commands
 

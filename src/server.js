@@ -1321,10 +1321,15 @@ function renderPage(model) {
   const latestCard = latest
     ? `
       <section class="hero">
-        <div>
+        <div class="hero-copy">
           <div class="eyebrow">Subnet SN${netuid}</div>
           <h1>${escapeHtml(title)}</h1>
           <p>${escapeHtml(subtitle)}</p>
+        </div>
+        <div class="panel hero-chart-panel">
+          <h3>Token Price</h3>
+          <div class="chart-frame hero-chart-frame"><canvas id="price-chart"></canvas></div>
+          <div class="chart-note" id="price-chart-note" hidden></div>
         </div>
         <div class="hero-meta">
           <div><strong>Snapshots</strong><span>${totalSnapshots}</span></div>
@@ -1336,7 +1341,7 @@ function renderPage(model) {
     `
     : `
       <section class="hero">
-        <div>
+        <div class="hero-copy">
           <div class="eyebrow">Subnet SN${netuid}</div>
           <h1>${escapeHtml(title)}</h1>
           <p>${escapeHtml(subtitle)}</p>
@@ -1435,11 +1440,24 @@ function renderPage(model) {
         background: radial-gradient(circle at top right, rgba(0, 219, 188, 0.12), transparent 32%),
                     linear-gradient(180deg, var(--panel), var(--panel-2));
         border: 1px solid var(--border); border-radius: 24px; padding: 24px;
-        display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.7fr); gap: 20px;
+        display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.95fr) minmax(280px, 0.7fr); gap: 20px;
       }
+      .hero-copy { display: grid; align-content: start; }
       .eyebrow { color: var(--accent); letter-spacing: .18em; text-transform: uppercase; font-size: 12px; margin-bottom: 8px; }
       h1 { margin: 0; font-size: clamp(32px, 4vw, 48px); }
       .hero p { color: var(--muted); margin: 12px 0 0; }
+      .hero-chart-panel {
+        display: grid;
+        gap: 12px;
+        align-content: start;
+      }
+      .hero-chart-panel h3 {
+        margin: 0;
+        font-size: 16px;
+      }
+      .hero-chart-frame {
+        height: 210px;
+      }
       .hero-meta {
         display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
       }
@@ -1797,6 +1815,7 @@ function renderPage(model) {
       }
       @media (max-width: 1100px) {
         .hero, .grid, .grid.stats, .chart-grid, .modal-grid { grid-template-columns: 1fr; }
+        .hero { grid-template-columns: 1fr; }
       }
       @media (max-width: 700px) {
         .shell { padding: 16px; }
@@ -1841,7 +1860,6 @@ function renderPage(model) {
       <section class="section">
         <h2>Trend charts</h2>
         <div class="chart-grid">
-          <div class="panel"><h3>Token Price</h3><div class="chart-frame"><canvas id="price-chart"></canvas></div><div class="chart-note" id="price-chart-note" hidden></div></div>
           <div class="panel"><h3>Money In/Out (1d)</h3><div class="chart-frame"><canvas id="net-flow-1d-chart"></canvas></div><div class="chart-note" id="net-flow-1d-chart-note" hidden></div></div>
           <div class="panel"><h3>Subnet Sentiment (SSI)</h3><div class="chart-frame"><canvas id="sentiment-chart"></canvas></div><div class="chart-note" id="sentiment-chart-note" hidden></div></div>
         </div>
