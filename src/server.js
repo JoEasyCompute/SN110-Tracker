@@ -865,6 +865,19 @@ function renderInsightSection(insight) {
   `;
 }
 
+function renderFinancialPerspectiveSection(signal, insight) {
+  if (!signal && !insight) return '';
+  return `
+    <details class="financial-panel">
+      <summary>Financial perspective</summary>
+      <div class="financial-panel-body">
+        ${renderSignalSection(signal)}
+        ${renderInsightSection(insight)}
+      </div>
+    </details>
+  `;
+}
+
 function nearestBefore(history, cutoffMs, field) {
   let candidate = null;
   for (const row of history) {
@@ -1441,6 +1454,30 @@ function renderPage(model) {
       .signal-grid {
         margin-top: 14px;
       }
+      .financial-panel {
+        margin-top: 16px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        background: rgba(10, 15, 23, 0.72);
+        overflow: hidden;
+      }
+      .financial-panel > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 16px 18px;
+        font-weight: 700;
+        color: var(--text);
+        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+      }
+      .financial-panel > summary::-webkit-details-marker {
+        display: none;
+      }
+      .financial-panel[open] > summary {
+        border-bottom-color: rgba(143, 163, 184, 0.18);
+      }
+      .financial-panel-body {
+        padding: 16px;
+      }
       .chart-frame {
         position: relative;
         width: 100%;
@@ -1671,9 +1708,7 @@ function renderPage(model) {
 
       ${latestCard}
 
-      ${renderSignalSection(signal)}
-
-      ${renderInsightSection(insight)}
+      ${renderFinancialPerspectiveSection(signal, insight)}
 
       <section class="section">
         <h2>Key metrics</h2>
@@ -1816,6 +1851,7 @@ function renderPage(model) {
       const pollIntervalLabel = document.getElementById('poll-interval-label');
       const nextPollLabel = document.getElementById('next-poll-label');
       const adminPanel = document.querySelector('.admin-panel');
+      const financialPanel = document.querySelector('.financial-panel');
       const backfillDaysInput = document.getElementById('backfill-days');
       const backfillFrequencySelect = document.getElementById('backfill-frequency');
       const backfillOverwriteInput = document.getElementById('backfill-overwrite');
@@ -3016,6 +3052,13 @@ function renderPage(model) {
         adminPanel.open = localStorage.getItem('sn110-admin-panel-open') === 'true';
         adminPanel.addEventListener('toggle', () => {
           localStorage.setItem('sn110-admin-panel-open', adminPanel.open ? 'true' : 'false');
+        });
+      }
+
+      if (financialPanel) {
+        financialPanel.open = localStorage.getItem('sn110-financial-panel-open') === 'true';
+        financialPanel.addEventListener('toggle', () => {
+          localStorage.setItem('sn110-financial-panel-open', financialPanel.open ? 'true' : 'false');
         });
       }
 

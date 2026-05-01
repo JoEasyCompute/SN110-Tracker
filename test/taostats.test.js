@@ -301,6 +301,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="history-modal"'), true);
   assert.equal(html.includes('history-modal-info'), true);
   assert.equal(html.includes('history-modal-explanation'), true);
+  assert.equal(html.includes('Financial perspective'), true);
   assert.equal(html.includes('Signal now'), true);
   assert.equal(html.includes('Why this signal?'), true);
   assert.equal(html.includes('What matters most today'), true);
@@ -338,6 +339,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Latest JSON'), true);
   assert.equal(html.includes('What changed in the last 24h'), true);
   assert.equal(html.includes('History JSON'), true);
+  assert.equal(html.includes('sn110-financial-panel-open'), true);
   assert.equal(html.includes('sn110-admin-panel-open'), true);
   assert.equal(html.includes('data-metric='), true);
   assert.equal(html.includes('card-info-badge'), true);
