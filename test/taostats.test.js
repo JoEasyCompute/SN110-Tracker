@@ -340,7 +340,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Gaps in this chart mean no historical sample was stored for that time.'), true);
   assert.equal(html.includes('displayMetricText(metric)'), true);
   assert.equal(html.includes('Click a latest snapshot card'), true);
-  assert.equal(html.includes("historySource: 'subnet'"), true);
+  assert.equal(html.includes('"historySource":"subnet"'), true);
   assert.equal(model.latest.tao_price_usd, 100);
   db.close();
 });

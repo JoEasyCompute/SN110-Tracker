@@ -491,6 +491,17 @@ function getSubnetDataMetricDefs() {
   ];
 }
 
+function getChartMetricConfigs() {
+  return [
+    { id: 'price-chart', label: 'Token Price', field: 'price_num', valueScale: 1, valueFormat: 'tao', currencyMode: 'tao', color: '#00dbbc' },
+    { id: 'market-cap-chart', label: 'Subnet Market Cap', field: 'market_cap_num', valueScale: 0.000000001, valueFormat: 'tao', currencyMode: 'tao', color: '#1db954' },
+    { id: 'liquidity-chart', label: 'Pool Liquidity', field: 'liquidity_num', valueScale: 0.000000001, valueFormat: 'tao', currencyMode: 'tao', color: '#6c8cff' },
+    { id: 'emission-chart', label: 'Raw Emission', field: 'emission_num', valueScale: 1, valueFormat: 'compact', currencyMode: 'none', color: '#f59e0b' },
+    { id: 'net-flow-1d-chart', label: 'Money In/Out (1d)', field: 'net_flow_1_day_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#ef4444' },
+    { id: 'net-flow-7d-chart', label: 'Money In/Out (7d)', field: 'net_flow_7_days_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#a855f7' },
+  ];
+}
+
 function renderMetricCards(latest, defs, { defaultSubtext = true } = {}) {
   return defs.map((def) => {
     const scaledLatestValue = def.valueScale ? applyScale(latest[def.valueField], def.valueScale) : latest[def.valueField];
@@ -1448,14 +1459,7 @@ function renderPage(model) {
       const backfillButton = document.getElementById('backfill-btn');
       const backfillStatus = document.getElementById('backfill-status');
 
-      const chartConfigs = [
-        { id: 'price-chart', label: 'Token Price', field: 'price_num', valueScale: 1, valueFormat: 'tao', currencyMode: 'tao', color: '#00dbbc' },
-        { id: 'market-cap-chart', label: 'Subnet Market Cap', field: 'market_cap_num', valueScale: 0.000000001, valueFormat: 'tao', currencyMode: 'tao', color: '#1db954' },
-        { id: 'liquidity-chart', label: 'Pool Liquidity', field: 'liquidity_num', valueScale: 0.000000001, valueFormat: 'tao', currencyMode: 'tao', color: '#6c8cff' },
-        { id: 'emission-chart', label: 'Raw Emission', field: 'emission_num', valueScale: 1, valueFormat: 'compact', currencyMode: 'none', color: '#f59e0b' },
-        { id: 'net-flow-1d-chart', label: 'Money In/Out (1d)', field: 'net_flow_1_day_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#ef4444' },
-        { id: 'net-flow-7d-chart', label: 'Money In/Out (7d)', field: 'net_flow_7_days_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#a855f7' },
-      ];
+      const chartConfigs = ${JSON.stringify(getChartMetricConfigs())};
 
       function isFiniteNumber(value) {
         return Number.isFinite(Number(value));
