@@ -303,6 +303,10 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('history-modal-explanation'), true);
   assert.equal(html.includes('Signal now'), true);
   assert.equal(html.includes('Why this signal?'), true);
+  assert.equal(html.includes('What matters most today'), true);
+  assert.equal(html.includes('Quick read'), true);
+  assert.equal(html.includes('Price + flow'), true);
+  assert.equal(html.includes('Supply pressure'), true);
   assert.equal(html.includes('Price momentum'), true);
   assert.equal(html.includes('Money flow'), true);
   assert.equal(html.includes('Market mood'), true);
@@ -353,6 +357,57 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Click a latest snapshot card'), true);
   assert.equal(html.includes('"historySource":"subnet"'), true);
   assert.equal(model.latest.tao_price_usd, 100);
+  db.close();
+});
+
+test('dashboard route renders without throwing', async () => {
+  const db = openDatabase(':memory:');
+  const snapshot = normalizeSnapshot({
+    netuid: 110,
+    block_number: 1,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '1.0',
+    market_cap: '100',
+    liquidity: '50',
+    emission: '10',
+    projected_emission: '0.1',
+    incentive_burn: '0',
+    recycled_24_hours: '500000',
+    neuron_registration_cost: '500000',
+    active_keys: 256,
+    max_neurons: 256,
+    net_flow_1_day: '20',
+    net_flow_7_days: '30',
+    net_flow_30_days: '40',
+    root_prop: '0.25',
+    root_sell: 'YES',
+    fear_and_greed_index: '46.2',
+    fear_and_greed_sentiment: 'Neutral',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
+  insertSnapshot(db, snapshot);
+  insertTaoPriceSnapshot(db, normalizeTaoPriceSnapshot({
+    created_at: '2026-04-30T00:00:00Z',
+    last_updated: '2026-04-30T00:00:00Z',
+    symbol: 'TAO',
+    price: '100.0',
+    volume_24h: '1000',
+    market_cap: '2000',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z' }));
+
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: { netuid: 110, taostatsAuthHeader: '', pollIntervalMinutes: 60, nextPollAtIso: null },
+  });
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/subnets/110`);
+  const html = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(html.includes('Signal now'), true);
+  await app.close();
   db.close();
 });
 

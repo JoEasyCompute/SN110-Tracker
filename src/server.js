@@ -611,7 +611,7 @@ function buildSignalSummary(latest, comparisons, latestMetricDefs = getLatestMet
     {
       label: 'Price momentum',
       value: priceComparison && Number.isFinite(priceComparison.pct)
-        ? formatSignedPercent(priceComparison.pct, 2)
+        ? signedPercent(priceComparison.pct, 2)
         : '—',
       subtext: priceComparison && Number.isFinite(priceComparison.pct)
         ? 'Token Price change over the last 24 hours'
@@ -619,7 +619,7 @@ function buildSignalSummary(latest, comparisons, latestMetricDefs = getLatestMet
       tone: priceComparison && Number.isFinite(priceComparison.pct)
         ? (priceComparison.pct >= 0 ? 'positive' : 'negative')
         : 'neutral',
-      metricData: priceDef ? { ...buildMetricCardModel(latest, priceDef).metricData, displayValue: priceComparison && Number.isFinite(priceComparison.pct) ? formatSignedPercent(priceComparison.pct, 2) : '—' } : null,
+      metricData: priceDef ? { ...buildMetricCardModel(latest, priceDef).metricData, displayValue: priceComparison && Number.isFinite(priceComparison.pct) ? signedPercent(priceComparison.pct, 2) : '—' } : null,
     },
     {
       label: 'Money flow',
@@ -734,6 +734,133 @@ function renderSignalSection(signal) {
         <p class="muted">These four cards explain the main forces that shape the read above: price, money flow, sentiment, and supply pressure.</p>
       </div>
       <div class="grid signal-grid">${cards}</div>
+    </section>
+  `;
+}
+
+function buildInsightSummary(latest, comparisons, signal) {
+  if (!latest || !signal) return null;
+  const comparisonMap = new Map(comparisons.map((comparison) => [comparison.field, comparison]));
+  const priceComparison = comparisonMap.get('price_num');
+  const flow7Value = applyScale(latest.net_flow_7_days_num, 1 / TAO_PER_RAO);
+  const sentimentValue = resolveSentimentValue(latest);
+  const sentimentSource = resolveSentimentSource(latest);
+  const emissionRate = numericMetricValue(latest.emission_percent_num);
+  const burnRate = numericMetricValue(latest.incentive_burn_num);
+  const pricePct = priceComparison && Number.isFinite(priceComparison.pct) ? priceComparison.pct : null;
+  const priceFlowAligned = Number.isFinite(pricePct) && Number.isFinite(flow7Value)
+    ? ((pricePct >= 0 && flow7Value >= 0) || (pricePct < 0 && flow7Value < 0))
+    : null;
+
+  const takeaways = [
+    {
+      label: 'Price + flow',
+      value: priceFlowAligned === null
+        ? 'Not enough history'
+        : priceFlowAligned
+          ? 'Aligned'
+          : 'Diverging',
+      subtext: Number.isFinite(pricePct) && Number.isFinite(flow7Value)
+        ? `Price is ${signedPercent(pricePct, 2)} and 7d money flow is ${flow7Value >= 0 ? 'inflow' : 'outflow'}.`
+        : 'Compare price change with 7d money flow to see whether buyers are backing the move.',
+      tone: priceFlowAligned === null
+        ? 'neutral'
+        : priceFlowAligned
+          ? (pricePct >= 0 && flow7Value >= 0 ? 'positive' : 'negative')
+          : 'negative',
+    },
+    {
+      label: 'Sentiment',
+      value: Number.isFinite(sentimentValue)
+        ? `${sentimentSource ? `${sentimentSource} ` : ''}${Number(sentimentValue).toFixed(1)}`
+        : 'Unavailable',
+      subtext: Number.isFinite(sentimentValue)
+        ? (sentimentValue >= 60
+          ? 'Traders look more optimistic than cautious.'
+          : sentimentValue <= 40
+            ? 'Traders look more cautious than optimistic.'
+            : 'Traders are in a mixed / balanced mood.')
+        : 'Sentiment helps show whether the crowd is getting more confident.',
+      tone: Number.isFinite(sentimentValue)
+        ? (sentimentValue >= 60 ? 'positive' : sentimentValue <= 40 ? 'negative' : 'neutral')
+        : 'neutral',
+    },
+    {
+      label: 'Supply pressure',
+      value: Number.isFinite(emissionRate)
+        ? `${percent(emissionRate, 3)} emitted`
+        : 'Unavailable',
+      subtext: Number.isFinite(emissionRate)
+        ? (Number.isFinite(burnRate)
+          ? `Burn rate: ${percent(burnRate, 2)}`
+          : 'Lower emission usually means gentler supply pressure.')
+        : 'Emission tells you how much new supply is entering the subnet.',
+      tone: Number.isFinite(emissionRate)
+        ? (emissionRate <= 0.75 ? 'positive' : emissionRate >= 1.25 ? 'negative' : 'neutral')
+        : 'neutral',
+    },
+  ];
+
+  const bullets = [];
+  if (priceFlowAligned !== null) {
+    bullets.push(priceFlowAligned
+      ? 'Price and money flow are moving together, which usually makes the move easier to trust.'
+      : 'Price and money flow are not aligned yet, so this move may need confirmation.');
+  }
+  if (Number.isFinite(sentimentValue)) {
+    bullets.push(sentimentValue >= 60
+      ? 'Sentiment is leaning optimistic, which can help keep buyers engaged.'
+      : sentimentValue <= 40
+        ? 'Sentiment is leaning cautious, which can keep pressure on price.'
+        : 'Sentiment is balanced, so the chart needs other signals for confirmation.');
+  }
+  if (Number.isFinite(emissionRate)) {
+    bullets.push(emissionRate <= 0.75
+      ? 'Supply pressure looks light.'
+      : emissionRate >= 1.25
+        ? 'Supply pressure looks heavy.'
+        : 'Supply pressure is in the middle.');
+  }
+
+  return {
+    headline: 'What matters most today',
+    summary: signal.tone === 'positive'
+      ? 'The current read looks constructive, so price and flow are the first pair worth watching.'
+      : signal.tone === 'negative'
+        ? 'The current read looks cautious, so the main question is whether flow and sentiment can improve.'
+        : 'The signals are mixed, so the safest read comes from comparing price, flow, sentiment, and supply together.',
+    badge: '3 quick takeaways',
+    bullets,
+    cards: takeaways,
+  };
+}
+
+function renderInsightSection(insight) {
+  if (!insight) return '';
+  const bullets = insight.bullets.length
+    ? insight.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join('')
+    : '<li>Look for price and money flow first, then check sentiment and supply.</li>';
+  const cards = insight.cards.map((card) => metricCard({
+    label: card.label,
+    value: card.value,
+    subtext: card.subtext,
+    tone: card.tone || 'neutral',
+    clickable: false,
+  })).join('');
+  return `
+    <section class="section insight-section">
+      <div class="panel signal-panel ${escapeHtml(insight.tone || 'neutral')}">
+        <div class="signal-panel-head">
+          <div>
+            <div class="eyebrow">Quick read</div>
+            <h2>${escapeHtml(insight.headline || 'What matters most today')}</h2>
+            <p>${escapeHtml(insight.summary || '')}</p>
+          </div>
+          <div class="signal-badge">${escapeHtml(insight.badge || '3 quick takeaways')}</div>
+        </div>
+        <ul class="signal-bullets">${bullets}</ul>
+      </div>
+      <div class="grid compact">${cards}</div>
     </section>
   `;
 }
@@ -1042,6 +1169,7 @@ function renderPage(model) {
   const { latest, recent, ingestRun, totalSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso } = model;
   const latestMetricDefs = getLatestMetricDefs();
   const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
+  const insight = buildInsightSummary(latest, comparisons, signal);
   const title = `SN${netuid} Tracker`;
   const subtitle = latest
     ? `Latest snapshot captured ${formatRelativeIso(latest.captured_at)}`
@@ -1544,6 +1672,8 @@ function renderPage(model) {
       ${latestCard}
 
       ${renderSignalSection(signal)}
+
+      ${renderInsightSection(insight)}
 
       <section class="section">
         <h2>Key metrics</h2>
@@ -3107,6 +3237,11 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
       res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: 'Not found' }, null, 2));
     } catch (error) {
+      console.error(error);
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
       res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: error.message }, null, 2));
     }

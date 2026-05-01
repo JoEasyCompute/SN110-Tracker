@@ -6,6 +6,7 @@
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the dashboard.",
     "The top bar shows the current TAO price used for USD conversion and the next scheduled poll time.",
     "The dashboard now opens with a signal summary that explains price, flow, sentiment, and supply pressure in plain language.",
+    "The dashboard also includes a 'What matters most today' panel that highlights the main correlation points for beginners.",
     "The TAO price badge opens a historical TAO/USD modal chart.",
     "Historical metric modals support 24H, 7D, 30D, and 60D windows and include beginner-friendly metric explanations.",
     "The main dashboard now keeps the Latest JSON, History JSON, Recent snapshots, and Latest ingest run inside a collapsible admin panel.",

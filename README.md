@@ -10,6 +10,7 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Falls back to scraping the public subnet page when the API is unavailable
 - Stores snapshots in a local SQLite database
 - Serves a browser dashboard with a beginner-friendly signal summary, supporting evidence cards, and historical charts
+- Adds a "What matters most today" panel that explains the main correlation points in plain language
 - Lets you switch the live poller between 1h / 2h / 4h from the dashboard, with the choice saved in SQLite
 - Lets you click the TAO price badge to open a historical TAO/USD chart
 - Shows the next scheduled poll time in the top bar
