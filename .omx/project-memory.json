@@ -1,0 +1,17 @@
+{
+  "project": "sn110-tracker",
+  "updated_at": "2026-05-01T00:00:00Z",
+  "key_facts": [
+    "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
+    "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the dashboard.",
+    "The top bar shows the current TAO price used for USD conversion and the next scheduled poll time.",
+    "The dashboard now opens with a signal summary that explains price, flow, sentiment, and supply pressure in plain language.",
+    "The TAO price badge opens a historical TAO/USD modal chart.",
+    "Historical metric modals support 24H, 7D, 30D, and 60D windows and include beginner-friendly metric explanations.",
+    "The main dashboard now keeps the Latest JSON, History JSON, Recent snapshots, and Latest ingest run inside a collapsible admin panel.",
+    "The admin panel also exposes a browser-triggered backfill form that posts to /api/subnets/:netuid/backfill.",
+    "Backfill mode imports subnet history, TAO price history, and current supporting history rows, then refreshes the live snapshot.",
+    "TAO-denominated values can be toggled between TAO and USD using the stored TAO price history.",
+    "Missing metric values must remain null in charts and render as gaps, not zeroes."
+  ]
+}

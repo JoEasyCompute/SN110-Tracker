@@ -494,68 +494,202 @@ function getSubnetDataMetricDefs() {
 function getChartMetricConfigs() {
   return [
     { id: 'price-chart', label: 'Token Price', field: 'price_num', valueScale: 1, valueFormat: 'tao', currencyMode: 'tao', color: '#00dbbc' },
+    { id: 'net-flow-1d-chart', label: 'Money In/Out (1d)', field: 'net_flow_1_day_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#ef4444' },
+    { id: 'sentiment-chart', label: 'Subnet Sentiment (SSI)', field: 'sentiment_index_num', historySource: 'subnet', valueScale: 1, valueFormat: 'number', currencyMode: 'none', color: '#eab308' },
+    { id: 'emission-rate-chart', label: 'Emission Rate', field: 'emission_percent_num', valueScale: 1, valueFormat: 'percent', currencyMode: 'none', color: '#f59e0b' },
     { id: 'market-cap-chart', label: 'Subnet Market Cap', field: 'market_cap_num', valueScale: 0.000000001, valueFormat: 'tao', currencyMode: 'tao', color: '#1db954' },
     { id: 'liquidity-chart', label: 'Pool Liquidity', field: 'liquidity_num', valueScale: 0.000000001, valueFormat: 'tao', currencyMode: 'tao', color: '#6c8cff' },
-    { id: 'emission-chart', label: 'Raw Emission', field: 'emission_num', valueScale: 1, valueFormat: 'compact', currencyMode: 'none', color: '#f59e0b' },
-    { id: 'net-flow-1d-chart', label: 'Money In/Out (1d)', field: 'net_flow_1_day_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#ef4444' },
-    { id: 'net-flow-7d-chart', label: 'Money In/Out (7d)', field: 'net_flow_7_days_num', historySource: 'subnet', valueScale: 0.000000001, valueFormat: 'signedTao', currencyMode: 'tao', color: '#a855f7' },
   ];
+}
+
+function buildMetricCardModel(latest, def, { defaultSubtext = true } = {}) {
+  const scaledLatestValue = def.valueScale ? applyScale(latest[def.valueField], def.valueScale) : latest[def.valueField];
+  const latestValue = typeof def.latestValue === 'function'
+    ? def.latestValue(latest, scaledLatestValue)
+    : formatMetricValue(scaledLatestValue, def.valueFormat);
+  const taoValue = ['tao', 'signedTao'].includes(def.valueFormat) || def.currencyMode === 'tao'
+    ? scaledLatestValue
+    : null;
+  const rawValue = typeof def.rawValue === 'function'
+    ? def.rawValue(latest)
+    : (def.rawField ? (latest[def.rawField] ?? '—') : null);
+  const metricData = {
+    key: def.key,
+    label: def.label,
+    description: def.description || '',
+    valueField: def.valueField,
+    valueFormat: def.valueFormat,
+    historyField: def.historyField || def.valueField,
+    chartLabel: def.chartLabel || def.label,
+    chartColor: def.chartColor || '#00dbbc',
+    valueScale: def.valueScale || 1,
+    currencyMode: def.currencyMode || (['tao', 'signedTao'].includes(def.valueFormat) ? 'tao' : 'none'),
+    historySource: def.historySource || 'subnet',
+    taoValue,
+    taoPriceUsd: latest.tao_price_usd ?? null,
+    clickable: Boolean(def.clickable),
+    latestValue,
+    rawValue,
+    sourceText: typeof def.sourceText === 'function' ? def.sourceText(latest, latestValue, rawValue) : null,
+  };
+  const subtext = typeof def.subtext === 'function'
+    ? def.subtext(latest, latestValue, rawValue)
+    : (def.subtext !== undefined
+      ? def.subtext
+      : defaultSubtext
+        ? (def.rawField
+          ? `Raw: ${rawValue ?? '—'}`
+          : def.key === 'root_sell_text'
+            ? 'Tap to inspect historical root-sell state'
+            : def.key === 'sentiment_index_num' || def.key === 'fear_and_greed_index'
+              ? 'Tap to inspect historical sentiment'
+              : def.key === 'rank'
+                ? 'Tap to inspect rank history'
+                : '')
+        : '');
+  return { scaledLatestValue, latestValue, rawValue, metricData, subtext };
+}
+
+function findMetricDef(defs, key) {
+  return defs.find((def) => def.key === key) || null;
+}
+
+function buildSignalSummary(latest, comparisons, latestMetricDefs = getLatestMetricDefs(), subnetMetricDefs = getSubnetDataMetricDefs()) {
+  const comparisonMap = new Map(comparisons.map((comparison) => [comparison.field, comparison]));
+  const priceComparison = comparisonMap.get('price_num');
+  const sentimentValue = resolveSentimentValue(latest);
+  const sentimentSource = resolveSentimentSource(latest);
+  const emissionRate = numericMetricValue(latest.emission_percent_num);
+  const burnRate = numericMetricValue(latest.incentive_burn_num);
+  const flow7Value = applyScale(latest.net_flow_7_days_num, 1 / TAO_PER_RAO);
+  const priceDef = findMetricDef(latestMetricDefs, 'price_num');
+  const flowDef = findMetricDef(latestMetricDefs, 'net_flow_7_days_num');
+  const sentimentDef = findMetricDef(latestMetricDefs, 'sentiment_index_num');
+  const emissionDef = findMetricDef(subnetMetricDefs, 'emission_percent_num');
+  const positiveSignals = [];
+  const negativeSignals = [];
+
+  if (priceComparison && Number.isFinite(priceComparison.pct)) {
+    if (priceComparison.pct > 0) positiveSignals.push('Price momentum is positive.');
+    else if (priceComparison.pct < 0) negativeSignals.push('Price momentum is negative.');
+  }
+
+  if (Number.isFinite(flow7Value)) {
+    if (flow7Value > 0) positiveSignals.push('Net TAO flow over the week is positive.');
+    else if (flow7Value < 0) negativeSignals.push('Net TAO flow over the week is negative.');
+  }
+
+  if (Number.isFinite(sentimentValue)) {
+    if (sentimentValue >= 60) positiveSignals.push('Sentiment is leaning optimistic.');
+    else if (sentimentValue <= 40) negativeSignals.push('Sentiment is leaning cautious.');
+  }
+
+  if (Number.isFinite(emissionRate)) {
+    if (emissionRate <= 0.75) positiveSignals.push('Emission pressure is relatively light.');
+    else if (emissionRate >= 1.25) negativeSignals.push('Emission pressure is relatively heavy.');
+  }
+
+  if (Number.isFinite(burnRate) && burnRate >= 1) {
+    negativeSignals.push('Burn rate is removing a noticeable share of rewards.');
+  }
+
+  const score = positiveSignals.length - negativeSignals.length;
+  const tone = score >= 2 ? 'positive' : score <= -2 ? 'negative' : 'neutral';
+  const headline = tone === 'positive' ? 'Bullish' : tone === 'negative' ? 'Bearish' : 'Neutral';
+  const summary = tone === 'positive'
+    ? 'Price, flow, and sentiment are mostly pointing the same way, so the setup looks constructive.'
+    : tone === 'negative'
+      ? 'Price, flow, and sentiment are leaning cautious, so the setup looks softer right now.'
+      : 'The signals are mixed, so the dashboard stays neutral until more evidence lines up.';
+  const scoreLabel = score >= 3
+    ? 'Strong constructive read'
+    : score <= -3
+      ? 'Strong cautious read'
+      : 'Mixed evidence';
+
+  const cards = [
+    {
+      label: 'Price momentum',
+      value: priceComparison && Number.isFinite(priceComparison.pct)
+        ? formatSignedPercent(priceComparison.pct, 2)
+        : '—',
+      subtext: priceComparison && Number.isFinite(priceComparison.pct)
+        ? 'Token Price change over the last 24 hours'
+        : 'Not enough history yet for a 24h price read',
+      tone: priceComparison && Number.isFinite(priceComparison.pct)
+        ? (priceComparison.pct >= 0 ? 'positive' : 'negative')
+        : 'neutral',
+      metricData: priceDef ? { ...buildMetricCardModel(latest, priceDef).metricData, displayValue: priceComparison && Number.isFinite(priceComparison.pct) ? formatSignedPercent(priceComparison.pct, 2) : '—' } : null,
+    },
+    {
+      label: 'Money flow',
+      value: Number.isFinite(flow7Value)
+        ? (flow7Value > 0 ? 'Inflow' : flow7Value < 0 ? 'Outflow' : 'Balanced')
+        : '—',
+      subtext: Number.isFinite(flow7Value)
+        ? '7d net TAO movement into or out of the subnet'
+        : 'Not enough flow history yet',
+      tone: Number.isFinite(flow7Value)
+        ? (flow7Value > 0 ? 'positive' : flow7Value < 0 ? 'negative' : 'neutral')
+        : 'neutral',
+      metricData: flowDef ? { ...buildMetricCardModel(latest, flowDef).metricData, displayValue: Number.isFinite(flow7Value) ? (flow7Value > 0 ? 'Inflow' : flow7Value < 0 ? 'Outflow' : 'Balanced') : '—' } : null,
+    },
+    {
+      label: 'Market mood',
+      value: Number.isFinite(sentimentValue)
+        ? `${sentimentSource ? `${sentimentSource} ` : ''}${Number(sentimentValue).toFixed(1)}`
+        : '—',
+      subtext: Number.isFinite(sentimentValue)
+        ? 'Higher means traders feel more optimistic'
+        : 'Sentiment data is unavailable for this row',
+      tone: Number.isFinite(sentimentValue)
+        ? (sentimentValue >= 60 ? 'positive' : sentimentValue <= 40 ? 'negative' : 'neutral')
+        : 'neutral',
+      metricData: sentimentDef ? { ...buildMetricCardModel(latest, sentimentDef).metricData, displayValue: Number.isFinite(sentimentValue) ? `${sentimentSource ? `${sentimentSource} ` : ''}${Number(sentimentValue).toFixed(1)}` : '—' } : null,
+    },
+    {
+      label: 'Supply pressure',
+      value: Number.isFinite(emissionRate)
+        ? `${percent(emissionRate, 3)} emitted`
+        : '—',
+      subtext: Number.isFinite(emissionRate)
+        ? (Number.isFinite(burnRate)
+          ? `Burn rate: ${percent(burnRate, 2)}`
+          : 'Lower emission is gentler on supply pressure')
+        : 'Emission rate is unavailable',
+      tone: Number.isFinite(emissionRate)
+        ? (emissionRate <= 0.75 ? 'positive' : emissionRate >= 1.25 ? 'negative' : 'neutral')
+        : 'neutral',
+      metricData: emissionDef ? { ...buildMetricCardModel(latest, emissionDef).metricData, displayValue: Number.isFinite(emissionRate) ? `${percent(emissionRate, 3)} emitted` : '—' } : null,
+    },
+  ];
+
+  const bullets = [
+    ...positiveSignals.slice(0, 2),
+    ...negativeSignals.slice(0, 2),
+  ];
+
+  return {
+    tone,
+    headline,
+    summary,
+    scoreLabel,
+    bullets,
+    cards,
+  };
 }
 
 function renderMetricCards(latest, defs, { defaultSubtext = true } = {}) {
   return defs.map((def) => {
-    const scaledLatestValue = def.valueScale ? applyScale(latest[def.valueField], def.valueScale) : latest[def.valueField];
-    const latestValue = typeof def.latestValue === 'function'
-      ? def.latestValue(latest, scaledLatestValue)
-      : formatMetricValue(scaledLatestValue, def.valueFormat);
-    const taoValue = ['tao', 'signedTao'].includes(def.valueFormat) || def.currencyMode === 'tao'
-      ? scaledLatestValue
-      : null;
-    const rawValue = typeof def.rawValue === 'function'
-      ? def.rawValue(latest)
-      : (def.rawField ? (latest[def.rawField] ?? '—') : null);
-    const metricData = {
-      key: def.key,
-      label: def.label,
-      description: def.description || '',
-      valueField: def.valueField,
-      valueFormat: def.valueFormat,
-      historyField: def.historyField || def.valueField,
-      chartLabel: def.chartLabel || def.label,
-      chartColor: def.chartColor || '#00dbbc',
-      valueScale: def.valueScale || 1,
-      currencyMode: def.currencyMode || (['tao', 'signedTao'].includes(def.valueFormat) ? 'tao' : 'none'),
-      historySource: def.historySource || 'subnet',
-      taoValue,
-      taoPriceUsd: latest.tao_price_usd ?? null,
-      clickable: Boolean(def.clickable),
-      latestValue,
-      rawValue,
-      sourceText: typeof def.sourceText === 'function' ? def.sourceText(latest, latestValue, rawValue) : null,
-    };
-    const subtext = typeof def.subtext === 'function'
-      ? def.subtext(latest, latestValue, rawValue)
-      : (def.subtext !== undefined
-        ? def.subtext
-        : defaultSubtext
-          ? (def.rawField
-            ? `Raw: ${rawValue ?? '—'}`
-            : def.key === 'root_sell_text'
-              ? 'Tap to inspect historical root-sell state'
-              : def.key === 'sentiment_index_num' || def.key === 'fear_and_greed_index'
-                ? 'Tap to inspect historical sentiment'
-                : def.key === 'rank'
-                  ? 'Tap to inspect rank history'
-                  : '')
-          : '');
+    const model = buildMetricCardModel(latest, def, { defaultSubtext });
 
     return metricCard({
       label: def.label,
-      value: latestValue,
-      subtext,
+      value: model.latestValue,
+      subtext: model.subtext,
       tone: def.tone || 'neutral',
       clickable: def.clickable,
-      metricData,
+      metricData: model.metricData,
     });
   }).join('');
 }
@@ -566,6 +700,42 @@ function renderLatestSnapshotCards(latest, defs) {
 
 function renderSubnetDataCards(latest) {
   return renderMetricCards(latest, getSubnetDataMetricDefs(), { defaultSubtext: false });
+}
+
+function renderSignalSection(signal) {
+  if (!signal) return '';
+  const bullets = signal.bullets.length
+    ? signal.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join('')
+    : '<li>There is not enough history yet to make a strong read.</li>';
+  const cards = signal.cards.map((card) => metricCard({
+    label: card.label,
+    value: card.value,
+    subtext: card.subtext,
+    tone: card.tone || 'neutral',
+    clickable: Boolean(card.metricData),
+    metricData: card.metricData,
+  })).join('');
+  return `
+    <section class="section signal-section">
+      <div class="panel signal-panel ${escapeHtml(signal.tone || 'neutral')}">
+        <div class="signal-panel-head">
+          <div>
+            <div class="eyebrow">Signal now</div>
+            <h2>${escapeHtml(signal.headline || 'Neutral')}</h2>
+            <p>${escapeHtml(signal.summary || '')}</p>
+          </div>
+          <div class="signal-badge">${escapeHtml(signal.scoreLabel || 'Mixed evidence')}</div>
+        </div>
+        <ul class="signal-bullets">${bullets}</ul>
+        <div class="signal-hint">Tap any evidence card below to open the historical chart for that metric.</div>
+      </div>
+      <div class="section-copy">
+        <h2>Why this signal?</h2>
+        <p class="muted">These four cards explain the main forces that shape the read above: price, money flow, sentiment, and supply pressure.</p>
+      </div>
+      <div class="grid signal-grid">${cards}</div>
+    </section>
+  `;
 }
 
 function nearestBefore(history, cutoffMs, field) {
@@ -871,6 +1041,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun }) 
 function renderPage(model) {
   const { latest, recent, ingestRun, totalSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso } = model;
   const latestMetricDefs = getLatestMetricDefs();
+  const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
   const title = `SN${netuid} Tracker`;
   const subtitle = latest
     ? `Latest snapshot captured ${formatRelativeIso(latest.captured_at)}`
@@ -1084,6 +1255,64 @@ function renderPage(model) {
         padding: 16px;
       }
       .panel h3 { margin: 0 0 14px; font-size: 16px; }
+      .section-copy {
+        margin: 0 0 12px;
+      }
+      .section-copy p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .signal-panel {
+        display: grid;
+        gap: 14px;
+        padding: 20px;
+      }
+      .signal-panel.positive {
+        border-color: rgba(29, 185, 84, 0.45);
+        background: linear-gradient(180deg, rgba(29, 185, 84, 0.10), rgba(16, 23, 34, 0.92));
+      }
+      .signal-panel.negative {
+        border-color: rgba(255, 107, 107, 0.45);
+        background: linear-gradient(180deg, rgba(255, 107, 107, 0.10), rgba(16, 23, 34, 0.92));
+      }
+      .signal-panel.neutral {
+        border-color: rgba(143, 163, 184, 0.28);
+        background: linear-gradient(180deg, rgba(0, 219, 188, 0.06), rgba(16, 23, 34, 0.92));
+      }
+      .signal-panel-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: start;
+      }
+      .signal-panel h2 { margin: 0; font-size: 26px; }
+      .signal-panel p { margin: 8px 0 0; color: var(--muted); }
+      .signal-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(143, 163, 184, 0.22);
+        background: rgba(6, 10, 16, 0.45);
+        color: var(--text);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .signal-bullets {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--text);
+        display: grid;
+        gap: 6px;
+      }
+      .signal-hint {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .signal-grid {
+        margin-top: 14px;
+      }
       .chart-frame {
         position: relative;
         width: 100%;
@@ -1314,34 +1543,38 @@ function renderPage(model) {
 
       ${latestCard}
 
+      ${renderSignalSection(signal)}
+
       <section class="section">
-        <h2>Latest snapshot</h2>
+        <h2>Key metrics</h2>
         <div class="grid">${cards}</div>
       </section>
 
       <section class="section">
-        <h2>Subnet data</h2>
+        <h2>Subnet stats</h2>
         <div class="grid stats">${latest ? renderSubnetDataCards(latest) : ''}</div>
       </section>
 
       <section class="section">
-        <h2>24h performance tracking</h2>
+        <h2>What changed in the last 24h</h2>
         ${renderComparisonSection(comparisons)}
       </section>
 
       <section class="section">
+        <h2>Trend charts</h2>
         <div class="chart-grid">
           <div class="panel"><h3>Token Price</h3><div class="chart-frame"><canvas id="price-chart"></canvas></div><div class="chart-note" id="price-chart-note" hidden></div></div>
-          <div class="panel"><h3>Subnet Market Cap</h3><div class="chart-frame"><canvas id="market-cap-chart"></canvas></div><div class="chart-note" id="market-cap-chart-note" hidden></div></div>
-          <div class="panel"><h3>Pool Liquidity</h3><div class="chart-frame"><canvas id="liquidity-chart"></canvas></div><div class="chart-note" id="liquidity-chart-note" hidden></div></div>
+          <div class="panel"><h3>Money In/Out (1d)</h3><div class="chart-frame"><canvas id="net-flow-1d-chart"></canvas></div><div class="chart-note" id="net-flow-1d-chart-note" hidden></div></div>
+          <div class="panel"><h3>Subnet Sentiment (SSI)</h3><div class="chart-frame"><canvas id="sentiment-chart"></canvas></div><div class="chart-note" id="sentiment-chart-note" hidden></div></div>
         </div>
       </section>
 
       <section class="section">
+        <h2>Supporting charts</h2>
         <div class="chart-grid">
-          <div class="panel"><h3>Raw Emission</h3><div class="chart-frame"><canvas id="emission-chart"></canvas></div><div class="chart-note" id="emission-chart-note" hidden></div></div>
-          <div class="panel"><h3>Money In/Out (1d)</h3><div class="chart-frame"><canvas id="net-flow-1d-chart"></canvas></div><div class="chart-note" id="net-flow-1d-chart-note" hidden></div></div>
-          <div class="panel"><h3>Money In/Out (7d)</h3><div class="chart-frame"><canvas id="net-flow-7d-chart"></canvas></div><div class="chart-note" id="net-flow-7d-chart-note" hidden></div></div>
+          <div class="panel"><h3>Emission Rate</h3><div class="chart-frame"><canvas id="emission-rate-chart"></canvas></div><div class="chart-note" id="emission-rate-chart-note" hidden></div></div>
+          <div class="panel"><h3>Subnet Market Cap</h3><div class="chart-frame"><canvas id="market-cap-chart"></canvas></div><div class="chart-note" id="market-cap-chart-note" hidden></div></div>
+          <div class="panel"><h3>Pool Liquidity</h3><div class="chart-frame"><canvas id="liquidity-chart"></canvas></div><div class="chart-note" id="liquidity-chart-note" hidden></div></div>
         </div>
       </section>
 
@@ -1670,6 +1903,12 @@ function renderPage(model) {
         return metric.latestValue ?? metric.rawValue ?? '—';
       }
 
+      function displayCardText(metric) {
+        if (!metric) return '—';
+        if (metric.displayValue !== undefined) return metric.displayValue;
+        return displayMetricText(metric);
+      }
+
       function refreshMetricElements() {
         document.querySelectorAll('[data-metric]').forEach((element) => {
           let metric = null;
@@ -1679,7 +1918,7 @@ function renderPage(model) {
             metric = null;
           }
           if (!metric) return;
-          const text = displayMetricText(metric);
+          const text = displayCardText(metric);
           if (element.classList.contains('card') || element.classList.contains('card-button')) {
             const valueEl = element.querySelector('.card-value');
             if (valueEl) valueEl.textContent = text;
