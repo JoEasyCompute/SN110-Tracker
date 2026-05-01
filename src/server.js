@@ -804,6 +804,59 @@ function renderHistoryTable(rows) {
   `;
 }
 
+function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun }) {
+  return `
+      <details class="admin-panel">
+        <summary>Admin panel</summary>
+        <div class="admin-panel-body">
+          <div class="admin-actions">
+            <a class="button" href="/api/subnets/${netuid}/latest">Latest JSON</a>
+            <a class="button" href="/api/subnets/${netuid}/history?days=30">History JSON</a>
+          </div>
+          <div class="panel">
+            <h3>Backfill</h3>
+            <div class="admin-form">
+              <div class="admin-form-row">
+                <label>
+                  Days
+                  <input type="number" id="backfill-days" min="1" max="3650" step="1" value="${escapeHtml(String(config.taostatsBackfillDays || 30))}">
+                </label>
+                <label>
+                  Frequency
+                  <select id="backfill-frequency">
+                    <option value="by_hour" ${config.taostatsBackfillFrequency === 'by_hour' ? 'selected' : ''}>by_hour</option>
+                    <option value="by_day" ${config.taostatsBackfillFrequency === 'by_day' ? 'selected' : ''}>by_day</option>
+                    <option value="by_block" ${config.taostatsBackfillFrequency === 'by_block' ? 'selected' : ''}>by_block</option>
+                  </select>
+                </label>
+                <label class="admin-checkbox">
+                  <input type="checkbox" id="backfill-overwrite" ${config.taostatsBackfillOverwrite ? 'checked' : ''}>
+                  Overwrite overlapping data
+                </label>
+              </div>
+              <div class="admin-actions">
+                <button class="button primary" type="button" id="backfill-btn">Run backfill</button>
+              </div>
+              <p class="empty" id="backfill-status" hidden></p>
+            </div>
+          </div>
+          <div class="admin-grid">
+            <div class="panel">
+              <h3>Recent snapshots</h3>
+              ${renderHistoryTable(recent)}
+            </div>
+            <div class="panel">
+              <h3>Latest ingest run</h3>
+              <div class="grid compact">
+                ${latestRunCard}
+              </div>
+              ${ingestRun && ingestRun.error ? `<p class="empty"><strong>Error:</strong> ${escapeHtml(ingestRun.error)}</p>` : ''}
+            </div>
+          </div>
+        </div>
+      </details>`;
+}
+
 function renderPage(model) {
   const { latest, recent, ingestRun, totalSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso } = model;
   const latestMetricDefs = getLatestMetricDefs();
@@ -1281,55 +1334,7 @@ function renderPage(model) {
         </div>
       </section>
 
-      <details class="admin-panel">
-        <summary>Admin panel</summary>
-        <div class="admin-panel-body">
-          <div class="admin-actions">
-            <a class="button" href="/api/subnets/${netuid}/latest">Latest JSON</a>
-            <a class="button" href="/api/subnets/${netuid}/history?days=30">History JSON</a>
-          </div>
-          <div class="panel">
-            <h3>Backfill</h3>
-            <div class="admin-form">
-              <div class="admin-form-row">
-                <label>
-                  Days
-                  <input type="number" id="backfill-days" min="1" max="3650" step="1" value="${escapeHtml(String(config.taostatsBackfillDays || 30))}">
-                </label>
-                <label>
-                  Frequency
-                  <select id="backfill-frequency">
-                    <option value="by_hour" ${config.taostatsBackfillFrequency === 'by_hour' ? 'selected' : ''}>by_hour</option>
-                    <option value="by_day" ${config.taostatsBackfillFrequency === 'by_day' ? 'selected' : ''}>by_day</option>
-                    <option value="by_block" ${config.taostatsBackfillFrequency === 'by_block' ? 'selected' : ''}>by_block</option>
-                  </select>
-                </label>
-                <label class="admin-checkbox">
-                  <input type="checkbox" id="backfill-overwrite" ${config.taostatsBackfillOverwrite ? 'checked' : ''}>
-                  Overwrite overlapping data
-                </label>
-              </div>
-              <div class="admin-actions">
-                <button class="button primary" type="button" id="backfill-btn">Run backfill</button>
-              </div>
-              <p class="empty" id="backfill-status" hidden></p>
-            </div>
-          </div>
-          <div class="admin-grid">
-            <div class="panel">
-              <h3>Recent snapshots</h3>
-              ${renderHistoryTable(recent)}
-            </div>
-            <div class="panel">
-              <h3>Latest ingest run</h3>
-              <div class="grid compact">
-                ${latestRunCard}
-              </div>
-              ${ingestRun && ingestRun.error ? `<p class="empty"><strong>Error:</strong> ${escapeHtml(ingestRun.error)}</p>` : ''}
-            </div>
-          </div>
-        </div>
-      </details>
+      ${renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun })}
 
       <div class="footer">
         <div>Database snapshots: ${totalSnapshots}</div>
@@ -2729,6 +2734,13 @@ function parseBackfillFrequency(value, fallback = 'by_hour') {
   return allowed.has(text) ? text : fallback;
 }
 
+function parseBackfillOptions(payload, config) {
+  const days = parseDays(new URLSearchParams([['days', String(payload?.days ?? config.taostatsBackfillDays ?? 30)]]));
+  const frequency = parseBackfillFrequency(payload?.frequency, config.taostatsBackfillFrequency ?? 'by_hour');
+  const overwrite = typeof payload?.overwrite === 'boolean' ? payload.overwrite : Boolean(config.taostatsBackfillOverwrite);
+  return { days, frequency, overwrite };
+}
+
 function createDashboardServer({ db, ingestService, config, onPollIntervalChange = null }) {
   const server = http.createServer(async (req, res) => {
     try {
@@ -2806,10 +2818,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
 
       if (req.method === 'POST' && url.pathname === `/api/subnets/${netuid}/backfill`) {
         const payload = await readJsonBody(req);
-        const days = parseDays(new URLSearchParams([['days', String(payload.days ?? config.taostatsBackfillDays ?? 30)]]));
-        const frequency = parseBackfillFrequency(payload.frequency, config.taostatsBackfillFrequency ?? 'by_hour');
-        const overwrite = typeof payload.overwrite === 'boolean' ? payload.overwrite : Boolean(config.taostatsBackfillOverwrite);
-        const backfill = await ingestService.backfillHistoricalSnapshots({ netuid, days, frequency, overwrite });
+        const backfill = await ingestService.backfillHistoricalSnapshots({ netuid, ...parseBackfillOptions(payload, config) });
         const live = await ingestService.ingestOnce({ netuid });
         const status = backfill.ok && live.ok ? 200 : 500;
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
