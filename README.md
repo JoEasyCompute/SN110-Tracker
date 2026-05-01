@@ -102,7 +102,7 @@ The dashboard top bar includes a small live poller selector for `1h`, `2h`, and 
 Picking one updates the background polling timer immediately and saves the choice in SQLite under the app settings table, so the interval survives a restart.
 The same setting is used on startup if it has already been stored locally.
 The top bar also shows the next scheduled poll time.
-The dashboard now starts with a collapsible financial perspective panel, then shows the underlying price, flow, sentiment, and supply charts in a more beginner-friendly order.
+The dashboard now starts with a collapsible financial perspective panel, followed by a beginner-friendly quick read and watchlist that highlight the main price, flow, sentiment, and supply relationships before the underlying charts.
 
 ## Commands
 

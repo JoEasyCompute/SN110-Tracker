@@ -676,6 +676,8 @@ function buildSignalSummary(latest, comparisons, latestMetricDefs = getLatestMet
     scoreLabel,
     bullets,
     cards,
+    latest,
+    comparisons,
   };
 }
 
@@ -835,6 +837,83 @@ function buildInsightSummary(latest, comparisons, signal) {
   };
 }
 
+function buildWatchlistSummary(latest, comparisons, signal) {
+  if (!latest || !signal) return null;
+  const comparisonMap = new Map(comparisons.map((comparison) => [comparison.field, comparison]));
+  const priceComparison = comparisonMap.get('price_num');
+  const flow7Value = applyScale(latest.net_flow_7_days_num, 1 / TAO_PER_RAO);
+  const sentimentValue = resolveSentimentValue(latest);
+  const sentimentSource = resolveSentimentSource(latest);
+  const emissionRate = numericMetricValue(latest.emission_percent_num);
+  const burnRate = numericMetricValue(latest.incentive_burn_num);
+  const pricePct = priceComparison && Number.isFinite(priceComparison.pct) ? priceComparison.pct : null;
+  const priceFlowAligned = Number.isFinite(pricePct) && Number.isFinite(flow7Value)
+    ? ((pricePct >= 0 && flow7Value >= 0) || (pricePct < 0 && flow7Value < 0))
+    : null;
+
+  const items = [
+    {
+      label: 'Price vs flow',
+      value: priceFlowAligned === null ? '—' : (priceFlowAligned ? 'Aligned' : 'Diverging'),
+      subtext: priceFlowAligned === null
+        ? 'We need both price and weekly money flow to compare the move.'
+        : (priceFlowAligned
+          ? 'Price and weekly money flow point in the same direction.'
+          : 'Price and weekly money flow disagree, so the move may need confirmation.'),
+      tone: priceFlowAligned === null ? 'neutral' : (priceFlowAligned ? 'positive' : 'negative'),
+    },
+    {
+      label: 'Sentiment watch',
+      value: Number.isFinite(sentimentValue)
+        ? `${sentimentSource ? `${sentimentSource} ` : ''}${Number(sentimentValue).toFixed(1)}`
+        : '—',
+      subtext: Number.isFinite(sentimentValue)
+        ? (sentimentValue >= 60
+          ? 'Traders look optimistic; that can help keep buyers engaged.'
+          : sentimentValue <= 40
+            ? 'Traders look cautious; that can keep pressure on price.'
+            : 'Traders are in a mixed mood; other signals matter more here.')
+        : 'No sentiment sample is available yet, so this watch item will light up once one appears.',
+      tone: Number.isFinite(sentimentValue)
+        ? (sentimentValue >= 60 ? 'positive' : sentimentValue <= 40 ? 'negative' : 'neutral')
+        : 'neutral',
+    },
+    {
+      label: 'Supply watch',
+      value: Number.isFinite(emissionRate) ? `${percent(emissionRate, 3)} emitted` : '—',
+      subtext: Number.isFinite(emissionRate)
+        ? (Number.isFinite(burnRate)
+          ? `Burn rate: ${percent(burnRate, 2)}`
+          : 'Supply pressure stays a bit gentler when emission is lower.')
+        : 'No emission sample is available yet, so this watch item will update when supply data arrives.',
+      tone: Number.isFinite(emissionRate)
+        ? (emissionRate <= 0.75 ? 'positive' : emissionRate >= 1.25 ? 'negative' : 'neutral')
+        : 'neutral',
+    },
+  ];
+
+  const bullets = [];
+  if (priceFlowAligned === false) {
+    bullets.push('Price and money flow are not aligned yet, so this move needs extra confirmation.');
+  } else if (priceFlowAligned === true) {
+    bullets.push('Price and money flow are aligned, which makes the move easier to trust.');
+  }
+  if (Number.isFinite(sentimentValue) && sentimentValue <= 40) {
+    bullets.push('Sentiment is cautious, so buyers may need stronger evidence.');
+  }
+  if (Number.isFinite(emissionRate) && emissionRate >= 1.25) {
+    bullets.push('Supply pressure is elevated, which can make upside harder to sustain.');
+  }
+
+  return {
+    headline: 'Watchlist',
+    summary: 'These are the main things worth keeping an eye on if you want to turn the dashboard into a decision aid.',
+    badge: 'Keep watching',
+    bullets,
+    cards: items,
+  };
+}
+
 function renderInsightSection(insight) {
   if (!insight) return '';
   const bullets = insight.bullets.length
@@ -865,14 +944,45 @@ function renderInsightSection(insight) {
   `;
 }
 
+function renderWatchlistSection(watchlist) {
+  if (!watchlist) return '';
+  const bullets = watchlist.bullets.length
+    ? watchlist.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join('')
+    : '<li>No urgent watch items yet. The signals are relatively balanced.</li>';
+  const cards = watchlist.cards.map((card) => metricCard({
+    label: card.label,
+    value: card.value,
+    subtext: card.subtext,
+    tone: card.tone || 'neutral',
+    clickable: false,
+  })).join('');
+  return `
+    <section class="section watchlist-section">
+      <div class="section-copy">
+        <h2>${escapeHtml(watchlist.headline || 'Watchlist')}</h2>
+        <p class="muted">${escapeHtml(watchlist.summary || '')}</p>
+      </div>
+      <div class="signal-badge">${escapeHtml(watchlist.badge || 'Keep watching')}</div>
+      <div class="grid compact">${cards}</div>
+      <ul class="signal-bullets" style="margin-top: 14px;">${bullets}</ul>
+    </section>
+  `;
+}
+
 function renderFinancialPerspectiveSection(signal, insight) {
-  if (!signal && !insight) return '';
+  const watchlist = buildWatchlistSummary(
+    signal ? signal.latest : null,
+    signal ? signal.comparisons : [],
+    signal,
+  );
+  if (!signal && !insight && !watchlist) return '';
   return `
     <details class="financial-panel">
       <summary>Financial perspective</summary>
       <div class="financial-panel-body">
         ${renderSignalSection(signal)}
         ${renderInsightSection(insight)}
+        ${renderWatchlistSection(watchlist)}
       </div>
     </details>
   `;
@@ -1453,6 +1563,9 @@ function renderPage(model) {
       }
       .signal-grid {
         margin-top: 14px;
+      }
+      .watchlist-section {
+        margin-top: 16px;
       }
       .financial-panel {
         margin-top: 16px;

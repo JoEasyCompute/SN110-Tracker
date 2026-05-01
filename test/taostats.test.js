@@ -306,6 +306,10 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Why this signal?'), true);
   assert.equal(html.includes('What matters most today'), true);
   assert.equal(html.includes('Quick read'), true);
+  assert.equal(html.includes('Watchlist'), true);
+  assert.equal(html.includes('Keep watching'), true);
+  assert.equal(html.includes('Price vs flow'), true);
+  assert.equal(html.includes('Sentiment watch'), true);
   assert.equal(html.includes('Price + flow'), true);
   assert.equal(html.includes('Supply pressure'), true);
   assert.equal(html.includes('Price momentum'), true);
