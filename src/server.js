@@ -9,8 +9,11 @@ const {
   getLatestTaoPrice,
   getTaoPriceHistory,
   getTaoFlowHistory,
+  getLatestWalletSnapshot,
+  getWalletHistory,
   getLatestIngestRun,
   countSnapshots,
+  countWalletSnapshots,
 } = require('./db');
 const { POLL_INTERVAL_OPTIONS } = require('./config');
 
@@ -969,6 +972,68 @@ function renderWatchlistSection(watchlist) {
   `;
 }
 
+function shortAddress(address) {
+  const text = String(address || '').trim();
+  if (text.length <= 14) return text || '—';
+  return `${text.slice(0, 6)}…${text.slice(-6)}`;
+}
+
+function renderWalletSection(walletEntries) {
+  if (!Array.isArray(walletEntries) || !walletEntries.length) return '';
+  const cards = walletEntries.map(({ wallet, latest }) => {
+    const total = latest ? numericMetricValue(latest.balance_total_num) : null;
+    const free = latest ? numericMetricValue(latest.balance_free_num) : null;
+    const staked = latest ? numericMetricValue(latest.balance_staked_num) : null;
+    const root = latest ? numericMetricValue(latest.balance_staked_root_num) : null;
+    const alpha = latest ? numericMetricValue(latest.balance_staked_alpha_as_tao_num) : null;
+    const change24h = latest ? numericMetricValue(latest.balance_total_change_24hr_num) : null;
+    const metricData = {
+      kind: 'wallet',
+      key: `wallet:${wallet.ss58}`,
+      label: wallet.name,
+      description: `Wallet balance for ${wallet.name}. Taostats account history is available for this ss58 address.`,
+      valueField: 'balance_total_num',
+      historyField: 'balance_total_num',
+      valueFormat: 'tao',
+      currencyMode: 'tao',
+      historySource: 'wallet',
+      historyId: wallet.ss58,
+      chartLabel: `${wallet.name} balance`,
+      chartColor: wallet.color || '#00dbbc',
+      clickable: true,
+      taoValue: total,
+      latestTaoPriceUsd: latest ? (latest.tao_price_usd ?? null) : null,
+      rawValue: wallet.ss58,
+      sourceText: wallet.ss58,
+    };
+    const value = total === null ? '—' : tao(total, 2);
+    const subtext = latest
+      ? `${shortAddress(wallet.ss58)} • ${wallet.network || 'finney'} • 24h ${change24h === null ? '—' : signedTao(change24h, 2)} • Free ${free === null ? '—' : tao(free, 2)} • Staked ${staked === null ? '—' : tao(staked, 2)}`
+      : `${shortAddress(wallet.ss58)} • ${wallet.network || 'finney'} • waiting for first wallet snapshot`;
+    const extra = latest
+      ? `Root ${root === null ? '—' : tao(root, 2)} • Alpha ${alpha === null ? '—' : tao(alpha, 2)}`
+      : 'History will appear after the first ingest or backfill.';
+    return metricCard({
+      label: wallet.name,
+      value,
+      subtext: `${subtext} • ${extra}`,
+      tone: change24h === null ? 'neutral' : (change24h >= 0 ? 'positive' : 'negative'),
+      clickable: true,
+      metricData,
+    });
+  }).join('');
+
+  return `
+    <section class="section wallet-section">
+      <div class="section-copy">
+        <h2>Wallet balances</h2>
+        <p class="muted">Configured ss58 addresses from the .env file. Click a wallet card to inspect its historical balance chart.</p>
+      </div>
+      <div class="grid compact">${cards}</div>
+    </section>
+  `;
+}
+
 function renderFinancialPerspectiveSection(signal, insight) {
   const watchlist = buildWatchlistSummary(
     signal ? signal.latest : null,
@@ -1053,6 +1118,7 @@ function buildPageModel({ db, config, netuid }) {
   const recent = getRecentSnapshots(db, netuid, 12);
   const ingestRun = getLatestIngestRun(db, netuid);
   const totalSnapshots = countSnapshots(db, netuid);
+  const totalWalletSnapshots = countWalletSnapshots(db);
   const sinceIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const historyRaw = latest ? getHistory(db, netuid, sinceIso) : [];
   const taoPriceHistory = latest ? getTaoPriceHistory(db, sinceIso) : [];
@@ -1066,6 +1132,10 @@ function buildPageModel({ db, config, netuid }) {
         tao_price_captured_at: latest.tao_price_captured_at ?? latestTaoPrice?.captured_at ?? null,
       }
     : null;
+  const walletEntries = (config.wallets || []).map((wallet) => ({
+    wallet,
+    latest: getLatestWalletSnapshot(db, wallet.ss58),
+  }));
   const comparisons = latestWithPrice ? buildComparisons(history, latestWithPrice) : [];
 
   return {
@@ -1079,6 +1149,8 @@ function buildPageModel({ db, config, netuid }) {
     comparisons,
     latestTaoPrice,
     latestTaoPriceUsd: latestWithPrice?.tao_price_usd ?? latestTaoPrice?.price_usd ?? null,
+    walletEntries,
+    totalWalletSnapshots,
     nextPollAtIso: config.nextPollAtIso ?? null,
     hasApiKey: Boolean(config.taostatsAuthHeader),
   };
@@ -1289,7 +1361,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun }) 
 }
 
 function renderPage(model) {
-  const { latest, recent, ingestRun, totalSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso } = model;
+  const { latest, recent, ingestRun, totalSnapshots, totalWalletSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso, walletEntries } = model;
   const latestMetricDefs = getLatestMetricDefs();
   const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
   const insight = buildInsightSummary(latest, comparisons, signal);
@@ -1325,11 +1397,6 @@ function renderPage(model) {
           <div class="eyebrow">Subnet SN${netuid}</div>
           <h1>${escapeHtml(title)}</h1>
           <p>${escapeHtml(subtitle)}</p>
-        </div>
-        <div class="panel hero-chart-panel">
-          <h3>Token Price</h3>
-          <div class="chart-frame hero-chart-frame"><canvas id="price-chart"></canvas></div>
-          <div class="chart-note" id="price-chart-note" hidden></div>
         </div>
         <div class="hero-meta">
           <div><strong>Snapshots</strong><span>${totalSnapshots}</span></div>
@@ -1440,24 +1507,12 @@ function renderPage(model) {
         background: radial-gradient(circle at top right, rgba(0, 219, 188, 0.12), transparent 32%),
                     linear-gradient(180deg, var(--panel), var(--panel-2));
         border: 1px solid var(--border); border-radius: 24px; padding: 24px;
-        display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.95fr) minmax(280px, 0.7fr); gap: 20px;
+        display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.7fr); gap: 20px;
       }
       .hero-copy { display: grid; align-content: start; }
       .eyebrow { color: var(--accent); letter-spacing: .18em; text-transform: uppercase; font-size: 12px; margin-bottom: 8px; }
       h1 { margin: 0; font-size: clamp(32px, 4vw, 48px); }
       .hero p { color: var(--muted); margin: 12px 0 0; }
-      .hero-chart-panel {
-        display: grid;
-        gap: 12px;
-        align-content: start;
-      }
-      .hero-chart-panel h3 {
-        margin: 0;
-        font-size: 16px;
-      }
-      .hero-chart-frame {
-        height: 210px;
-      }
       .hero-meta {
         display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
       }
@@ -1583,6 +1638,9 @@ function renderPage(model) {
         margin-top: 14px;
       }
       .watchlist-section {
+        margin-top: 16px;
+      }
+      .wallet-section {
         margin-top: 16px;
       }
       .financial-panel {
@@ -1815,7 +1873,6 @@ function renderPage(model) {
       }
       @media (max-width: 1100px) {
         .hero, .grid, .grid.stats, .chart-grid, .modal-grid { grid-template-columns: 1fr; }
-        .hero { grid-template-columns: 1fr; }
       }
       @media (max-width: 700px) {
         .shell { padding: 16px; }
@@ -1842,6 +1899,8 @@ function renderPage(model) {
 
       ${renderFinancialPerspectiveSection(signal, insight)}
 
+      ${renderWalletSection(walletEntries)}
+
       <section class="section">
         <h2>Key metrics</h2>
         <div class="grid">${cards}</div>
@@ -1860,6 +1919,7 @@ function renderPage(model) {
       <section class="section">
         <h2>Trend charts</h2>
         <div class="chart-grid">
+          <div class="panel"><h3>Token Price</h3><div class="chart-frame"><canvas id="price-chart"></canvas></div><div class="chart-note" id="price-chart-note" hidden></div></div>
           <div class="panel"><h3>Money In/Out (1d)</h3><div class="chart-frame"><canvas id="net-flow-1d-chart"></canvas></div><div class="chart-note" id="net-flow-1d-chart-note" hidden></div></div>
           <div class="panel"><h3>Subnet Sentiment (SSI)</h3><div class="chart-frame"><canvas id="sentiment-chart"></canvas></div><div class="chart-note" id="sentiment-chart-note" hidden></div></div>
         </div>
@@ -1878,6 +1938,7 @@ function renderPage(model) {
 
       <div class="footer">
         <div>Database snapshots: ${totalSnapshots}</div>
+        <div>Wallet snapshots: ${totalWalletSnapshots}</div>
         <div>Poll interval: <span id="poll-interval-label">${escapeHtml(formatPollInterval(config.pollIntervalMinutes))}</span></div>
         <div>API source: ${config.taostatsAuthHeader ? 'enabled' : 'disabled'}</div>
       </div>
@@ -2447,14 +2508,16 @@ function renderPage(model) {
         state.modalMetric = null;
       }
 
-      function loadHistory(days = 30, source = 'subnet') {
-        const key = source + ':' + String(days);
+      function loadHistory(days = 30, source = 'subnet', id = '') {
+        const key = source + ':' + String(id || '') + ':' + String(days);
         if (state.historyCache.has(key)) {
           return Promise.resolve(state.historyCache.get(key));
         }
         if (!state.historyLoading.has(key)) {
           const endpoint = source === 'tao-price'
             ? '/api/tao-price/history?days=' + encodeURIComponent(days)
+            : source === 'wallet'
+              ? '/api/wallets/' + encodeURIComponent(id) + '/history?days=' + encodeURIComponent(days)
             : source === 'tao-flow'
               ? '/api/subnets/' + netuid + '/flow-history?days=' + encodeURIComponent(days)
               : '/api/subnets/' + netuid + '/history?days=' + encodeURIComponent(days);
@@ -2738,6 +2801,14 @@ function renderPage(model) {
         if (isPriceMoveMetric(metric)) {
           return 'Price Move is derived from historical Token Price, so it needs enough earlier price samples to calculate the window.';
         }
+        if (metric?.kind === 'wallet') {
+          if (!visiblePoints.length) {
+            return 'Wallet balances come from Taostats account history for the configured ss58 address. Backfill or a few live samples will make the chart fuller.';
+          }
+          if (visiblePoints.length < Math.max(5, Math.min(rangeDays, 10))) {
+            return 'Wallet balance history is daily on Taostats, so short ranges may only show a few points until enough days have been stored locally.';
+          }
+        }
         if (isTaoFlowMetric(metric)) {
           if (!visiblePoints.length) {
             return 'Money In/Out is derived from the historical subnet snapshots, so older backfilled rows may still be sparse until more samples are stored locally.';
@@ -2859,11 +2930,13 @@ function renderPage(model) {
         const requestId = ++state.modalHistoryRequestId;
         const historySource = metric.historySource || (metric.kind === 'tao-price'
           ? 'tao-price'
+          : metric.kind === 'wallet'
+            ? 'wallet'
           : isTaoFlowMetric(metric)
             ? 'tao-flow'
             : 'subnet');
         const fetchDays = isPriceMoveMetric(metric) ? priceMoveFetchDays(metric, days) : days;
-        const history = await loadHistory(fetchDays, historySource);
+        const history = await loadHistory(fetchDays, historySource, metric.historyId || metric.walletAddress || '');
         if (requestId !== state.modalHistoryRequestId) return null;
         if (state.modalMetric !== metric || state.modalHistoryDays !== days) return null;
         state.modalHistory = history;
@@ -3343,6 +3416,24 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         const history = attachTaoPrice(getTaoFlowHistory(db, netuid, sinceIso), getTaoPriceHistory(db, sinceIso));
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ netuid, days, history }, null, 2));
+        return;
+      }
+
+      const walletMatch = url.pathname.match(/^\/api\/wallets\/([^/]+)\/(latest|history)$/);
+      if (req.method === 'GET' && walletMatch) {
+        const address = decodeURIComponent(walletMatch[1]);
+        const action = walletMatch[2];
+        if (action === 'latest') {
+          const latestWallet = getLatestWalletSnapshot(db, address);
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ address, latest: latestWallet }, null, 2));
+          return;
+        }
+        const days = parseDays(url.searchParams);
+        const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        const history = getWalletHistory(db, address, sinceIso);
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ address, days, history }, null, 2));
         return;
       }
 

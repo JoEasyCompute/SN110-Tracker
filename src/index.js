@@ -62,6 +62,9 @@ async function main() {
   if (config.taostatsRateLimiter) {
     console.log(`Taostats API rate limit: ${config.taostatsRateLimiter.maxRequests}/${config.taostatsRateLimiter.intervalMs / 1000}s`);
   }
+  if (Array.isArray(config.wallets) && config.wallets.length > 0) {
+    console.log(`Wallet tracking: ${config.wallets.length} wallet${config.wallets.length === 1 ? '' : 's'} configured`);
+  }
   if (config.taostatsBackfillOnStartup && config.taostatsBackfillDays > 0) {
     console.log(`Historical backfill: enabled (${config.taostatsBackfillDays} days, ${config.taostatsBackfillFrequency})`);
   }

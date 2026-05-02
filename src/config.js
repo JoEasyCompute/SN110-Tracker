@@ -23,6 +23,33 @@ function normalizePollIntervalMinutes(value, fallback = 60) {
   return POLL_INTERVAL_OPTIONS.includes(parsed) ? parsed : fallback;
 }
 
+function parseWalletConfigs(env = process.env) {
+  const wallets = [];
+  const maxWallets = 20;
+
+  for (let index = 1; index <= maxWallets; index += 1) {
+    const prefix = `TAOSTATS_WALLET_${index}_`;
+    const name = String(env[`${prefix}NAME`] || '').trim();
+    const address = String(env[`${prefix}SS58`] || env[`${prefix}ADDRESS`] || '').trim();
+    const network = String(env[`${prefix}NETWORK`] || 'finney').trim() || 'finney';
+
+    if (!name && !address && !env[`${prefix}NETWORK`]) {
+      continue;
+    }
+    if (!name || !address) {
+      continue;
+    }
+
+    wallets.push({
+      name,
+      ss58: address,
+      network,
+    });
+  }
+
+  return wallets;
+}
+
 function parseEnvLine(line) {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('#')) return null;
@@ -75,6 +102,7 @@ function loadConfig() {
   const taostatsBackfillFrequency = process.env.TAOSTATS_BACKFILL_FREQUENCY || 'by_hour';
   const taostatsBackfillOnStartup = boolOr(false, process.env.TAOSTATS_BACKFILL_ON_STARTUP);
   const taostatsBackfillOverwrite = boolOr(true, process.env.TAOSTATS_BACKFILL_OVERWRITE);
+  const wallets = parseWalletConfigs(process.env);
 
   return {
     netuid,
@@ -91,6 +119,7 @@ function loadConfig() {
     taostatsBackfillFrequency,
     taostatsBackfillOnStartup,
     taostatsBackfillOverwrite,
+    wallets,
     userAgent: 'sn110-tracker/1.0 (+local dashboard)',
   };
 }
@@ -100,6 +129,7 @@ module.exports = {
   loadConfig,
   loadDotEnvFile,
   parseEnvLine,
+  parseWalletConfigs,
   boolOr,
   normalizePollIntervalMinutes,
 };

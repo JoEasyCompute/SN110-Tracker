@@ -11,6 +11,7 @@ const {
   normalizeSnapshot,
   normalizeTaoPriceSnapshot,
   normalizeTaoFlowSnapshot,
+  normalizeAccountSnapshot,
   pickRecord,
   createRateLimiter,
 } = require('../src/taostats');
@@ -19,12 +20,15 @@ const {
   insertSnapshot,
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
+  insertWalletSnapshot,
   getLatestSnapshot,
   getRecentSnapshots,
   getHistory,
   getLatestTaoPrice,
   getTaoPriceHistory,
   getTaoFlowHistory,
+  getLatestWalletSnapshot,
+  getWalletHistory,
   deleteSnapshotsInRange,
   getSetting,
   setSetting,
@@ -235,6 +239,54 @@ test('sqlite persistence stores and retrieves tao flow history', () => {
   db.close();
 });
 
+test('sqlite persistence stores and retrieves wallet balance history', () => {
+  const db = openDatabase(':memory:');
+  const wallet1 = normalizeAccountSnapshot({
+    address: { ss58: '5WalletAlpha', hex: '0xabc' },
+    network: 'finney',
+    block_number: 100,
+    timestamp: '2026-04-29T00:00:00Z',
+    rank: 12,
+    balance_free: '1000000000',
+    balance_staked: '2000000000',
+    balance_staked_alpha_as_tao: '500000000',
+    balance_staked_root: '1500000000',
+    balance_total: '3000000000',
+    balance_total_24hr_ago: '2500000000',
+    created_on_date: '2025-01-01',
+    created_on_network: 'finney',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha', address: '5WalletAlpha', network: 'finney', capturedAt: '2026-04-29T00:00:00.000Z' });
+  insertWalletSnapshot(db, wallet1);
+
+  const wallet2 = normalizeAccountSnapshot({
+    address: { ss58: '5WalletAlpha', hex: '0xabc' },
+    network: 'finney',
+    block_number: 101,
+    timestamp: '2026-04-30T00:00:00Z',
+    rank: 11,
+    balance_free: '1200000000',
+    balance_staked: '2200000000',
+    balance_staked_alpha_as_tao: '700000000',
+    balance_staked_root: '1500000000',
+    balance_total: '3400000000',
+    balance_total_24hr_ago: '3000000000',
+    created_on_date: '2025-01-01',
+    created_on_network: 'finney',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha', address: '5WalletAlpha', network: 'finney', capturedAt: '2026-04-30T00:00:00.000Z' });
+  insertWalletSnapshot(db, wallet2);
+
+  const latest = getLatestWalletSnapshot(db, '5WalletAlpha');
+  assert.equal(latest.wallet_name, 'Alpha');
+  assert.equal(latest.balance_total_num, 3.4);
+
+  const history = getWalletHistory(db, '5WalletAlpha', '2026-04-29T00:00:00.000Z');
+  assert.equal(history.length, 2);
+  assert.equal(Math.round(history[0].balance_total_num * 100) / 100, 3.0);
+  assert.equal(Math.round(history[1].balance_total_num * 100) / 100, 3.4);
+
+  db.close();
+});
+
 test('sqlite app settings persist key/value pairs', () => {
   const db = openDatabase(':memory:');
   assert.equal(getSetting(db, 'poll_interval_minutes'), null);
@@ -288,6 +340,21 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     fear_and_greed_sentiment: 'Neutral',
   }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
   insertSnapshot(db, snapshot);
+  insertWalletSnapshot(db, normalizeAccountSnapshot({
+    address: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    network: 'finney',
+    block_number: 2,
+    timestamp: '2026-04-30T00:00:00Z',
+    rank: 12,
+    balance_free: '1000000000',
+    balance_staked: '2000000000',
+    balance_staked_alpha_as_tao: '500000000',
+    balance_staked_root: '1500000000',
+    balance_total: '3000000000',
+    balance_total_24hr_ago: '2500000000',
+    created_on_date: '2025-01-01',
+    created_on_network: 'finney',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', network: 'finney', capturedAt: '2026-04-30T00:00:00.000Z' }));
   insertTaoPriceSnapshot(db, normalizeTaoPriceSnapshot({
     created_at: '2026-04-30T00:00:00Z',
     last_updated: '2026-04-30T00:00:00Z',
@@ -296,11 +363,14 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     volume_24h: '1000',
     market_cap: '2000',
   }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z' }));
-  const model = buildPageModel({ db, config: { taostatsAuthHeader: '', pollIntervalMinutes: 15 }, netuid: 110 });
+  const model = buildPageModel({ db, config: { taostatsAuthHeader: '', pollIntervalMinutes: 15, wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney' }] }, netuid: 110 });
   const html = renderPage(model);
   assert.equal(html.includes('id="history-modal"'), true);
   assert.equal(html.includes('history-modal-info'), true);
   assert.equal(html.includes('history-modal-explanation'), true);
+  assert.equal(html.includes('Wallet balances'), true);
+  assert.equal(html.includes('Alpha Treasury'), true);
+  assert.equal(html.includes('5Walle'), true);
   assert.equal(html.includes('Financial perspective'), true);
   assert.equal(html.includes('Signal now'), true);
   assert.equal(html.includes('Why this signal?'), true);
@@ -491,6 +561,56 @@ test('tao flow history endpoint returns stored flow history', async () => {
   db.close();
 });
 
+test('wallet history endpoint returns stored wallet history', async () => {
+  const db = openDatabase(':memory:');
+  insertWalletSnapshot(db, normalizeAccountSnapshot({
+    address: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    network: 'finney',
+    block_number: 100,
+    timestamp: '2026-04-29T00:00:00Z',
+    rank: 12,
+    balance_free: '1000000000',
+    balance_staked: '2000000000',
+    balance_staked_alpha_as_tao: '500000000',
+    balance_staked_root: '1500000000',
+    balance_total: '3000000000',
+    balance_total_24hr_ago: '2500000000',
+    created_on_date: '2025-01-01',
+    created_on_network: 'finney',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', network: 'finney', capturedAt: '2026-04-29T00:00:00.000Z' }));
+  insertWalletSnapshot(db, normalizeAccountSnapshot({
+    address: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    network: 'finney',
+    block_number: 101,
+    timestamp: '2026-04-30T00:00:00Z',
+    rank: 11,
+    balance_free: '1200000000',
+    balance_staked: '2200000000',
+    balance_staked_alpha_as_tao: '700000000',
+    balance_staked_root: '1500000000',
+    balance_total: '3400000000',
+    balance_total_24hr_ago: '3000000000',
+    created_on_date: '2025-01-01',
+    created_on_network: 'finney',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', network: 'finney', capturedAt: '2026-04-30T00:00:00.000Z' }));
+
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: { netuid: 110, taostatsAuthHeader: '', pollIntervalMinutes: 60, nextPollAtIso: null },
+  });
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/wallets/5WalletAlpha123456789ABCDEFGH/history?days=30`);
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.days, 30);
+  assert.equal(payload.history.length, 2);
+  assert.equal(Math.round(payload.history[1].balance_total_num * 100) / 100, 3.4);
+  await app.close();
+  db.close();
+});
+
 test('poll interval selector endpoint updates the interval setting', async () => {
   const db = openDatabase(':memory:');
   let observedMinutes = null;
@@ -675,9 +795,14 @@ test('loadConfig reads environment values from a local .env file', () => {
     'TAOSTATS_BACKFILL_FREQUENCY=by_day',
     'TAOSTATS_BACKFILL_ON_STARTUP=true',
     'TAOSTATS_BACKFILL_OVERWRITE=true',
+    'TAOSTATS_WALLET_1_NAME=Treasury',
+    'TAOSTATS_WALLET_1_SS58=5WalletAlpha123456789ABCDEFGH',
+    'TAOSTATS_WALLET_1_NETWORK=finney',
+    'TAOSTATS_WALLET_2_NAME=Ops',
+    'TAOSTATS_WALLET_2_SS58=5WalletBeta123456789ABCDEFGH',
   ].join('\n'));
 
-  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE'];
+  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_SS58'];
   const backup = Object.fromEntries(envKeys.map((key) => [key, Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined]));
 
   try {
@@ -697,6 +822,10 @@ test('loadConfig reads environment values from a local .env file', () => {
     assert.equal(config.taostatsBackfillFrequency, 'by_day');
     assert.equal(config.taostatsBackfillOnStartup, true);
     assert.equal(config.taostatsBackfillOverwrite, true);
+    assert.equal(config.wallets.length, 2);
+    assert.equal(config.wallets[0].name, 'Treasury');
+    assert.equal(config.wallets[0].ss58, '5WalletAlpha123456789ABCDEFGH');
+    assert.equal(config.wallets[1].name, 'Ops');
   } finally {
     process.chdir(cwd);
     for (const [key, value] of Object.entries(backup)) {

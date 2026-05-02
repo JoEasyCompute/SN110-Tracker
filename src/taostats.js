@@ -420,6 +420,72 @@ function normalizeTaoFlowSnapshot(raw, { source, sourceUrl, netuid, capturedAt =
   };
 }
 
+function normalizeAccountSnapshot(raw, { source, sourceUrl, walletName, address, network = 'finney', capturedAt = nowIso() }) {
+  const payload = pickRecord(raw, null) || {};
+  const n = (value) => asNumber(value);
+  const r = (value) => raoToTao(value);
+  const t = (value) => asText(value);
+  const addressPayload = payload.address || {};
+  const balanceFree = r(payload.balance_free);
+  const balanceStaked = r(payload.balance_staked);
+  const balanceStakedAlpha = r(payload.balance_staked_alpha_as_tao);
+  const balanceStakedRoot = r(payload.balance_staked_root);
+  const balanceTotal = r(payload.balance_total);
+  const balanceFree24hAgo = r(payload.balance_free_24hr_ago);
+  const balanceStaked24hAgo = r(payload.balance_staked_24hr_ago);
+  const balanceStakedAlpha24hAgo = r(payload.balance_staked_alpha_as_tao_24hr_ago);
+  const balanceStakedRoot24hAgo = r(payload.balance_staked_root_24hr_ago);
+  const balanceTotal24hAgo = r(payload.balance_total_24hr_ago);
+  const delta = (current, prior) => (Number.isFinite(current) && Number.isFinite(prior) ? current - prior : null);
+
+  return {
+    wallet_name: walletName,
+    wallet_address_ss58: t(addressPayload.ss58 ?? address),
+    wallet_address_hex: t(addressPayload.hex ?? null),
+    network: t(payload.network ?? network),
+    captured_at: capturedAt,
+    remote_timestamp: t(payload.timestamp ?? payload.last_updated ?? payload.updated_at ?? payload.created_at ?? null),
+    source,
+    source_url: sourceUrl,
+    block_number: asInteger(payload.block_number),
+    rank: asInteger(payload.rank),
+    balance_free_text: t(payload.balance_free),
+    balance_free_num: balanceFree,
+    balance_staked_text: t(payload.balance_staked),
+    balance_staked_num: balanceStaked,
+    balance_staked_alpha_as_tao_text: t(payload.balance_staked_alpha_as_tao),
+    balance_staked_alpha_as_tao_num: balanceStakedAlpha,
+    balance_staked_root_text: t(payload.balance_staked_root),
+    balance_staked_root_num: balanceStakedRoot,
+    balance_total_text: t(payload.balance_total),
+    balance_total_num: balanceTotal,
+    balance_free_24hr_ago_text: t(payload.balance_free_24hr_ago),
+    balance_free_24hr_ago_num: balanceFree24hAgo,
+    balance_staked_24hr_ago_text: t(payload.balance_staked_24hr_ago),
+    balance_staked_24hr_ago_num: balanceStaked24hAgo,
+    balance_staked_alpha_as_tao_24hr_ago_text: t(payload.balance_staked_alpha_as_tao_24hr_ago),
+    balance_staked_alpha_as_tao_24hr_ago_num: balanceStakedAlpha24hAgo,
+    balance_staked_root_24hr_ago_text: t(payload.balance_staked_root_24hr_ago),
+    balance_staked_root_24hr_ago_num: balanceStakedRoot24hAgo,
+    balance_total_24hr_ago_text: t(payload.balance_total_24hr_ago),
+    balance_total_24hr_ago_num: balanceTotal24hAgo,
+    balance_free_change_24hr_text: delta(balanceFree, balanceFree24hAgo) === null ? null : String(delta(balanceFree, balanceFree24hAgo)),
+    balance_free_change_24hr_num: delta(balanceFree, balanceFree24hAgo),
+    balance_staked_change_24hr_text: delta(balanceStaked, balanceStaked24hAgo) === null ? null : String(delta(balanceStaked, balanceStaked24hAgo)),
+    balance_staked_change_24hr_num: delta(balanceStaked, balanceStaked24hAgo),
+    balance_staked_alpha_as_tao_change_24hr_text: delta(balanceStakedAlpha, balanceStakedAlpha24hAgo) === null ? null : String(delta(balanceStakedAlpha, balanceStakedAlpha24hAgo)),
+    balance_staked_alpha_as_tao_change_24hr_num: delta(balanceStakedAlpha, balanceStakedAlpha24hAgo),
+    balance_staked_root_change_24hr_text: delta(balanceStakedRoot, balanceStakedRoot24hAgo) === null ? null : String(delta(balanceStakedRoot, balanceStakedRoot24hAgo)),
+    balance_staked_root_change_24hr_num: delta(balanceStakedRoot, balanceStakedRoot24hAgo),
+    balance_total_change_24hr_text: delta(balanceTotal, balanceTotal24hAgo) === null ? null : String(delta(balanceTotal, balanceTotal24hAgo)),
+    balance_total_change_24hr_num: delta(balanceTotal, balanceTotal24hAgo),
+    created_on_date: t(payload.created_on_date),
+    created_on_network: t(payload.created_on_network),
+    coldkey_swap: t(payload.coldkey_swap),
+    raw_json: JSON.stringify(payload),
+  };
+}
+
 function historyTimestampToIso(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'string' && value.includes('T')) return value;
@@ -574,6 +640,79 @@ async function fetchTaoFlowHistory({
     source: 'api-history',
     sourceUrl: `${taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/tao_flow/v1`,
     netuid,
+    capturedAt: historyTimestampToIso(row.timestamp ?? row.last_updated ?? row.updated_at ?? row.created_at) || nowIso(),
+  }));
+}
+
+async function fetchAccountLatest({
+  address,
+  network = 'finney',
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  capturedAt = nowIso(),
+}) {
+  if (!taostatsAuthHeader) {
+    return null;
+  }
+
+  const headers = { authorization: taostatsAuthHeader };
+  const url = new URL('/api/account/latest/v1', taostatsBaseUrl);
+  url.searchParams.set('address', address);
+  url.searchParams.set('network', network);
+  const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+  return normalizeAccountSnapshot(json, {
+    source: 'api',
+    sourceUrl: url.toString(),
+    walletName: null,
+    address,
+    network,
+    capturedAt,
+  });
+}
+
+async function fetchAccountHistory({
+  address,
+  network = 'finney',
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  days = 30,
+  limit = 200,
+}) {
+  if (!taostatsAuthHeader) {
+    return [];
+  }
+
+  const now = Date.now();
+  const startIso = new Date(now - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString();
+  const timestampStart = Math.floor(new Date(startIso).getTime() / 1000);
+  const timestampEnd = Math.floor(now / 1000);
+  const headers = { authorization: taostatsAuthHeader };
+  const rows = [];
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL('/api/account/history/v1', taostatsBaseUrl);
+    url.searchParams.set('address', address);
+    url.searchParams.set('network', network);
+    url.searchParams.set('timestamp_start', String(timestampStart));
+    url.searchParams.set('timestamp_end', String(timestampEnd));
+    url.searchParams.set('order', 'timestamp_asc');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('page', String(page));
+    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+    const pageRows = extractRecords(json);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    if (pageRows.length < limit) break;
+  }
+
+  return rows.map((row) => normalizeAccountSnapshot(row, {
+    source: 'api-history',
+    sourceUrl: `${taostatsBaseUrl.replace(/\/$/, '')}/api/account/history/v1`,
+    walletName: null,
+    address,
+    network,
     capturedAt: historyTimestampToIso(row.timestamp ?? row.last_updated ?? row.updated_at ?? row.created_at) || nowIso(),
   }));
 }
@@ -739,11 +878,14 @@ module.exports = {
   fetchTaoPriceLatest,
   fetchTaoPriceHistory,
   fetchTaoFlowHistory,
+  fetchAccountLatest,
+  fetchAccountHistory,
   fetchHistoricalSnapshots,
   extractEscapedJsonObject,
   normalizeSnapshot,
   normalizeTaoPriceSnapshot,
   normalizeTaoFlowSnapshot,
+  normalizeAccountSnapshot,
   pickRecord,
   extractRecords,
   asNumber,

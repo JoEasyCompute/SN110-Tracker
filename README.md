@@ -16,6 +16,7 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Shows the next scheduled poll time in the top bar
 - Lets you switch historical metric charts between 24H / 7D / 30D / 60D in the modal
 - Lets you click any latest snapshot card to open a historical modal with metric help text
+- Tracks configured wallet balances from Taostats account latest/history endpoints, using ss58 addresses and human-friendly wallet names from `.env`
 - Keeps operational JSON/debug views inside a collapsible admin panel so the main dashboard stays clean
 - Includes a subnet sentiment card that prefers Taostats SSI when available and falls back to the legacy Fear & Greed value on older rows
 - Money In/Out charts use Taostats Tao Flow history so the historical view stays available even when the subnet snapshot history is sparse
@@ -46,6 +47,9 @@ Environment variables:
 - `TAOSTATS_BACKFILL_FREQUENCY` - backfill resolution, defaults to `by_hour`
 - `TAOSTATS_BACKFILL_ON_STARTUP` - set to `true` to run historical backfill on startup
 - `TAOSTATS_BACKFILL_OVERWRITE` - replace overlapping rows in the backfill window, defaults to `true`
+- `TAOSTATS_WALLET_1_NAME`, `TAOSTATS_WALLET_1_SS58`, `TAOSTATS_WALLET_1_NETWORK` - first tracked wallet entry
+- `TAOSTATS_WALLET_2_NAME`, `TAOSTATS_WALLET_2_SS58`, `TAOSTATS_WALLET_2_NETWORK` - second tracked wallet entry
+- Continue incrementing the wallet index for additional tracked wallets
 - `TAOSTATS_BASE_URL` - defaults to `https://api.taostats.io`
 - `TAOSTATS_PUBLIC_BASE_URL` - defaults to `https://taostats.io`
 - `DB_PATH` - SQLite file path, defaults to `./data/sn110-tracker.sqlite`
@@ -53,6 +57,7 @@ Environment variables:
 
 The app automatically loads a local `.env` file from the project root if present.
 You can keep your Taostats key there for local development.
+You can also keep one or more wallet ss58 addresses there as indexed entries with matching names.
 
 If the Taostats API requires a prefix like `Bearer`, put the full header value in `TAOSTATS_AUTH_HEADER`.
 When an API key is configured, the app rate-limits Taostats API requests to 5 per minute by default so the free tier is respected.
@@ -94,6 +99,7 @@ Backfill mode pulls Taostats historical subnet, pool, and registration-cost data
 By default it deletes overlapping local rows in the requested time window before inserting the historical API snapshots, so the local chart stays continuous during testing.
 It also backfills TAO price history so USD toggles keep working for historical values.
 It also backfills Tao Flow history so the Money In/Out charts can render historical values from dedicated flow data.
+If wallets are configured, backfill also pulls Taostats account history for each ss58 address and stores the daily wallet balance history locally.
 Sentiment history will use SSI when Taostats provides it, with legacy Fear & Greed as a fallback for older live rows.
 
 ## Live polling interval
@@ -103,7 +109,7 @@ Picking one updates the background polling timer immediately and saves the choic
 The same setting is used on startup if it has already been stored locally.
 The top bar also shows the next scheduled poll time.
 The dashboard now starts with a collapsible financial perspective panel, followed by a beginner-friendly quick read and watchlist that highlight the main price, flow, sentiment, and supply relationships before the underlying charts.
-The Token Price chart is now also surfaced in the hero area so the latest price trend is visible before the rest of the dashboard sections.
+Configured wallet balances appear in their own section, and clicking a wallet card opens the historical balance modal.
 
 ## Commands
 
@@ -119,6 +125,8 @@ The Token Price chart is now also surfaced in the hero area so the latest price 
 - `/api/subnets/110/latest` - latest stored snapshot
 - `/api/subnets/110/history?days=30` - historical snapshots
 - `/api/subnets/110/flow-history?days=30` - historical Tao Flow series used by Money In/Out charts
+- `/api/wallets/<ss58>/latest` - latest stored wallet snapshot for a configured ss58 address
+- `/api/wallets/<ss58>/history?days=30` - historical wallet balance rows for a configured ss58 address
 - `/api/tao-price/history?days=30` - stored TAO/USD price history
 - `POST /api/subnets/110/ingest` - manual ingest trigger
 - `POST /api/subnets/110/backfill` - browser/admin backfill trigger

@@ -162,6 +162,60 @@ function openDatabase(filePath) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tao_flow_history_netuid_block_number
       ON tao_flow_history(netuid, block_number);
 
+    CREATE TABLE IF NOT EXISTS wallet_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_name TEXT NOT NULL,
+      wallet_address_ss58 TEXT NOT NULL,
+      wallet_address_hex TEXT,
+      network TEXT NOT NULL,
+      captured_at TEXT NOT NULL,
+      remote_timestamp TEXT,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      block_number INTEGER,
+      rank INTEGER,
+      balance_free_text TEXT,
+      balance_free_num REAL,
+      balance_staked_text TEXT,
+      balance_staked_num REAL,
+      balance_staked_alpha_as_tao_text TEXT,
+      balance_staked_alpha_as_tao_num REAL,
+      balance_staked_root_text TEXT,
+      balance_staked_root_num REAL,
+      balance_total_text TEXT,
+      balance_total_num REAL,
+      balance_free_24hr_ago_text TEXT,
+      balance_free_24hr_ago_num REAL,
+      balance_staked_24hr_ago_text TEXT,
+      balance_staked_24hr_ago_num REAL,
+      balance_staked_alpha_as_tao_24hr_ago_text TEXT,
+      balance_staked_alpha_as_tao_24hr_ago_num REAL,
+      balance_staked_root_24hr_ago_text TEXT,
+      balance_staked_root_24hr_ago_num REAL,
+      balance_total_24hr_ago_text TEXT,
+      balance_total_24hr_ago_num REAL,
+      balance_free_change_24hr_text TEXT,
+      balance_free_change_24hr_num REAL,
+      balance_staked_change_24hr_text TEXT,
+      balance_staked_change_24hr_num REAL,
+      balance_staked_alpha_as_tao_change_24hr_text TEXT,
+      balance_staked_alpha_as_tao_change_24hr_num REAL,
+      balance_staked_root_change_24hr_text TEXT,
+      balance_staked_root_change_24hr_num REAL,
+      balance_total_change_24hr_text TEXT,
+      balance_total_change_24hr_num REAL,
+      created_on_date TEXT,
+      created_on_network TEXT,
+      coldkey_swap TEXT,
+      raw_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wallet_snapshots_address_captured_at
+      ON wallet_snapshots(wallet_address_ss58, captured_at DESC, id DESC);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_snapshots_address_block_number
+      ON wallet_snapshots(wallet_address_ss58, block_number);
+
     CREATE TABLE IF NOT EXISTS ingest_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       netuid INTEGER NOT NULL,
@@ -596,6 +650,142 @@ function insertTaoFlowSnapshot(db, snapshot) {
   return Number(info.lastInsertRowid);
 }
 
+function insertWalletSnapshot(db, snapshot) {
+  const stmt = db.prepare(`
+    INSERT INTO wallet_snapshots (
+      wallet_name, wallet_address_ss58, wallet_address_hex, network,
+      captured_at, remote_timestamp, source, source_url, block_number, rank,
+      balance_free_text, balance_free_num,
+      balance_staked_text, balance_staked_num,
+      balance_staked_alpha_as_tao_text, balance_staked_alpha_as_tao_num,
+      balance_staked_root_text, balance_staked_root_num,
+      balance_total_text, balance_total_num,
+      balance_free_24hr_ago_text, balance_free_24hr_ago_num,
+      balance_staked_24hr_ago_text, balance_staked_24hr_ago_num,
+      balance_staked_alpha_as_tao_24hr_ago_text, balance_staked_alpha_as_tao_24hr_ago_num,
+      balance_staked_root_24hr_ago_text, balance_staked_root_24hr_ago_num,
+      balance_total_24hr_ago_text, balance_total_24hr_ago_num,
+      balance_free_change_24hr_text, balance_free_change_24hr_num,
+      balance_staked_change_24hr_text, balance_staked_change_24hr_num,
+      balance_staked_alpha_as_tao_change_24hr_text, balance_staked_alpha_as_tao_change_24hr_num,
+      balance_staked_root_change_24hr_text, balance_staked_root_change_24hr_num,
+      balance_total_change_24hr_text, balance_total_change_24hr_num,
+      created_on_date, created_on_network, coldkey_swap, raw_json
+    ) VALUES (
+      @wallet_name, @wallet_address_ss58, @wallet_address_hex, @network,
+      @captured_at, @remote_timestamp, @source, @source_url, @block_number, @rank,
+      @balance_free_text, @balance_free_num,
+      @balance_staked_text, @balance_staked_num,
+      @balance_staked_alpha_as_tao_text, @balance_staked_alpha_as_tao_num,
+      @balance_staked_root_text, @balance_staked_root_num,
+      @balance_total_text, @balance_total_num,
+      @balance_free_24hr_ago_text, @balance_free_24hr_ago_num,
+      @balance_staked_24hr_ago_text, @balance_staked_24hr_ago_num,
+      @balance_staked_alpha_as_tao_24hr_ago_text, @balance_staked_alpha_as_tao_24hr_ago_num,
+      @balance_staked_root_24hr_ago_text, @balance_staked_root_24hr_ago_num,
+      @balance_total_24hr_ago_text, @balance_total_24hr_ago_num,
+      @balance_free_change_24hr_text, @balance_free_change_24hr_num,
+      @balance_staked_change_24hr_text, @balance_staked_change_24hr_num,
+      @balance_staked_alpha_as_tao_change_24hr_text, @balance_staked_alpha_as_tao_change_24hr_num,
+      @balance_staked_root_change_24hr_text, @balance_staked_root_change_24hr_num,
+      @balance_total_change_24hr_text, @balance_total_change_24hr_num,
+      @created_on_date, @created_on_network, @coldkey_swap, @raw_json
+    )
+    ON CONFLICT(wallet_address_ss58, block_number) DO UPDATE SET
+      wallet_name = excluded.wallet_name,
+      wallet_address_hex = excluded.wallet_address_hex,
+      network = excluded.network,
+      captured_at = excluded.captured_at,
+      remote_timestamp = excluded.remote_timestamp,
+      source = excluded.source,
+      source_url = excluded.source_url,
+      rank = excluded.rank,
+      balance_free_text = excluded.balance_free_text,
+      balance_free_num = excluded.balance_free_num,
+      balance_staked_text = excluded.balance_staked_text,
+      balance_staked_num = excluded.balance_staked_num,
+      balance_staked_alpha_as_tao_text = excluded.balance_staked_alpha_as_tao_text,
+      balance_staked_alpha_as_tao_num = excluded.balance_staked_alpha_as_tao_num,
+      balance_staked_root_text = excluded.balance_staked_root_text,
+      balance_staked_root_num = excluded.balance_staked_root_num,
+      balance_total_text = excluded.balance_total_text,
+      balance_total_num = excluded.balance_total_num,
+      balance_free_24hr_ago_text = excluded.balance_free_24hr_ago_text,
+      balance_free_24hr_ago_num = excluded.balance_free_24hr_ago_num,
+      balance_staked_24hr_ago_text = excluded.balance_staked_24hr_ago_text,
+      balance_staked_24hr_ago_num = excluded.balance_staked_24hr_ago_num,
+      balance_staked_alpha_as_tao_24hr_ago_text = excluded.balance_staked_alpha_as_tao_24hr_ago_text,
+      balance_staked_alpha_as_tao_24hr_ago_num = excluded.balance_staked_alpha_as_tao_24hr_ago_num,
+      balance_staked_root_24hr_ago_text = excluded.balance_staked_root_24hr_ago_text,
+      balance_staked_root_24hr_ago_num = excluded.balance_staked_root_24hr_ago_num,
+      balance_total_24hr_ago_text = excluded.balance_total_24hr_ago_text,
+      balance_total_24hr_ago_num = excluded.balance_total_24hr_ago_num,
+      balance_free_change_24hr_text = excluded.balance_free_change_24hr_text,
+      balance_free_change_24hr_num = excluded.balance_free_change_24hr_num,
+      balance_staked_change_24hr_text = excluded.balance_staked_change_24hr_text,
+      balance_staked_change_24hr_num = excluded.balance_staked_change_24hr_num,
+      balance_staked_alpha_as_tao_change_24hr_text = excluded.balance_staked_alpha_as_tao_change_24hr_text,
+      balance_staked_alpha_as_tao_change_24hr_num = excluded.balance_staked_alpha_as_tao_change_24hr_num,
+      balance_staked_root_change_24hr_text = excluded.balance_staked_root_change_24hr_text,
+      balance_staked_root_change_24hr_num = excluded.balance_staked_root_change_24hr_num,
+      balance_total_change_24hr_text = excluded.balance_total_change_24hr_text,
+      balance_total_change_24hr_num = excluded.balance_total_change_24hr_num,
+      created_on_date = excluded.created_on_date,
+      created_on_network = excluded.created_on_network,
+      coldkey_swap = excluded.coldkey_swap,
+      raw_json = excluded.raw_json
+  `);
+
+  const info = stmt.run({
+    wallet_name: snapshot.wallet_name,
+    wallet_address_ss58: snapshot.wallet_address_ss58,
+    wallet_address_hex: toDbValue(snapshot.wallet_address_hex),
+    network: snapshot.network,
+    captured_at: snapshot.captured_at,
+    remote_timestamp: toDbValue(snapshot.remote_timestamp),
+    source: snapshot.source,
+    source_url: toDbValue(snapshot.source_url),
+    block_number: toDbValue(snapshot.block_number),
+    rank: toDbValue(snapshot.rank),
+    balance_free_text: toDbValue(snapshot.balance_free_text),
+    balance_free_num: toDbValue(snapshot.balance_free_num),
+    balance_staked_text: toDbValue(snapshot.balance_staked_text),
+    balance_staked_num: toDbValue(snapshot.balance_staked_num),
+    balance_staked_alpha_as_tao_text: toDbValue(snapshot.balance_staked_alpha_as_tao_text),
+    balance_staked_alpha_as_tao_num: toDbValue(snapshot.balance_staked_alpha_as_tao_num),
+    balance_staked_root_text: toDbValue(snapshot.balance_staked_root_text),
+    balance_staked_root_num: toDbValue(snapshot.balance_staked_root_num),
+    balance_total_text: toDbValue(snapshot.balance_total_text),
+    balance_total_num: toDbValue(snapshot.balance_total_num),
+    balance_free_24hr_ago_text: toDbValue(snapshot.balance_free_24hr_ago_text),
+    balance_free_24hr_ago_num: toDbValue(snapshot.balance_free_24hr_ago_num),
+    balance_staked_24hr_ago_text: toDbValue(snapshot.balance_staked_24hr_ago_text),
+    balance_staked_24hr_ago_num: toDbValue(snapshot.balance_staked_24hr_ago_num),
+    balance_staked_alpha_as_tao_24hr_ago_text: toDbValue(snapshot.balance_staked_alpha_as_tao_24hr_ago_text),
+    balance_staked_alpha_as_tao_24hr_ago_num: toDbValue(snapshot.balance_staked_alpha_as_tao_24hr_ago_num),
+    balance_staked_root_24hr_ago_text: toDbValue(snapshot.balance_staked_root_24hr_ago_text),
+    balance_staked_root_24hr_ago_num: toDbValue(snapshot.balance_staked_root_24hr_ago_num),
+    balance_total_24hr_ago_text: toDbValue(snapshot.balance_total_24hr_ago_text),
+    balance_total_24hr_ago_num: toDbValue(snapshot.balance_total_24hr_ago_num),
+    balance_free_change_24hr_text: toDbValue(snapshot.balance_free_change_24hr_text),
+    balance_free_change_24hr_num: toDbValue(snapshot.balance_free_change_24hr_num),
+    balance_staked_change_24hr_text: toDbValue(snapshot.balance_staked_change_24hr_text),
+    balance_staked_change_24hr_num: toDbValue(snapshot.balance_staked_change_24hr_num),
+    balance_staked_alpha_as_tao_change_24hr_text: toDbValue(snapshot.balance_staked_alpha_as_tao_change_24hr_text),
+    balance_staked_alpha_as_tao_change_24hr_num: toDbValue(snapshot.balance_staked_alpha_as_tao_change_24hr_num),
+    balance_staked_root_change_24hr_text: toDbValue(snapshot.balance_staked_root_change_24hr_text),
+    balance_staked_root_change_24hr_num: toDbValue(snapshot.balance_staked_root_change_24hr_num),
+    balance_total_change_24hr_text: toDbValue(snapshot.balance_total_change_24hr_text),
+    balance_total_change_24hr_num: toDbValue(snapshot.balance_total_change_24hr_num),
+    created_on_date: toDbValue(snapshot.created_on_date),
+    created_on_network: toDbValue(snapshot.created_on_network),
+    coldkey_swap: toDbValue(snapshot.coldkey_swap),
+    raw_json: snapshot.raw_json,
+  });
+
+  return Number(info.lastInsertRowid);
+}
+
 function insertIngestRun(db, run) {
   const stmt = db.prepare(`
     INSERT INTO ingest_runs (
@@ -684,6 +874,52 @@ function getTaoFlowHistory(db, netuid, sinceIso) {
     ORDER BY captured_at ASC, id ASC
   `);
   return stmt.all(netuid, sinceIso);
+}
+
+function getLatestWalletSnapshot(db, address) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM wallet_snapshots
+    WHERE wallet_address_ss58 = ?
+    ORDER BY captured_at DESC, id DESC
+    LIMIT 1
+  `);
+  return stmt.get(address) || null;
+}
+
+function getWalletHistory(db, address, sinceIso) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM wallet_snapshots
+    WHERE wallet_address_ss58 = ? AND captured_at >= ?
+    ORDER BY captured_at ASC, id ASC
+  `);
+  return stmt.all(address, sinceIso);
+}
+
+function countWalletSnapshots(db, address = null) {
+  const stmt = address
+    ? db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM wallet_snapshots
+      WHERE wallet_address_ss58 = ?
+    `)
+    : db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM wallet_snapshots
+    `);
+  return address ? stmt.get(address).count : stmt.get().count;
+}
+
+function walletSnapshotExists(db, address, blockNumber) {
+  if (blockNumber === null || blockNumber === undefined) return false;
+  const stmt = db.prepare(`
+    SELECT 1
+    FROM wallet_snapshots
+    WHERE wallet_address_ss58 = ? AND block_number = ?
+    LIMIT 1
+  `);
+  return Boolean(stmt.get(address, blockNumber));
 }
 
 function getLatestIngestRun(db, netuid) {
@@ -812,6 +1048,34 @@ function deleteTaoFlowHistoryInRange(db, netuid, startIso, endIso) {
   }
 }
 
+function deleteWalletSnapshotsInRange(db, address, startIso, endIso) {
+  const rows = db.prepare(`
+    SELECT id
+    FROM wallet_snapshots
+    WHERE wallet_address_ss58 = ?
+      AND captured_at >= ?
+      AND captured_at <= ?
+  `).all(address, startIso, endIso);
+
+  if (!rows.length) return 0;
+
+  const ids = rows.map((row) => row.id);
+  const placeholders = ids.map(() => '?').join(', ');
+
+  db.exec('BEGIN');
+  try {
+    const info = db.prepare(`
+      DELETE FROM wallet_snapshots
+      WHERE id IN (${placeholders})
+    `).run(...ids);
+    db.exec('COMMIT');
+    return Number(info.changes || 0);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 function getSetting(db, key) {
   const stmt = db.prepare(`
     SELECT value
@@ -840,6 +1104,7 @@ module.exports = {
   insertSnapshot,
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
+  insertWalletSnapshot,
   insertIngestRun,
   getLatestSnapshot,
   getRecentSnapshots,
@@ -847,13 +1112,18 @@ module.exports = {
   getLatestTaoPrice,
   getTaoPriceHistory,
   getTaoFlowHistory,
+  getLatestWalletSnapshot,
+  getWalletHistory,
   getLatestIngestRun,
   countSnapshots,
+  countWalletSnapshots,
   snapshotExists,
   taoFlowSnapshotExists,
+  walletSnapshotExists,
   deleteSnapshotsInRange,
   deleteTaoPriceHistoryInRange,
   deleteTaoFlowHistoryInRange,
+  deleteWalletSnapshotsInRange,
   getSetting,
   setSetting,
 };

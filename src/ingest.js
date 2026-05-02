@@ -6,17 +6,22 @@ const {
   fetchTaoPriceLatest,
   fetchTaoPriceHistory,
   fetchTaoFlowHistory,
+  fetchAccountLatest,
+  fetchAccountHistory,
 } = require('./taostats');
 const {
   insertSnapshot,
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
+  insertWalletSnapshot,
   insertIngestRun,
   snapshotExists,
   taoFlowSnapshotExists,
+  walletSnapshotExists,
   deleteSnapshotsInRange,
   deleteTaoPriceHistoryInRange,
   deleteTaoFlowHistoryInRange,
+  deleteWalletSnapshotsInRange,
 } = require('./db');
 
 function createIngestService({ db, config }) {
@@ -37,6 +42,9 @@ function createIngestService({ db, config }) {
     let source = 'scrape';
     let fallbackUsed = false;
     let detail = null;
+    let walletInserted = 0;
+    let walletFetched = 0;
+    let walletErrors = [];
 
     try {
       const result = await fetchLatestSnapshot({
@@ -74,6 +82,48 @@ function createIngestService({ db, config }) {
           };
         }
       }
+
+      if (Array.isArray(config.wallets) && config.wallets.length > 0 && config.taostatsAuthHeader) {
+        for (const wallet of config.wallets) {
+          try {
+            const walletSnapshot = await fetchAccountLatest({
+              address: wallet.ss58,
+              network: wallet.network || 'finney',
+              taostatsBaseUrl: config.taostatsBaseUrl,
+              taostatsAuthHeader: config.taostatsAuthHeader,
+              rateLimiter: config.taostatsRateLimiter || null,
+              capturedAt: result.snapshot.captured_at,
+            });
+            walletFetched += 1;
+            if (walletSnapshot) {
+              walletSnapshot.wallet_name = wallet.name;
+              const walletSnapshotId = insertWalletSnapshot(db, walletSnapshot);
+              walletInserted += 1;
+              detail = {
+                ...detail,
+                walletSnapshotId,
+              };
+            }
+          } catch (walletError) {
+            walletErrors.push({
+              name: wallet.name,
+              ss58: wallet.ss58,
+              error: walletError instanceof Error ? walletError.message : String(walletError),
+            });
+          }
+        }
+        detail = {
+          ...detail,
+          walletFetched,
+          walletInserted,
+        };
+        if (walletErrors.length) {
+          detail = {
+            ...detail,
+            walletErrors,
+          };
+        }
+      }
       ok = true;
       message = `Captured ${result.snapshot.name || `SN${netuid}`} from ${source}`;
       return {
@@ -81,6 +131,7 @@ function createIngestService({ db, config }) {
         source,
         fallbackUsed,
         snapshotId,
+        walletInserted,
         detail,
         message,
       };
@@ -92,6 +143,7 @@ function createIngestService({ db, config }) {
         source,
         fallbackUsed,
         snapshotId: null,
+        walletInserted,
         detail,
         error: errorMessage,
         message,
@@ -144,6 +196,10 @@ function createIngestService({ db, config }) {
     let flowInserted = 0;
     let flowDeleted = 0;
     let flowSkipped = 0;
+    let walletHistoryFetched = 0;
+    let walletHistoryInserted = 0;
+    let walletHistoryDeleted = 0;
+    let walletHistorySkipped = 0;
 
     try {
       if (!config.taostatsAuthHeader) {
@@ -240,6 +296,48 @@ function createIngestService({ db, config }) {
         detail.priceError = priceError instanceof Error ? priceError.message : String(priceError);
       }
 
+      if (Array.isArray(config.wallets) && config.wallets.length > 0) {
+        for (const wallet of config.wallets) {
+          try {
+            const walletHistory = await fetchAccountHistory({
+              address: wallet.ss58,
+              network: wallet.network || 'finney',
+              taostatsBaseUrl: config.taostatsBaseUrl,
+              taostatsAuthHeader: config.taostatsAuthHeader,
+              rateLimiter: config.taostatsRateLimiter || null,
+              days,
+            });
+            walletHistoryFetched += walletHistory.length;
+            if (overwrite && walletHistory.length > 0) {
+              const capturedAts = walletHistory
+                .map((row) => row.captured_at)
+                .filter(Boolean)
+                .sort();
+              const walletStartIso = capturedAts[0];
+              const walletEndIso = capturedAts[capturedAts.length - 1];
+              walletHistoryDeleted += deleteWalletSnapshotsInRange(db, wallet.ss58, walletStartIso, walletEndIso);
+              detail.walletStartIso = detail.walletStartIso || walletStartIso;
+              detail.walletEndIso = detail.walletEndIso || walletEndIso;
+            }
+            for (const row of walletHistory) {
+              if (!overwrite && row.block_number !== null && row.block_number !== undefined && walletSnapshotExists(db, wallet.ss58, row.block_number)) {
+                walletHistorySkipped += 1;
+                continue;
+              }
+              row.wallet_name = wallet.name;
+              insertWalletSnapshot(db, row);
+              walletHistoryInserted += 1;
+            }
+          } catch (walletError) {
+            detail.walletError = walletError instanceof Error ? walletError.message : String(walletError);
+          }
+        }
+        detail.walletHistoryFetched = walletHistoryFetched;
+        detail.walletHistoryInserted = walletHistoryInserted;
+        detail.walletHistoryDeleted = walletHistoryDeleted;
+        detail.walletHistorySkipped = walletHistorySkipped;
+      }
+
       ok = true;
       message = `Backfilled ${inserted} historical snapshots`;
       detail.inserted = inserted;
@@ -251,6 +349,10 @@ function createIngestService({ db, config }) {
       detail.flowInserted = flowInserted;
       detail.flowDeleted = flowDeleted;
       detail.flowSkipped = flowSkipped;
+      detail.walletHistoryFetched = walletHistoryFetched;
+      detail.walletHistoryInserted = walletHistoryInserted;
+      detail.walletHistoryDeleted = walletHistoryDeleted;
+      detail.walletHistorySkipped = walletHistorySkipped;
       return {
         ok,
         source,
@@ -263,6 +365,10 @@ function createIngestService({ db, config }) {
         flowInserted,
         flowDeleted,
         flowSkipped,
+        walletHistoryFetched,
+        walletHistoryInserted,
+        walletHistoryDeleted,
+        walletHistorySkipped,
         snapshotId,
         detail,
         message,
@@ -282,6 +388,10 @@ function createIngestService({ db, config }) {
         flowInserted,
         flowDeleted,
         flowSkipped,
+        walletHistoryFetched,
+        walletHistoryInserted,
+        walletHistoryDeleted,
+        walletHistorySkipped,
         snapshotId: null,
         detail,
         error: errorMessage,
