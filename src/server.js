@@ -1700,6 +1700,8 @@ function renderDashboardClientScript({ netuid, config }) {
         if (value === null || value === undefined || value === '') return '—';
         const num = Number(value);
         if (!Number.isFinite(num)) return String(value);
+        if (num === 0) return '$0.00';
+        if (Math.abs(num) < 0.01) return num > 0 ? '<$0.01' : '-$0.01';
         return new Intl.NumberFormat('en-US', {
           style: 'currency',
           currency: 'USD',
@@ -1713,7 +1715,10 @@ function renderDashboardClientScript({ netuid, config }) {
         const num = Number(value);
         if (!Number.isFinite(num)) return String(value);
         const sign = num > 0 ? '+' : num < 0 ? '-' : '';
-        return sign + formatUsd(Math.abs(num), digits);
+        const abs = Math.abs(num);
+        if (abs === 0) return '$0.00';
+        if (abs < 0.01) return sign + '<$0.01';
+        return sign + formatUsd(abs, digits);
       }
 
       function formatBaseMetric(value, format) {
@@ -1767,9 +1772,9 @@ function renderDashboardClientScript({ netuid, config }) {
 
       function resolveUsdPrice(candidate, fallback) {
         const price = Number(candidate);
-        if (Number.isFinite(price)) return price;
+        if (Number.isFinite(price) && price > 0) return price;
         const fallbackPrice = Number(fallback);
-        return Number.isFinite(fallbackPrice) ? fallbackPrice : null;
+        return Number.isFinite(fallbackPrice) && fallbackPrice > 0 ? fallbackPrice : null;
       }
 
       function valueToDisplay(metric, overrideValue) {
