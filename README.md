@@ -65,6 +65,7 @@ Environment variables:
 The app automatically loads a local `.env` file from the project root if present.
 You can keep your Taostats key there for local development.
 You can also keep one or more wallet coldkeys there as indexed entries with matching names, and attach optional hotkeys per wallet for clearer miner/validator context.
+The checked-in `.env.example` is intentionally redacted, so copy it locally and replace the placeholder ss58 values with your own wallet and hotkey addresses.
 
 If the Taostats API requires a prefix like `Bearer`, put the full header value in `TAOSTATS_AUTH_HEADER`.
 When an API key is configured, the app rate-limits Taostats API requests to 5 per minute by default so the free tier is respected.

@@ -9,6 +9,7 @@
     "The dashboard also includes a 'What matters most today' panel that highlights the main correlation points for beginners.",
     "The financial perspective area now also includes a watchlist panel that keeps the core alerts (price vs flow, sentiment watch, supply watch) visible in a stable beginner-friendly format.",
     "The dashboard can now track multiple configured wallet balances from Taostats account latest/history endpoints using coldkeys, optional hotkeys, and wallet names from .env, and the wallet modal now also shows a compact wallet profile with rank, created-on date, hotkey summary, current subnet stake positions, and a collapsible hotkey history section backed by historical stake snapshots with delta color-coding.",
+    "The wallet modal previously regressed because renderWalletDetails referenced a nonexistent walletStakeHistory variable; keep the browser modal using state.modalStakeHistory and guard wallet-specific rendering so a hotkey-history issue cannot blank the main wallet chart.",
     "The TAO price badge opens a historical TAO/USD modal chart.",
     "Historical metric modals support 24H, 7D, 14D, 30D, and 60D windows, include beginner-friendly metric explanations, and can slide by 24 hours with arrow buttons or keyboard shortcuts.",
     "The main dashboard now keeps the Latest JSON, History JSON, Recent snapshots, and Latest ingest run inside a collapsible admin panel.",

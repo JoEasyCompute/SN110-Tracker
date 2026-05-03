@@ -2961,7 +2961,7 @@ function renderPage(model) {
             '  <details class="wallet-history-details">',
             '    <summary>Hotkey history</summary>',
             '    <p class="wallet-history-note">Daily stake snapshots from Taostats, useful for seeing how each hotkey has changed over time.</p>',
-            walletStakeHistory === null
+            state.modalStakeHistory === null
               ? '<p class="wallet-positions-empty">Loading hotkey history…</p>'
               : walletStakeHistoryRows
                 ? [
@@ -4047,13 +4047,16 @@ function renderPage(model) {
         modalElements.subtitle.textContent = 'Loading ' + historyRangeLabel(days) + ' history for ' + metric.label + '...';
         modalElements.samples.textContent = '—';
         modalElements.captured.textContent = '—';
-        const [history, stakeHistory] = await Promise.all([
-          loadModalHistory(metric, days),
-          loadWalletStakeHistory(metric, days),
-        ]);
+        const history = await loadModalHistory(metric, days);
         if (!history) return;
         if (metric.kind === 'wallet') {
-          state.modalStakeHistory = Array.isArray(stakeHistory) ? stakeHistory : [];
+          state.modalStakeHistory = [];
+          void loadWalletStakeHistory(metric, days).then((stakeHistory) => {
+            if (state.modalMetric === metric && state.modalHistoryDays === days) {
+              state.modalStakeHistory = Array.isArray(stakeHistory) ? stakeHistory : [];
+              renderWalletDetails(metric);
+            }
+          });
         } else {
           state.modalStakeHistory = null;
         }
