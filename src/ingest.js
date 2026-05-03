@@ -8,12 +8,15 @@ const {
   fetchTaoFlowHistory,
   fetchAccountLatest,
   fetchAccountHistory,
+  fetchStakeBalanceLatest,
+  fetchHistoricalStakeBalance,
 } = require('./taostats');
 const {
   insertSnapshot,
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
+  insertWalletStakePosition,
   insertIngestRun,
   snapshotExists,
   taoFlowSnapshotExists,
@@ -22,6 +25,7 @@ const {
   deleteTaoPriceHistoryInRange,
   deleteTaoFlowHistoryInRange,
   deleteWalletSnapshotsInRange,
+  deleteWalletStakePositionsInRange,
 } = require('./db');
 
 function createIngestService({ db, config }) {
@@ -45,6 +49,8 @@ function createIngestService({ db, config }) {
     let walletInserted = 0;
     let walletFetched = 0;
     let walletErrors = [];
+    let walletStakeFetched = 0;
+    let walletStakeInserted = 0;
 
     try {
       const result = await fetchLatestSnapshot({
@@ -83,45 +89,69 @@ function createIngestService({ db, config }) {
         }
       }
 
-      if (Array.isArray(config.wallets) && config.wallets.length > 0 && config.taostatsAuthHeader) {
-        for (const wallet of config.wallets) {
-          try {
-            const walletSnapshot = await fetchAccountLatest({
-              address: wallet.ss58,
-              network: wallet.network || 'finney',
-              taostatsBaseUrl: config.taostatsBaseUrl,
-              taostatsAuthHeader: config.taostatsAuthHeader,
-              rateLimiter: config.taostatsRateLimiter || null,
-              capturedAt: result.snapshot.captured_at,
-            });
-            walletFetched += 1;
-            if (walletSnapshot) {
-              walletSnapshot.wallet_name = wallet.name;
-              const walletSnapshotId = insertWalletSnapshot(db, walletSnapshot);
-              walletInserted += 1;
-              detail = {
-                ...detail,
-                walletSnapshotId,
-              };
-            }
-          } catch (walletError) {
-            walletErrors.push({
-              name: wallet.name,
-              ss58: wallet.ss58,
-              error: walletError instanceof Error ? walletError.message : String(walletError),
-            });
-          }
-        }
-        detail = {
-          ...detail,
-          walletFetched,
-          walletInserted,
-        };
-        if (walletErrors.length) {
+      if (Array.isArray(config.wallets) && config.wallets.length > 0) {
+        if (!config.taostatsAuthHeader) {
           detail = {
             ...detail,
-            walletErrors,
+            walletWarning: 'Configured wallets were skipped because Taostats auth header is missing.',
           };
+        } else {
+          for (const wallet of config.wallets) {
+            try {
+              const walletSnapshot = await fetchAccountLatest({
+                address: wallet.ss58,
+                network: wallet.network || 'finney',
+                taostatsBaseUrl: config.taostatsBaseUrl,
+                taostatsAuthHeader: config.taostatsAuthHeader,
+                rateLimiter: config.taostatsRateLimiter || null,
+                capturedAt: result.snapshot.captured_at,
+              });
+              walletFetched += 1;
+              if (walletSnapshot) {
+                walletSnapshot.wallet_name = wallet.name;
+                const walletSnapshotId = insertWalletSnapshot(db, walletSnapshot);
+                walletInserted += 1;
+                detail = {
+                  ...detail,
+                  walletSnapshotId,
+                };
+              }
+
+              const stakePositions = await fetchStakeBalanceLatest({
+                coldkey: wallet.ss58,
+                taostatsBaseUrl: config.taostatsBaseUrl,
+                taostatsAuthHeader: config.taostatsAuthHeader,
+                rateLimiter: config.taostatsRateLimiter || null,
+                capturedAt: result.snapshot.captured_at,
+              });
+              walletStakeFetched += stakePositions.length;
+              for (const stakePosition of stakePositions) {
+                stakePosition.wallet_name = wallet.name;
+                insertWalletStakePosition(db, stakePosition);
+                walletStakeInserted += 1;
+              }
+            } catch (walletError) {
+              walletErrors.push({
+                name: wallet.name,
+                ss58: wallet.ss58,
+                error: walletError instanceof Error ? walletError.message : String(walletError),
+              });
+            }
+          }
+          detail = {
+            ...detail,
+            walletFetched,
+            walletInserted,
+            walletStakeFetched,
+            walletStakeInserted,
+          };
+          if (walletErrors.length) {
+            detail = {
+              ...detail,
+              walletErrors,
+              walletError: walletErrors[0].error,
+            };
+          }
         }
       }
       ok = true;
@@ -200,6 +230,9 @@ function createIngestService({ db, config }) {
     let walletHistoryInserted = 0;
     let walletHistoryDeleted = 0;
     let walletHistorySkipped = 0;
+    let walletStakeHistoryFetched = 0;
+    let walletStakeHistoryInserted = 0;
+    let walletStakeHistoryDeleted = 0;
 
     try {
       if (!config.taostatsAuthHeader) {
@@ -297,6 +330,7 @@ function createIngestService({ db, config }) {
       }
 
       if (Array.isArray(config.wallets) && config.wallets.length > 0) {
+        const walletErrors = [];
         for (const wallet of config.wallets) {
           try {
             const walletHistory = await fetchAccountHistory({
@@ -321,21 +355,65 @@ function createIngestService({ db, config }) {
             }
             for (const row of walletHistory) {
               if (!overwrite && row.block_number !== null && row.block_number !== undefined && walletSnapshotExists(db, wallet.ss58, row.block_number)) {
-                walletHistorySkipped += 1;
-                continue;
+              walletHistorySkipped += 1;
+              continue;
               }
               row.wallet_name = wallet.name;
               insertWalletSnapshot(db, row);
               walletHistoryInserted += 1;
             }
+
+            try {
+              const walletStakeHistory = await fetchHistoricalStakeBalance({
+                coldkey: wallet.ss58,
+                taostatsBaseUrl: config.taostatsBaseUrl,
+                taostatsAuthHeader: config.taostatsAuthHeader,
+                rateLimiter: config.taostatsRateLimiter || null,
+                days,
+              });
+              walletStakeHistoryFetched += walletStakeHistory.length;
+              if (overwrite && walletStakeHistory.length > 0) {
+                const capturedAts = walletStakeHistory
+                  .map((row) => row.captured_at)
+                  .filter(Boolean)
+                  .sort();
+                const walletStakeStartIso = capturedAts[0];
+                const walletStakeEndIso = capturedAts[capturedAts.length - 1];
+                walletStakeHistoryDeleted += deleteWalletStakePositionsInRange(db, wallet.ss58, walletStakeStartIso, walletStakeEndIso);
+                detail.walletStakeStartIso = detail.walletStakeStartIso || walletStakeStartIso;
+                detail.walletStakeEndIso = detail.walletStakeEndIso || walletStakeEndIso;
+              }
+              for (const row of walletStakeHistory) {
+                row.wallet_name = wallet.name;
+                insertWalletStakePosition(db, row);
+                walletStakeHistoryInserted += 1;
+              }
+            } catch (walletStakeError) {
+              walletErrors.push({
+                name: wallet.name,
+                ss58: wallet.ss58,
+                error: walletStakeError instanceof Error ? walletStakeError.message : String(walletStakeError),
+              });
+            }
           } catch (walletError) {
-            detail.walletError = walletError instanceof Error ? walletError.message : String(walletError);
+            walletErrors.push({
+              name: wallet.name,
+              ss58: wallet.ss58,
+              error: walletError instanceof Error ? walletError.message : String(walletError),
+            });
           }
         }
         detail.walletHistoryFetched = walletHistoryFetched;
         detail.walletHistoryInserted = walletHistoryInserted;
         detail.walletHistoryDeleted = walletHistoryDeleted;
         detail.walletHistorySkipped = walletHistorySkipped;
+        detail.walletStakeHistoryFetched = walletStakeHistoryFetched;
+        detail.walletStakeHistoryInserted = walletStakeHistoryInserted;
+        detail.walletStakeHistoryDeleted = walletStakeHistoryDeleted;
+        if (walletErrors.length) {
+          detail.walletErrors = walletErrors;
+          detail.walletError = walletErrors[0].error;
+        }
       }
 
       ok = true;
@@ -353,6 +431,9 @@ function createIngestService({ db, config }) {
       detail.walletHistoryInserted = walletHistoryInserted;
       detail.walletHistoryDeleted = walletHistoryDeleted;
       detail.walletHistorySkipped = walletHistorySkipped;
+      detail.walletStakeHistoryFetched = walletStakeHistoryFetched;
+      detail.walletStakeHistoryInserted = walletStakeHistoryInserted;
+      detail.walletStakeHistoryDeleted = walletStakeHistoryDeleted;
       return {
         ok,
         source,
@@ -369,6 +450,9 @@ function createIngestService({ db, config }) {
         walletHistoryInserted,
         walletHistoryDeleted,
         walletHistorySkipped,
+        walletStakeHistoryFetched,
+        walletStakeHistoryInserted,
+        walletStakeHistoryDeleted,
         snapshotId,
         detail,
         message,
@@ -392,6 +476,9 @@ function createIngestService({ db, config }) {
         walletHistoryInserted,
         walletHistoryDeleted,
         walletHistorySkipped,
+        walletStakeHistoryFetched,
+        walletStakeHistoryInserted,
+        walletStakeHistoryDeleted,
         snapshotId: null,
         detail,
         error: errorMessage,

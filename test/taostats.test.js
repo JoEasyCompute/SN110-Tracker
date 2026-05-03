@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -12,6 +13,7 @@ const {
   normalizeTaoPriceSnapshot,
   normalizeTaoFlowSnapshot,
   normalizeAccountSnapshot,
+  normalizeStakeBalanceSnapshot,
   pickRecord,
   createRateLimiter,
 } = require('../src/taostats');
@@ -21,6 +23,7 @@ const {
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
+  insertWalletStakePosition,
   getLatestSnapshot,
   getRecentSnapshots,
   getHistory,
@@ -28,8 +31,10 @@ const {
   getTaoPriceHistory,
   getTaoFlowHistory,
   getLatestWalletSnapshot,
+  getLatestWalletStakePositions,
   getWalletHistory,
   deleteSnapshotsInRange,
+  deleteWalletStakePositions,
   getSetting,
   setSetting,
 } = require('../src/db');
@@ -287,6 +292,46 @@ test('sqlite persistence stores and retrieves wallet balance history', () => {
   db.close();
 });
 
+test('sqlite persistence stores and retrieves wallet stake positions', () => {
+  const db = openDatabase(':memory:');
+  const stake1 = normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: '5WalletAlpha', hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 110,
+    subnet_rank: 12,
+    subnet_total_holders: 256,
+    balance: '1000000000',
+    balance_as_tao: '2000000000',
+    timestamp: '2026-04-30T00:00:00Z',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: 'Alpha', address: '5WalletAlpha', capturedAt: '2026-04-30T00:00:00.000Z' });
+  const stake2 = normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: '5WalletAlpha', hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyTwo', hex: '0x222' },
+    hotkey_name: 'Miner Two',
+    netuid: 111,
+    subnet_rank: 8,
+    subnet_total_holders: 512,
+    balance: '1500000000',
+    balance_as_tao: '2500000000',
+    timestamp: '2026-04-30T00:00:00Z',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: 'Alpha', address: '5WalletAlpha', capturedAt: '2026-04-30T00:00:00.000Z' });
+  insertWalletStakePosition(db, stake1);
+  insertWalletStakePosition(db, stake2);
+
+  const latest = getLatestWalletStakePositions(db, '5WalletAlpha');
+  assert.equal(latest.length, 2);
+  assert.equal(latest[0].hotkey_name, 'Miner Two');
+  assert.equal(latest[0].balance_as_tao_num, 2.5);
+  assert.equal(latest[1].hotkey_name, 'Miner One');
+  assert.equal(latest[1].balance_as_tao_num, 2);
+
+  deleteWalletStakePositions(db, '5WalletAlpha');
+  assert.equal(getLatestWalletStakePositions(db, '5WalletAlpha').length, 0);
+
+  db.close();
+});
+
 test('sqlite app settings persist key/value pairs', () => {
   const db = openDatabase(':memory:');
   assert.equal(getSetting(db, 'poll_interval_minutes'), null);
@@ -355,6 +400,17 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     created_on_date: '2025-01-01',
     created_on_network: 'finney',
   }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', network: 'finney', capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 8,
+    subnet_total_holders: 256,
+    balance: '1500000000',
+    balance_as_tao: '2500000000',
+    timestamp: '2026-04-30T00:00:00Z',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', capturedAt: '2026-04-30T00:00:00.000Z' }));
   insertTaoPriceSnapshot(db, normalizeTaoPriceSnapshot({
     created_at: '2026-04-30T00:00:00Z',
     last_updated: '2026-04-30T00:00:00Z',
@@ -363,14 +419,28 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     volume_24h: '1000',
     market_cap: '2000',
   }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z' }));
-  const model = buildPageModel({ db, config: { taostatsAuthHeader: '', pollIntervalMinutes: 15, wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney' }] }, netuid: 110 });
+  const model = buildPageModel({ db, config: { taostatsAuthHeader: '', pollIntervalMinutes: 15, wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney' }] }] }, netuid: 110 });
   const html = renderPage(model);
   assert.equal(html.includes('id="history-modal"'), true);
   assert.equal(html.includes('history-modal-info'), true);
   assert.equal(html.includes('history-modal-explanation'), true);
+  assert.equal(html.includes('history-window-prev'), true);
+  assert.equal(html.includes('history-window-next'), true);
+  assert.equal(html.includes('history-window-label'), true);
+  assert.equal(html.includes('14D'), true);
   assert.equal(html.includes('Wallet balances'), true);
   assert.equal(html.includes('Alpha Treasury'), true);
   assert.equal(html.includes('5Walle'), true);
+  assert.equal(html.includes('Hotkey Miner One'), true);
+  assert.equal(html.includes('Current subnet stake'), true);
+  assert.equal(html.includes('Wallet profile'), true);
+  assert.equal(html.includes('Created'), true);
+  assert.equal(html.includes('Rank'), true);
+  assert.equal(html.includes('Configured hotkeys'), true);
+  assert.equal(html.includes('Hotkey history'), true);
+  assert.equal(html.includes('Change'), true);
+  assert.equal(html.includes('Miner One'), true);
+  assert.equal(html.includes('wallet-positions-table'), true);
   assert.equal(html.includes('Financial perspective'), true);
   assert.equal(html.includes('Signal now'), true);
   assert.equal(html.includes('Why this signal?'), true);
@@ -391,6 +461,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="backfill-frequency"'), true);
   assert.equal(html.includes('id="backfill-overwrite"'), true);
   assert.equal(html.includes('id="backfill-btn"'), true);
+  assert.equal(html.includes('history-modal-wallet-details'), true);
   assert.equal(html.includes('data-history-range="1"'), true);
   assert.equal(html.includes('data-history-range="7"'), true);
   assert.equal(html.includes('data-history-range="30"'), true);
@@ -611,6 +682,49 @@ test('wallet history endpoint returns stored wallet history', async () => {
   db.close();
 });
 
+test('wallet stake history endpoint returns stored hotkey history', async () => {
+  const db = openDatabase(':memory:');
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 9,
+    subnet_total_holders: 256,
+    balance: '1500000000',
+    balance_as_tao: '2500000000',
+    timestamp: '2026-04-29T00:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', capturedAt: '2026-04-29T00:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 8,
+    subnet_total_holders: 256,
+    balance: '1700000000',
+    balance_as_tao: '2700000000',
+    timestamp: '2026-04-30T00:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', capturedAt: '2026-04-30T00:00:00.000Z' }));
+
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: { netuid: 110, taostatsAuthHeader: '', pollIntervalMinutes: 60, nextPollAtIso: null },
+  });
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/wallets/5WalletAlpha123456789ABCDEFGH/stake-history?days=30`);
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.days, 30);
+  assert.equal(payload.history.length, 2);
+  assert.equal(payload.history[0].hotkey_name, 'Miner One');
+  assert.equal(payload.history[1].subnet_rank, 8);
+  await app.close();
+  db.close();
+});
+
 test('poll interval selector endpoint updates the interval setting', async () => {
   const db = openDatabase(':memory:');
   let observedMinutes = null;
@@ -690,6 +804,49 @@ test('admin backfill endpoint runs backfill and live ingest', async () => {
   assert.deepEqual(liveArgs, { netuid: 110 });
   assert.equal(payload.backfill.ok, true);
   assert.equal(payload.live.ok, true);
+  await app.close();
+  db.close();
+});
+
+test('admin backfill endpoint surfaces detailed failures', async () => {
+  const db = openDatabase(':memory:');
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      backfillHistoricalSnapshots: async () => ({
+        ok: false,
+        error: 'Taostats account latest returned 401 Unauthorized',
+        detail: {
+          walletErrors: [
+            {
+              name: 'Treasury',
+              ss58: '5WalletAlpha123456789ABCDEFGH',
+              error: '401 Unauthorized',
+            },
+          ],
+        },
+      }),
+      ingestOnce: async () => ({ ok: true, source: 'api' }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      pollIntervalMinutes: 60,
+    },
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/backfill`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ days: 30, frequency: 'by_hour', overwrite: true }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 500);
+  assert.equal(typeof payload.error, 'string');
+  assert.equal(payload.error.includes('401 Unauthorized'), true);
+  assert.equal(payload.error.includes('Treasury'), true);
   await app.close();
   db.close();
 });
@@ -796,13 +953,17 @@ test('loadConfig reads environment values from a local .env file', () => {
     'TAOSTATS_BACKFILL_ON_STARTUP=true',
     'TAOSTATS_BACKFILL_OVERWRITE=true',
     'TAOSTATS_WALLET_1_NAME=Treasury',
+    'TAOSTATS_WALLET_1_COLDKEY=5WalletAlpha123456789ABCDEFGH',
     'TAOSTATS_WALLET_1_SS58=5WalletAlpha123456789ABCDEFGH',
     'TAOSTATS_WALLET_1_NETWORK=finney',
+    'TAOSTATS_WALLET_1_HOTKEY_1_NAME=SN110 Miner',
+    'TAOSTATS_WALLET_1_HOTKEY_1_SS58=5HotkeyAlpha123456789ABCDEFGH',
+    'TAOSTATS_WALLET_1_HOTKEY_1_NETUID=110',
     'TAOSTATS_WALLET_2_NAME=Ops',
-    'TAOSTATS_WALLET_2_SS58=5WalletBeta123456789ABCDEFGH',
+    'TAOSTATS_WALLET_2_COLDKEY=5WalletBeta123456789ABCDEFGH',
   ].join('\n'));
 
-  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_SS58'];
+  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_COLDKEY', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_1_HOTKEY_1_NAME', 'TAOSTATS_WALLET_1_HOTKEY_1_SS58', 'TAOSTATS_WALLET_1_HOTKEY_1_NETUID', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_COLDKEY', 'TAOSTATS_WALLET_2_SS58'];
   const backup = Object.fromEntries(envKeys.map((key) => [key, Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined]));
 
   try {
@@ -824,8 +985,14 @@ test('loadConfig reads environment values from a local .env file', () => {
     assert.equal(config.taostatsBackfillOverwrite, true);
     assert.equal(config.wallets.length, 2);
     assert.equal(config.wallets[0].name, 'Treasury');
+    assert.equal(config.wallets[0].coldkey, '5WalletAlpha123456789ABCDEFGH');
     assert.equal(config.wallets[0].ss58, '5WalletAlpha123456789ABCDEFGH');
+    assert.equal(config.wallets[0].hotkeys.length, 1);
+    assert.equal(config.wallets[0].hotkeys[0].name, 'SN110 Miner');
+    assert.equal(config.wallets[0].hotkeys[0].ss58, '5HotkeyAlpha123456789ABCDEFGH');
+    assert.equal(config.wallets[0].hotkeys[0].netuid, 110);
     assert.equal(config.wallets[1].name, 'Ops');
+    assert.equal(config.wallets[1].coldkey, '5WalletBeta123456789ABCDEFGH');
   } finally {
     process.chdir(cwd);
     for (const [key, value] of Object.entries(backup)) {
@@ -871,5 +1038,55 @@ test('deleteSnapshotsInRange removes overlapping historical rows', () => {
   const deleted = deleteSnapshotsInRange(db, 110, '2026-04-29T12:00:00.000Z', '2026-04-30T12:00:00.000Z');
   assert.equal(deleted, 1);
   assert.equal(getRecentSnapshots(db, 110, 10).length, 1);
+  db.close();
+});
+
+test('openDatabase migrates legacy snapshots tables missing newer columns', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sn110-legacy-db-'));
+  const dbPath = path.join(tempDir, 'legacy.sqlite');
+  const legacyDb = new DatabaseSync(dbPath);
+  legacyDb.exec(`
+    CREATE TABLE snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      netuid INTEGER NOT NULL,
+      captured_at TEXT NOT NULL,
+      source TEXT NOT NULL,
+      raw_json TEXT NOT NULL
+    );
+  `);
+  legacyDb.close();
+
+  const db = openDatabase(dbPath);
+  const columns = db.prepare('PRAGMA table_info(snapshots)').all().map((row) => row.name);
+  assert.equal(columns.includes('total_tao_num'), true);
+  assert.equal(columns.includes('market_cap_change_1_day_text'), true);
+  assert.equal(columns.includes('raw_json'), true);
+
+  const snapshot = normalizeSnapshot({
+    netuid: 110,
+    block_number: 1234,
+    timestamp: '2026-04-30T09:03:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '0.005709859',
+    market_cap: '10094190385726.221994149',
+    liquidity: '7326003373188',
+    total_tao: '3738214651815',
+    root_prop: '0.28069856591017118363',
+    emission: '2854905',
+    projected_emission: '0.00727172634236777466',
+    recycled_24_hours: '500000',
+    neuron_registration_cost: '500000',
+    active_keys: 256,
+    max_neurons: 256,
+    net_flow_1_day: '54106208057',
+    net_flow_7_days: '-324821553991',
+    net_flow_30_days: '567680736182',
+    root_sell: 'YES',
+  }, { source: 'scrape', sourceUrl: 'https://taostats.io/subnets/110', netuid: 110 });
+  snapshot.captured_at = '2026-04-30T09:03:00.000Z';
+  const inserted = insertSnapshot(db, snapshot);
+  assert.equal(Number.isFinite(inserted), true);
+
   db.close();
 });

@@ -10,7 +10,9 @@ const {
   getTaoPriceHistory,
   getTaoFlowHistory,
   getLatestWalletSnapshot,
+  getLatestWalletStakePositions,
   getWalletHistory,
+  getWalletStakePositionsHistory,
   getLatestIngestRun,
   countSnapshots,
   countWalletSnapshots,
@@ -69,6 +71,62 @@ function readJsonBody(req) {
     });
     req.on('error', reject);
   });
+}
+
+function collectResultIssues(result) {
+  if (!result || typeof result !== 'object') return [];
+  const issues = [];
+  const pushIssue = (value, prefix = '') => {
+    if (value === null || value === undefined || value === '') return;
+    const text = String(value).trim();
+    if (!text) return;
+    issues.push(prefix ? `${prefix}${text}` : text);
+  };
+  pushIssue(result.error);
+  const detail = result.detail && typeof result.detail === 'object' ? result.detail : null;
+  if (!detail) return issues;
+  pushIssue(detail.error);
+  pushIssue(detail.walletWarning);
+  pushIssue(detail.taoPriceError, 'TAO price: ');
+  pushIssue(detail.priceError, 'TAO price history: ');
+  pushIssue(detail.flowError, 'TAO flow history: ');
+  pushIssue(detail.walletStakeHistoryError, 'Wallet stake history: ');
+  pushIssue(detail.walletError, 'Wallet: ');
+  if (Array.isArray(detail.walletErrors)) {
+    for (const walletError of detail.walletErrors) {
+      if (!walletError || typeof walletError !== 'object') continue;
+      const name = walletError.name || walletError.ss58 || 'wallet';
+      pushIssue(walletError.error, `${name}: `);
+    }
+  }
+  return issues;
+}
+
+function summarizeBackfillOutcome(backfill, live) {
+  const issues = [...collectResultIssues(backfill), ...collectResultIssues(live)];
+  if (!issues.length) return null;
+  const label = !backfill?.ok ? 'Backfill failed' : !live?.ok ? 'Live refresh failed' : 'Completed with warnings';
+  return `${label}: ${issues.join(' | ')}`;
+}
+
+function summarizeBackfillWarnings(backfill, live) {
+  const warnings = [];
+  const addWarnings = (result) => {
+    if (!result || typeof result !== 'object' || !result.detail || typeof result.detail !== 'object') return;
+    if (result.detail.walletWarning) warnings.push(String(result.detail.walletWarning));
+    if (Array.isArray(result.detail.walletErrors)) {
+      for (const walletError of result.detail.walletErrors) {
+        if (!walletError || typeof walletError !== 'object') continue;
+        const name = walletError.name || walletError.ss58 || 'wallet';
+        if (walletError.error) {
+          warnings.push(`${name}: ${walletError.error}`);
+        }
+      }
+    }
+  };
+  addWarnings(backfill);
+  addWarnings(live);
+  return warnings;
 }
 
 function formatIso(value) {
@@ -980,18 +1038,34 @@ function shortAddress(address) {
 
 function renderWalletSection(walletEntries) {
   if (!Array.isArray(walletEntries) || !walletEntries.length) return '';
-  const cards = walletEntries.map(({ wallet, latest }) => {
+  const cards = walletEntries.map(({ wallet, latest, stakePositions = [], hotkeys = [] }) => {
     const total = latest ? numericMetricValue(latest.balance_total_num) : null;
     const free = latest ? numericMetricValue(latest.balance_free_num) : null;
     const staked = latest ? numericMetricValue(latest.balance_staked_num) : null;
     const root = latest ? numericMetricValue(latest.balance_staked_root_num) : null;
     const alpha = latest ? numericMetricValue(latest.balance_staked_alpha_as_tao_num) : null;
     const change24h = latest ? numericMetricValue(latest.balance_total_change_24hr_num) : null;
+    const positions = Array.isArray(stakePositions) ? stakePositions : [];
+    const configuredHotkeys = Array.isArray(hotkeys) ? hotkeys : [];
+    const hotkeySummary = configuredHotkeys.length
+      ? (configuredHotkeys.length === 1
+        ? `Hotkey ${configuredHotkeys[0].name || shortAddress(configuredHotkeys[0].ss58)}`
+        : `${configuredHotkeys.length} hotkeys configured`)
+      : 'No hotkeys configured';
+    const walletProfile = latest ? {
+      rank: latest.rank ?? null,
+      createdOnDate: latest.created_on_date ?? null,
+      createdOnNetwork: latest.created_on_network ?? wallet.network ?? 'finney',
+      coldkeySwap: latest.coldkey_swap ?? null,
+      rawJson: latest.raw_json ?? null,
+      hotkeyCount: configuredHotkeys.length,
+      hotkeySummary,
+    } : null;
     const metricData = {
       kind: 'wallet',
       key: `wallet:${wallet.ss58}`,
       label: wallet.name,
-      description: `Wallet balance for ${wallet.name}. Taostats account history is available for this ss58 address.`,
+      description: `Wallet balance for ${wallet.name}. Taostats account history shows the balance trend, and the wallet breakdown shows free, staked, root, alpha, and current subnet stake positions.`,
       valueField: 'balance_total_num',
       historyField: 'balance_total_num',
       valueFormat: 'tao',
@@ -1005,10 +1079,35 @@ function renderWalletSection(walletEntries) {
       latestTaoPriceUsd: latest ? (latest.tao_price_usd ?? null) : null,
       rawValue: wallet.ss58,
       sourceText: wallet.ss58,
+      badge: hotkeySummary,
+      walletProfile,
+      walletBreakdown: latest ? {
+        total: latest.balance_total_num ?? null,
+        free: latest.balance_free_num ?? null,
+        staked: latest.balance_staked_num ?? null,
+        root: latest.balance_staked_root_num ?? null,
+        alpha: latest.balance_staked_alpha_as_tao_num ?? null,
+        change24h: latest.balance_total_change_24hr_num ?? null,
+        free24h: latest.balance_free_change_24hr_num ?? null,
+        staked24h: latest.balance_staked_change_24hr_num ?? null,
+        root24h: latest.balance_staked_root_change_24hr_num ?? null,
+        alpha24h: latest.balance_staked_alpha_as_tao_change_24hr_num ?? null,
+      } : null,
+      stakeCount: positions.length,
+      configuredHotkeys,
+      stakePositions: positions.slice(0, 20).map((position) => ({
+        netuid: position.netuid ?? null,
+        hotkey_name: position.hotkey_name ?? null,
+        hotkey_address_ss58: position.hotkey_address_ss58 ?? null,
+        balance_as_tao_num: position.balance_as_tao_num ?? null,
+        balance_num: position.balance_num ?? null,
+        subnet_rank: position.subnet_rank ?? null,
+      })),
     };
     const value = total === null ? '—' : tao(total, 2);
+    const positionsLabel = positions.length ? ` • Stakes ${positions.length} subnet${positions.length === 1 ? '' : 's'}` : '';
     const subtext = latest
-      ? `${shortAddress(wallet.ss58)} • ${wallet.network || 'finney'} • 24h ${change24h === null ? '—' : signedTao(change24h, 2)} • Free ${free === null ? '—' : tao(free, 2)} • Staked ${staked === null ? '—' : tao(staked, 2)}`
+      ? `${shortAddress(wallet.ss58)} • ${wallet.network || 'finney'} • 24h ${change24h === null ? '—' : signedTao(change24h, 2)} • Free ${free === null ? '—' : tao(free, 2)} • Staked ${staked === null ? '—' : tao(staked, 2)}${positionsLabel} • ${Number.isFinite(Number(walletProfile?.rank)) ? ('Rank ' + compact(walletProfile.rank, 0)) : 'Rank —'} • ${walletProfile?.createdOnDate || 'Created date unknown'}`
       : `${shortAddress(wallet.ss58)} • ${wallet.network || 'finney'} • waiting for first wallet snapshot`;
     const extra = latest
       ? `Root ${root === null ? '—' : tao(root, 2)} • Alpha ${alpha === null ? '—' : tao(alpha, 2)}`
@@ -1135,6 +1234,8 @@ function buildPageModel({ db, config, netuid }) {
   const walletEntries = (config.wallets || []).map((wallet) => ({
     wallet,
     latest: getLatestWalletSnapshot(db, wallet.ss58),
+    stakePositions: getLatestWalletStakePositions(db, wallet.ss58),
+    hotkeys: Array.isArray(wallet.hotkeys) ? wallet.hotkeys : [],
   }));
   const comparisons = latestWithPrice ? buildComparisons(history, latestWithPrice) : [];
 
@@ -1179,6 +1280,7 @@ function metricUnitHint(metricData = null) {
 function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = false, metricData = null }) {
   const description = metricData?.description || '';
   const unitHint = metricUnitHint(metricData);
+  const badgeText = String(metricData?.badge || '').trim();
   const metricAttr = metricDataAttribute(metricData);
   const attrs = clickable
     ? `type="button" class="card card-button ${tone}"${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`
@@ -1188,6 +1290,7 @@ function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = 
     <${tag} ${attrs}>
       ${description ? `<span class="card-info-badge" title="${escapeHtml(description)}" aria-label="${escapeHtml(description)}" aria-hidden="true">i</span>` : ''}
       <div class="card-label">${escapeHtml(label)}</div>
+      ${badgeText ? `<div class="card-badge">${escapeHtml(badgeText)}</div>` : ''}
       <div class="card-value">${escapeHtml(value)}</div>
       ${subtext ? `<div class="card-subtext">${escapeHtml(subtext)}</div>` : ''}
     </${tag}>
@@ -1547,6 +1650,27 @@ function renderPage(model) {
         outline-offset: 2px;
       }
       .card-subtext { color: var(--muted); margin-top: 6px; font-size: 12px; word-break: break-word; }
+      .card-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 8px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(0, 219, 188, 0.26);
+        background: rgba(0, 219, 188, 0.08);
+        color: #bffbf1;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        width: fit-content;
+        max-width: 100%;
+      }
+      .card-badge span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       .card-info-badge {
         position: absolute;
         top: 12px;
@@ -1570,7 +1694,7 @@ function renderPage(model) {
       .section h2 { margin: 0 0 12px; font-size: 20px; }
       .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
       .grid.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .grid.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid.stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .chart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
       .panel {
         background: rgba(16, 23, 34, 0.88);
@@ -1657,9 +1781,26 @@ function renderPage(model) {
         font-weight: 700;
         color: var(--text);
         border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+        display: flex;
+        align-items: center;
+        gap: 10px;
       }
       .financial-panel > summary::-webkit-details-marker {
         display: none;
+      }
+      .financial-panel > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .financial-panel[open] > summary::before {
+        transform: rotate(90deg);
       }
       .financial-panel[open] > summary {
         border-bottom-color: rgba(143, 163, 184, 0.18);
@@ -1685,7 +1826,6 @@ function renderPage(model) {
         display: flex;
         gap: 8px;
         flex-wrap: wrap;
-        margin: 10px 0 14px;
       }
       .range-switcher .range-button {
         padding: 8px 12px;
@@ -1698,6 +1838,33 @@ function renderPage(model) {
         background: rgba(0, 219, 188, 0.14);
         border-color: rgba(0, 219, 188, 0.65);
       }
+      .window-shift-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 0 14px;
+      }
+      .window-shift-row .window-button {
+        min-width: 92px;
+        border-radius: 999px;
+        font-size: 12px;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+      }
+      .window-shift-center {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      .window-shift-label {
+        text-align: center;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
       .chart-frame canvas {
         display: block;
         width: 100% !important;
@@ -1708,6 +1875,9 @@ function renderPage(model) {
       th, td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; }
       th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
       .empty { color: var(--muted); padding: 16px; }
+      .empty[data-status=\"warning\"] { color: #f59e0b; }
+      .empty[data-status=\"error\"] { color: #f87171; }
+      .empty[data-status=\"success\"] { color: #34d399; }
       .muted { color: var(--muted); }
       .stack { display: grid; gap: 14px; }
       .footer { margin-top: 18px; color: var(--muted); font-size: 13px; display: flex; gap: 18px; flex-wrap: wrap; }
@@ -1784,6 +1954,230 @@ function renderPage(model) {
       .modal-explanation[hidden] {
         display: none;
       }
+      .modal-wallet-details {
+        margin-top: 12px;
+        padding: 14px;
+        border: 1px solid rgba(143, 163, 184, 0.18);
+        border-radius: 16px;
+        background: rgba(11, 16, 26, 0.55);
+      }
+      .modal-wallet-details[hidden] {
+        display: none;
+      }
+      .wallet-details-title {
+        margin: 0 0 12px;
+        font-size: 15px;
+        letter-spacing: 0.02em;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+      .wallet-breakdown-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 12px;
+      }
+      .wallet-breakdown-card {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(143, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .wallet-breakdown-card .label {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .wallet-breakdown-card .value {
+        margin-top: 6px;
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .wallet-breakdown-card .subtext {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .wallet-positions {
+        margin-top: 16px;
+      }
+      .wallet-profile {
+        margin-top: 16px;
+      }
+      .wallet-hotkeys {
+        margin: 0 0 14px;
+      }
+      .wallet-hotkey-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .wallet-hotkey-pill {
+        display: inline-flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 180px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(143, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .wallet-hotkey-pill strong {
+        font-size: 13px;
+        color: var(--text);
+        font-weight: 700;
+      }
+      .wallet-hotkey-pill small {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.35;
+      }
+      .wallet-positions-scroll {
+        max-height: 320px;
+        overflow: auto;
+        border: 1px solid rgba(143, 163, 184, 0.12);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .wallet-positions-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .wallet-positions-table th,
+      .wallet-positions-table td {
+        padding: 10px 8px;
+        text-align: left;
+        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+      }
+      .wallet-positions-table th {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        position: sticky;
+        top: 0;
+        background: rgba(11, 16, 26, 0.95);
+        backdrop-filter: blur(8px);
+        z-index: 1;
+      }
+      .wallet-positions-table td {
+        font-size: 13px;
+      }
+      .wallet-positions-table tr:last-child td {
+        border-bottom: none;
+      }
+      .wallet-positions-empty {
+        color: var(--muted);
+        padding: 6px 0 0;
+      }
+      .wallet-breakdown-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+      .wallet-breakdown-row .wallet-breakdown-card {
+        min-width: 150px;
+        flex: 1 0 0;
+      }
+      .wallet-positions-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .wallet-current-stake-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+      .wallet-current-stake-card {
+        min-width: 210px;
+        flex: 0 0 auto;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(143, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .wallet-current-stake-card .label {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .wallet-current-stake-card .value {
+        margin-top: 6px;
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .wallet-current-stake-card .subtext {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .wallet-history-details {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid rgba(143, 163, 184, 0.14);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .wallet-history-details > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .wallet-history-details > summary::-webkit-details-marker {
+        display: none;
+      }
+      .wallet-history-details > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .wallet-history-details[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .wallet-history-note {
+        margin: 8px 0 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .wallet-history-scroll {
+        max-height: 280px;
+      }
+      .wallet-history-delta {
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+      .wallet-history-delta.positive {
+        color: #34d399;
+      }
+      .wallet-history-delta.negative {
+        color: #f87171;
+      }
+      .wallet-history-delta.neutral {
+        color: var(--muted);
+      }
       .modal-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1807,9 +2201,26 @@ function renderPage(model) {
         font-weight: 700;
         color: var(--text);
         border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+        display: flex;
+        align-items: center;
+        gap: 10px;
       }
       .admin-panel > summary::-webkit-details-marker {
         display: none;
+      }
+      .admin-panel > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .admin-panel[open] > summary::before {
+        transform: rotate(90deg);
       }
       .admin-panel[open] > summary {
         border-bottom-color: rgba(143, 163, 184, 0.18);
@@ -1897,9 +2308,9 @@ function renderPage(model) {
 
       ${latestCard}
 
-      ${renderFinancialPerspectiveSection(signal, insight)}
-
       ${renderWalletSection(walletEntries)}
+
+      ${renderFinancialPerspectiveSection(signal, insight)}
 
       <section class="section">
         <h2>Key metrics</h2>
@@ -1958,11 +2369,20 @@ function renderPage(model) {
           <button class="button" type="button" id="history-modal-close">Close</button>
         </div>
         <div class="modal-explanation" id="history-modal-explanation" hidden></div>
-        <div class="range-switcher" role="tablist" aria-label="Historical range">
-          <button class="button range-button" type="button" data-history-range="1" aria-pressed="false">24H</button>
-          <button class="button range-button" type="button" data-history-range="7" aria-pressed="false">7D</button>
-          <button class="button range-button active" type="button" data-history-range="30" aria-pressed="true">30D</button>
-          <button class="button range-button" type="button" data-history-range="60" aria-pressed="false">60D</button>
+        <div class="modal-wallet-details" id="history-modal-wallet-details" hidden></div>
+        <div class="window-shift-row">
+          <button class="button window-button" type="button" id="history-window-prev" aria-label="Show an earlier 24 hour window">← 24H</button>
+          <div class="window-shift-center">
+            <div class="range-switcher" role="tablist" aria-label="Historical range">
+              <button class="button range-button" type="button" data-history-range="1" aria-pressed="false">24H</button>
+              <button class="button range-button" type="button" data-history-range="7" aria-pressed="false">7D</button>
+              <button class="button range-button" type="button" data-history-range="14" aria-pressed="false">14D</button>
+              <button class="button range-button active" type="button" data-history-range="30" aria-pressed="true">30D</button>
+              <button class="button range-button" type="button" data-history-range="60" aria-pressed="false">60D</button>
+            </div>
+            <div class="window-shift-label" id="history-window-label">Use ← / → to move the visible window by 24 hours.</div>
+          </div>
+          <button class="button window-button" type="button" id="history-window-next" aria-label="Show a later 24 hour window">24H →</button>
         </div>
         <div class="modal-grid">
           <section class="card">
@@ -2001,6 +2421,7 @@ function renderPage(model) {
         pollIntervalMinutes: ${JSON.stringify(config.pollIntervalMinutes)},
         history: null,
         flowHistory: null,
+        walletStakeHistory: null,
         loading: null,
         historyCache: new Map(),
         historyLoading: new Map(),
@@ -2008,13 +2429,61 @@ function renderPage(model) {
         modalChart: null,
         modalMetric: null,
         modalHistory: null,
+        modalStakeHistory: null,
         modalHistoryDays: 30,
         modalHistoryRequestId: 0,
+        modalHistoryWindowEndMs: null,
+        modalHistoryAutoFollow: true,
         explanationOpen: true,
       };
 
       if (!Number.isFinite(state.latestTaoPriceUsd)) {
         state.latestTaoPriceUsd = null;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      function shortAddress(address) {
+        const text = String(address || '').trim();
+        if (text.length <= 14) return text || '—';
+        return text.slice(0, 6) + '…' + text.slice(-6);
+      }
+
+      function resolveColdkeySwapSummary(rawJson, fallback = null) {
+        if (rawJson) {
+          try {
+            const payload = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+            const swap = payload?.coldkey_swap;
+            if (swap && typeof swap === 'object') {
+              const oldKey = swap.old_coldkey?.ss58 || swap.old_coldkey?.hex || null;
+              const newKey = swap.new_coldkey?.ss58 || swap.new_coldkey?.hex || null;
+              if (oldKey && newKey) {
+                return 'Swapped from ' + shortAddress(oldKey) + ' to ' + shortAddress(newKey);
+              }
+              return 'Coldkey swap recorded';
+            }
+            if (swap) {
+              return String(swap);
+            }
+          } catch {
+            // ignore parse errors and fall through
+          }
+        }
+        if (fallback === null || fallback === undefined || fallback === '') {
+          return '—';
+        }
+        const text = String(fallback);
+        if (text === '[object Object]') {
+          return 'Coldkey swap recorded';
+        }
+        return text;
       }
 
       const modalElements = {
@@ -2029,10 +2498,14 @@ function renderPage(model) {
         chartTitle: document.getElementById('history-modal-chart-title'),
         info: document.getElementById('history-modal-info'),
         explanation: document.getElementById('history-modal-explanation'),
+        walletDetails: document.getElementById('history-modal-wallet-details'),
         canvas: document.getElementById('history-modal-canvas'),
         empty: document.getElementById('history-modal-empty'),
         note: document.getElementById('history-modal-note'),
         close: document.getElementById('history-modal-close'),
+        windowPrev: document.getElementById('history-window-prev'),
+        windowNext: document.getElementById('history-window-next'),
+        windowLabel: document.getElementById('history-window-label'),
       };
 
       const rangeButtons = Array.from(document.querySelectorAll('[data-history-range]'));
@@ -2267,6 +2740,254 @@ function renderPage(model) {
         return displayMetricText(metric);
       }
 
+      function formatWalletAmount(value, digits = 2, priceUsd = null) {
+        if (value === null || value === undefined || value === '') return '—';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return '—';
+        if (state.displayCurrency === 'usd') {
+          const resolved = resolveUsdPrice(priceUsd, state.latestTaoPriceUsd);
+          if (!Number.isFinite(resolved)) return '—';
+          return formatUsd(num * resolved, digits);
+        }
+        return formatTao(num, digits);
+      }
+
+      function formatWalletSignedAmount(value, digits = 2, priceUsd = null) {
+        if (value === null || value === undefined || value === '') return '—';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return '—';
+        if (state.displayCurrency === 'usd') {
+          const resolved = resolveUsdPrice(priceUsd, state.latestTaoPriceUsd);
+          if (!Number.isFinite(resolved)) return '—';
+          return formatSignedUsd(num * resolved, digits);
+        }
+        return formatSignedTao(num, digits);
+      }
+
+      function renderWalletDetails(metric) {
+        if (!modalElements.walletDetails) return;
+        if (!metric || metric.kind !== 'wallet') {
+          modalElements.walletDetails.hidden = true;
+          modalElements.walletDetails.innerHTML = '';
+          return;
+        }
+
+        const breakdown = metric.walletBreakdown || {};
+        const toNumeric = (value) => {
+          if (value === null || value === undefined || value === '') return null;
+          const num = Number(value);
+          return Number.isFinite(num) ? num : null;
+        };
+        const total = toNumeric(breakdown.total);
+        const free = toNumeric(breakdown.free);
+        const staked = toNumeric(breakdown.staked);
+        const root = toNumeric(breakdown.root);
+        const alpha = toNumeric(breakdown.alpha);
+        const change24h = toNumeric(breakdown.change24h);
+        const priceUsd = resolveUsdPrice(metric.latestTaoPriceUsd, state.latestTaoPriceUsd);
+        const percent = (part, whole) => (Number.isFinite(part) && Number.isFinite(whole) && whole > 0 ? (part / whole) * 100 : null);
+        const rootPct = percent(root, staked);
+        const alphaPct = percent(alpha, staked);
+        const freePct = percent(free, total);
+        const stakedPct = percent(staked, total);
+        const stakeCount = Number(metric.stakeCount || 0);
+        const stakeSummary = Number.isFinite(stakeCount) && stakeCount > 0
+          ? stakeCount + ' current subnet stake position' + (stakeCount === 1 ? '' : 's')
+          : 'No current subnet stake positions were returned for this wallet.';
+        const stakePositions = Array.isArray(metric.stakePositions) ? metric.stakePositions.slice(0, 20) : [];
+        const configuredHotkeys = Array.isArray(metric.configuredHotkeys) ? metric.configuredHotkeys.slice(0, 20) : [];
+        const configuredHotkeyMap = new Map(configuredHotkeys
+          .filter((hotkey) => hotkey && hotkey.ss58)
+          .map((hotkey) => [String(hotkey.ss58), hotkey]));
+        const configuredHotkeyRows = configuredHotkeys.length
+          ? configuredHotkeys.map((hotkey) => {
+              const label = hotkey.name || shortAddress(hotkey.ss58 || '—');
+              const hotkeyNetuid = hotkey.netuid !== null && hotkey.netuid !== undefined ? 'Netuid ' + hotkey.netuid : null;
+              const hotkeyNetwork = hotkey.network ? String(hotkey.network) : null;
+              return [
+                '<span class="wallet-hotkey-pill">',
+                '<strong>' + escapeHtml(label) + '</strong>',
+                '<small>' + escapeHtml([shortAddress(hotkey.ss58 || '—'), hotkeyNetuid, hotkeyNetwork].filter(Boolean).join(' • ')) + '</small>',
+                '</span>',
+              ].join('');
+            }).join('')
+          : '';
+        const walletProfile = metric.walletProfile || {};
+        const walletProfileCards = [
+          {
+            label: 'Rank',
+            value: Number.isFinite(Number(walletProfile.rank)) ? formatInteger(walletProfile.rank) : '—',
+            subtext: 'Current Taostats rank',
+          },
+          {
+            label: 'Created',
+            value: walletProfile.createdOnDate || '—',
+            subtext: walletProfile.createdOnNetwork ? 'Created on ' + walletProfile.createdOnNetwork : 'Wallet creation date',
+          },
+          {
+            label: 'Hotkeys',
+            value: Number.isFinite(Number(walletProfile.hotkeyCount)) ? formatInteger(walletProfile.hotkeyCount) : '—',
+            subtext: walletProfile.hotkeySummary || 'Configured hotkeys',
+          },
+          {
+            label: 'Coldkey swap',
+            value: resolveColdkeySwapSummary(walletProfile.rawJson, walletProfile.coldkeySwap),
+            subtext: 'Coldkey swap status from Taostats',
+          },
+        ];
+        const walletProfileRows = walletProfileCards.map((item) => [
+          '<div class="wallet-breakdown-card">',
+          '  <div class="label">' + escapeHtml(item.label) + '</div>',
+          '  <div class="value">' + escapeHtml(item.value) + '</div>',
+          '  <div class="subtext">' + escapeHtml(item.subtext) + '</div>',
+          '</div>',
+        ].join('')).join('');
+        const stakeCards = stakePositions.map((position) => {
+          const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
+          const hotkeyLabel = position.hotkey_name
+            || (position.hotkey_address_ss58 && configuredHotkeyMap.has(String(position.hotkey_address_ss58))
+              ? (configuredHotkeyMap.get(String(position.hotkey_address_ss58)).name || shortAddress(position.hotkey_address_ss58))
+              : shortAddress(position.hotkey_address_ss58 || '—'));
+          return [
+            '<div class="wallet-current-stake-card">',
+            '  <div class="label">Netuid ' + escapeHtml(position.netuid ?? '—') + '</div>',
+            '  <div class="value">' + escapeHtml(formatWalletAmount(balance, 2, priceUsd)) + '</div>',
+            '  <div class="subtext">' + escapeHtml(hotkeyLabel) + ' • Rank ' + escapeHtml(position.subnet_rank ?? '—') + '</div>',
+            '</div>',
+          ].join('');
+        }).join('');
+        const walletStakeHistoryRows = Array.isArray(state.modalStakeHistory) && state.modalStakeHistory.length
+          ? (() => {
+              const chronological = [...state.modalStakeHistory]
+                .sort((a, b) => new Date(a.captured_at).getTime() - new Date(b.captured_at).getTime())
+                .slice(0, 200);
+              const previousByKey = new Map();
+              const rows = [];
+              for (const position of chronological) {
+                const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
+                const hotkeyKey = String(position.hotkey_address_ss58 || position.hotkey_name || position.netuid || 'unknown');
+                const priorBalance = previousByKey.has(hotkeyKey) ? previousByKey.get(hotkeyKey) : null;
+                const delta = Number.isFinite(Number(balance)) && Number.isFinite(Number(priorBalance))
+                  ? Number(balance) - Number(priorBalance)
+                  : null;
+                previousByKey.set(hotkeyKey, balance);
+                const hotkeyLabel = position.hotkey_name
+                  || (position.hotkey_address_ss58 && configuredHotkeyMap.has(String(position.hotkey_address_ss58))
+                    ? (configuredHotkeyMap.get(String(position.hotkey_address_ss58)).name || shortAddress(position.hotkey_address_ss58))
+                    : shortAddress(position.hotkey_address_ss58 || '—'));
+                const snapshotLabel = position.captured_at
+                  ? new Date(position.captured_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+                  : '—';
+                const deltaClass = delta === null ? 'neutral' : (delta > 0 ? 'positive' : (delta < 0 ? 'negative' : 'neutral'));
+                rows.push([
+                  '<tr>',
+                  '<td>' + escapeHtml(snapshotLabel) + '</td>',
+                  '<td>' + escapeHtml(hotkeyLabel) + '</td>',
+                  '<td>' + escapeHtml(position.netuid ?? '—') + '</td>',
+                  '<td>' + escapeHtml(formatWalletAmount(balance, 2, priceUsd)) + '</td>',
+                  '<td>' + escapeHtml(position.subnet_rank ?? '—') + '</td>',
+                  '<td><span class="wallet-history-delta ' + deltaClass + '">' + escapeHtml(delta === null ? '—' : formatWalletSignedAmount(delta, 2, priceUsd)) + '</span></td>',
+                  '</tr>',
+                ].join(''));
+              }
+              return rows.reverse().join('');
+            })()
+          : '';
+
+        modalElements.walletDetails.hidden = false;
+        const freeText = freePct === null ? 'Available balance' : freePct.toFixed(1) + '% of total';
+        const stakedText = stakedPct === null ? 'Locked in stake' : stakedPct.toFixed(1) + '% of total';
+        const rootText = rootPct === null ? 'Stake at root' : rootPct.toFixed(1) + '% of staked';
+        const alphaText = alphaPct === null ? 'Subnet stake' : alphaPct.toFixed(1) + '% of staked';
+        modalElements.walletDetails.innerHTML = [
+          '<h4 class="wallet-details-title">Wallet breakdown</h4>',
+          '<div class="wallet-breakdown-row">',
+          '  <div class="wallet-breakdown-card">',
+          '    <div class="label">Total</div>',
+          '    <div class="value">' + escapeHtml(formatWalletAmount(total, 2, priceUsd)) + '</div>',
+          '    <div class="subtext">Overall wallet balance</div>',
+          '  </div>',
+          '  <div class="wallet-breakdown-card">',
+          '    <div class="label">Free</div>',
+          '    <div class="value">' + escapeHtml(formatWalletAmount(free, 2, priceUsd)) + '</div>',
+          '    <div class="subtext">' + escapeHtml(freeText) + '</div>',
+          '  </div>',
+          '  <div class="wallet-breakdown-card">',
+          '    <div class="label">Staked</div>',
+          '    <div class="value">' + escapeHtml(formatWalletAmount(staked, 2, priceUsd)) + '</div>',
+          '    <div class="subtext">' + escapeHtml(stakedText) + '</div>',
+          '  </div>',
+          '  <div class="wallet-breakdown-card">',
+          '    <div class="label">Root</div>',
+          '    <div class="value">' + escapeHtml(formatWalletAmount(root, 2, priceUsd)) + '</div>',
+          '    <div class="subtext">' + escapeHtml(rootText) + '</div>',
+          '  </div>',
+          '  <div class="wallet-breakdown-card">',
+          '    <div class="label">Alpha</div>',
+          '    <div class="value">' + escapeHtml(formatWalletAmount(alpha, 2, priceUsd)) + '</div>',
+          '    <div class="subtext">' + escapeHtml(alphaText) + '</div>',
+          '  </div>',
+          '  <div class="wallet-breakdown-card">',
+          '    <div class="label">24h Change</div>',
+          '    <div class="value">' + escapeHtml(formatWalletSignedAmount(change24h, 2, priceUsd)) + '</div>',
+          '    <div class="subtext">Compared with the previous day</div>',
+          '  </div>',
+          '</div>',
+          '<div class="wallet-profile">',
+          '  <h4 class="wallet-details-title">Wallet profile</h4>',
+          '  <div class="wallet-breakdown-grid">' + walletProfileRows + '</div>',
+          '</div>',
+          '<div class="wallet-positions">',
+          '  <div class="wallet-positions-head">',
+          '    <h4 class="wallet-details-title">Current subnet stake</h4>',
+          '    <p class="wallet-history-note">' + escapeHtml(stakeSummary) + '</p>',
+          '  </div>',
+          configuredHotkeyRows
+            ? [
+                '  <div class="wallet-hotkeys">',
+                '    <h4 class="wallet-details-title">Configured hotkeys</h4>',
+                '    <div class="wallet-hotkey-list">' + configuredHotkeyRows + '</div>',
+                '  </div>',
+              ].join('')
+            : '',
+          stakeCards
+            ? [
+                '  <div class="wallet-current-stake-row">',
+                '    ' + stakeCards,
+                '  </div>',
+              ].join('')
+            : '<p class="wallet-positions-empty">No current subnet stake positions were returned for this wallet.</p>',
+          [
+            '  <details class="wallet-history-details">',
+            '    <summary>Hotkey history</summary>',
+            '    <p class="wallet-history-note">Daily stake snapshots from Taostats, useful for seeing how each hotkey has changed over time.</p>',
+            walletStakeHistory === null
+              ? '<p class="wallet-positions-empty">Loading hotkey history…</p>'
+              : walletStakeHistoryRows
+                ? [
+                    '    <div class="wallet-positions-scroll wallet-history-scroll">',
+                    '      <table class="wallet-positions-table">',
+                    '        <thead>',
+                    '          <tr>',
+                    '            <th>Snapshot time</th>',
+                    '            <th>Hotkey</th>',
+                    '            <th>Netuid</th>',
+                    '            <th>Stake</th>',
+                    '            <th>Rank</th>',
+                    '            <th>Change</th>',
+                    '          </tr>',
+                    '        </thead>',
+                    '        <tbody>' + walletStakeHistoryRows + '</tbody>',
+                    '      </table>',
+                    '    </div>',
+                  ].join('')
+                : '<p class="wallet-positions-empty">No historical hotkey stake snapshots are stored yet.</p>',
+            '  </details>',
+          ].join(''),
+          '</div>',
+        ].join('');
+      }
+
       function refreshMetricElements() {
         document.querySelectorAll('[data-metric]').forEach((element) => {
           let metric = null;
@@ -2395,13 +3116,18 @@ function renderPage(model) {
           });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
-            throw new Error(payload.error || 'Backfill failed');
+            throw new Error(payload.error || payload.message || 'Backfill failed');
           }
           const snapshotCount = Number(payload.backfill?.inserted ?? 0);
           const flowCount = Number(payload.backfill?.flowInserted ?? 0);
           const priceCount = Number(payload.backfill?.priceInserted ?? 0);
-          updateBackfillStatus('Backfill complete: ' + snapshotCount + ' snapshot rows, ' + flowCount + ' flow rows, and ' + priceCount + ' TAO price rows imported.', 'success');
-          window.location.reload();
+          const warningList = Array.isArray(payload.warnings) ? payload.warnings.filter(Boolean) : [];
+          if (warningList.length) {
+            updateBackfillStatus('Backfill complete with warnings: ' + warningList.join(' | '), 'warning');
+          } else {
+            updateBackfillStatus('Backfill complete: ' + snapshotCount + ' snapshot rows, ' + flowCount + ' flow rows, and ' + priceCount + ' TAO price rows imported.', 'success');
+          }
+          window.setTimeout(() => window.location.reload(), 1200);
         } catch (error) {
           updateBackfillStatus(error?.message || 'Backfill failed', 'error');
           console.error(error);
@@ -2506,6 +3232,7 @@ function renderPage(model) {
           state.modalChart = null;
         }
         state.modalMetric = null;
+        state.modalStakeHistory = null;
       }
 
       function loadHistory(days = 30, source = 'subnet', id = '') {
@@ -2518,6 +3245,8 @@ function renderPage(model) {
             ? '/api/tao-price/history?days=' + encodeURIComponent(days)
             : source === 'wallet'
               ? '/api/wallets/' + encodeURIComponent(id) + '/history?days=' + encodeURIComponent(days)
+            : source === 'wallet-stake'
+              ? '/api/wallets/' + encodeURIComponent(id) + '/stake-history?days=' + encodeURIComponent(days)
             : source === 'tao-flow'
               ? '/api/subnets/' + netuid + '/flow-history?days=' + encodeURIComponent(days)
               : '/api/subnets/' + netuid + '/history?days=' + encodeURIComponent(days);
@@ -2689,6 +3418,11 @@ function renderPage(model) {
         return Math.max(days, days + Math.ceil(lookbackMs / 86400000));
       }
 
+      function modalHistoryFetchDays(metric, days) {
+        const baseDays = isPriceMoveMetric(metric) ? priceMoveFetchDays(metric, days) : days;
+        return Math.max(baseDays, baseDays + 30);
+      }
+
       function taoFlowLookbackMs(metric) {
         const key = String(metric?.key || metric?.historyField || metric?.field || '');
         if (key.includes('_1_day')) return 24 * 60 * 60 * 1000;
@@ -2805,8 +3539,11 @@ function renderPage(model) {
           if (!visiblePoints.length) {
             return 'Wallet balances come from Taostats account history for the configured ss58 address. Backfill or a few live samples will make the chart fuller.';
           }
+          if (rangeDays === 1 && visiblePoints.length < 3) {
+            return 'Wallet balances are sampled over time, so the 24H view may only show a small number of points. 7D usually gives a clearer trend.';
+          }
           if (visiblePoints.length < Math.max(5, Math.min(rangeDays, 10))) {
-            return 'Wallet balance history is daily on Taostats, so short ranges may only show a few points until enough days have been stored locally.';
+            return 'Wallet balance history can be sparse in short ranges until enough local samples have been stored.';
           }
         }
         if (isTaoFlowMetric(metric)) {
@@ -2901,6 +3638,7 @@ function renderPage(model) {
       function historyRangeLabel(days) {
         if (days === 1) return '24H';
         if (days === 7) return '7D';
+        if (days === 14) return '14D';
         if (days === 30) return '30D';
         if (days === 60) return '60D';
         return days + 'D';
@@ -2909,9 +3647,132 @@ function renderPage(model) {
       function historyRangeSubtitle(days) {
         if (days === 1) return 'Stored historical points in the last 24 hours';
         if (days === 7) return 'Stored historical points in the last 7 days';
+        if (days === 14) return 'Stored historical points in the last 14 days';
         if (days === 30) return 'Stored historical points in the last 30 days';
         if (days === 60) return 'Stored historical points in the last 60 days';
         return 'Stored historical points in the last ' + days + ' days';
+      }
+
+      function modalWindowDurationMs() {
+        return Math.max(1, Number(state.modalHistoryDays || 30)) * 86400000;
+      }
+
+      function getModalWindowBounds(metric, history) {
+        const sourceHistory = Array.isArray(history) ? history : [];
+        const points = historySeriesForMetric(metric, sourceHistory);
+        const times = points.map((point) => point.x).filter(Number.isFinite);
+        if (!times.length) return null;
+        const earliest = Math.min(...times);
+        const latest = Math.max(...times);
+        const durationMs = modalWindowDurationMs();
+        if ((latest - earliest) <= durationMs) {
+          return {
+            start: earliest,
+            end: latest,
+            earliest,
+            latest,
+            durationMs,
+            canShiftLeft: false,
+            canShiftRight: false,
+          };
+        }
+        const minEnd = earliest + durationMs;
+        const maxEnd = latest;
+        const preferredEnd = state.modalHistoryAutoFollow || !Number.isFinite(state.modalHistoryWindowEndMs)
+          ? latest
+          : state.modalHistoryWindowEndMs;
+        const end = Math.min(maxEnd, Math.max(minEnd, preferredEnd));
+        const start = end - durationMs;
+        return {
+          start,
+          end,
+          earliest,
+          latest,
+          durationMs,
+          canShiftLeft: start > earliest,
+          canShiftRight: end < latest,
+        };
+      }
+
+      function formatWindowBoundsLabel(bounds, days) {
+        if (!bounds) return 'No historical window available';
+        return formatChartDate(bounds.start, days) + ' → ' + formatChartDate(bounds.end, days);
+      }
+
+      function updateWindowShiftControls(bounds, days) {
+        if (modalElements.windowLabel) {
+          modalElements.windowLabel.textContent = bounds
+            ? formatWindowBoundsLabel(bounds, days)
+            : 'No historical window available';
+        }
+        if (modalElements.windowPrev) {
+          modalElements.windowPrev.disabled = !bounds || !bounds.canShiftLeft;
+        }
+        if (modalElements.windowNext) {
+          modalElements.windowNext.disabled = !bounds || !bounds.canShiftRight;
+        }
+      }
+
+      function shiftModalHistoryWindow(direction) {
+        if (!state.modalMetric || !state.modalHistory) return;
+        const bounds = getModalWindowBounds(state.modalMetric, state.modalHistory);
+        if (!bounds) return;
+        const nextEnd = Number.isFinite(state.modalHistoryWindowEndMs)
+          ? state.modalHistoryWindowEndMs + (direction * 86400000)
+          : bounds.end + (direction * 86400000);
+        const clampedEnd = Math.min(bounds.latest, Math.max(bounds.earliest + bounds.durationMs, nextEnd));
+        if (Number.isFinite(bounds.durationMs) && bounds.durationMs >= (bounds.latest - bounds.earliest)) {
+          return;
+        }
+        if (!Number.isFinite(clampedEnd)) return;
+        state.modalHistoryAutoFollow = false;
+        state.modalHistoryWindowEndMs = clampedEnd;
+        renderHistoryChart(state.modalMetric, state.modalHistory);
+      }
+
+      function buildWindowedHistoryPoints(metric, history, bounds) {
+        const points = historySeriesForMetric(metric, history)
+          .sort((a, b) => a.x - b.x);
+        if (!points.length) return [];
+        const start = bounds ? bounds.start : null;
+        const end = bounds ? bounds.end : null;
+        let visiblePoints = points.filter((point) => Number.isFinite(start) && Number.isFinite(end) && point.x >= start && point.x <= end);
+        if (metric?.kind === 'wallet' && state.modalHistoryDays === 1 && visiblePoints.length < 2) {
+          const latest = visiblePoints.length ? visiblePoints[visiblePoints.length - 1] : points[points.length - 1];
+          if (latest) {
+            const prior = [...points].reverse().find((point) => point.x < latest.x);
+            if (prior) {
+              visiblePoints = [prior, latest];
+            } else if (visiblePoints.length) {
+              visiblePoints = [latest];
+            }
+          }
+        }
+        return visiblePoints;
+      }
+
+      function padWalletChartContext(metric, history, bounds, points) {
+        if (!metric || metric.kind !== 'wallet' || !bounds || !Array.isArray(points) || !points.length) {
+          return points;
+        }
+        const allPoints = historySeriesForMetric(metric, history)
+          .sort((a, b) => a.x - b.x);
+        if (!allPoints.length) return points;
+
+        const padded = [...points];
+        const firstPoint = padded[0];
+        const lastPoint = padded[padded.length - 1];
+        const prior = [...allPoints].reverse().find((point) => point.x < bounds.start);
+        const next = allPoints.find((point) => point.x > bounds.end);
+
+        if (prior && (!firstPoint || prior.x !== firstPoint.x)) {
+          padded.unshift(prior);
+        }
+        if (next && (!lastPoint || next.x !== lastPoint.x)) {
+          padded.push(next);
+        }
+
+        return padded;
       }
 
       function updateHistoryRangeButtons() {
@@ -2935,12 +3796,34 @@ function renderPage(model) {
           : isTaoFlowMetric(metric)
             ? 'tao-flow'
             : 'subnet');
-        const fetchDays = isPriceMoveMetric(metric) ? priceMoveFetchDays(metric, days) : days;
-        const history = await loadHistory(fetchDays, historySource, metric.historyId || metric.walletAddress || '');
+        const fetchDays = modalHistoryFetchDays(metric, days);
+        let history = [];
+        try {
+          history = await loadHistory(fetchDays, historySource, metric.historyId || metric.walletAddress || '');
+        } catch (error) {
+          console.warn('Unable to load history for', metric.label, error);
+          history = [];
+        }
         if (requestId !== state.modalHistoryRequestId) return null;
         if (state.modalMetric !== metric || state.modalHistoryDays !== days) return null;
         state.modalHistory = history;
         return history;
+      }
+
+      async function loadWalletStakeHistory(metric, days) {
+        if (!metric || metric.kind !== 'wallet') return [];
+        const requestId = state.modalHistoryRequestId;
+        const address = metric.historyId || metric.walletAddress || metric.rawValue || metric.sourceText || '';
+        if (!address) return [];
+        const fetchDays = Math.max(1, Number(days || 30));
+        try {
+          const history = await loadHistory(fetchDays, 'wallet-stake', address);
+          if (requestId !== state.modalHistoryRequestId) return [];
+          return history;
+        } catch (error) {
+          console.warn('Unable to load wallet stake history for', metric.label, error);
+          return [];
+        }
       }
 
       function renderLineChart(canvasId, config, history) {
@@ -3032,14 +3915,21 @@ function renderPage(model) {
         if (!canvas || !window.Chart || !sourceHistory || !metric) return;
 
         const days = state.modalHistoryDays || chartRangeDays(sourceHistory, 30);
-        const rangeEnd = Date.now();
-        const rangeStart = rangeEnd - Math.max(1, days) * 86400000;
+        const bounds = getModalWindowBounds(metric, sourceHistory);
+        const rangeStart = bounds ? bounds.start : null;
+        const rangeEnd = bounds ? bounds.end : null;
         const formatKey = metric.currencyMode === 'tao' && state.displayCurrency === 'usd'
           ? (metric.valueFormat === 'signedTao' ? 'signedUsd' : 'usd')
           : (metric.valueFormat || 'text');
-        const points = historySeriesForMetric(metric, sourceHistory)
-          .filter((point) => point.x >= rangeStart && point.x <= rangeEnd);
+        const basePoints = buildWindowedHistoryPoints(metric, sourceHistory, bounds);
+        const points = padWalletChartContext(metric, sourceHistory, bounds, basePoints);
         const historyValues = points.map((point) => point.y);
+        const visibleRows = Array.isArray(sourceHistory)
+          ? sourceHistory
+            .map((row) => ({ row, time: new Date(row.captured_at).getTime() }))
+            .filter((entry) => Number.isFinite(entry.time) && Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && entry.time >= rangeStart && entry.time <= rangeEnd)
+            .sort((a, b) => a.time - b.time)
+          : [];
 
         if (state.modalChart) {
           state.modalChart.destroy();
@@ -3050,6 +3940,7 @@ function renderPage(model) {
           modalElements.empty.hidden = false;
           modalElements.empty.textContent = 'No historical values are stored yet for this metric.';
           canvas.hidden = true;
+          updateWindowShiftControls(bounds, days);
           updateChartGapNote('history-modal-note', []);
           return;
         }
@@ -3066,9 +3957,11 @@ function renderPage(model) {
               parsing: false,
               borderColor: metric.chartColor || '#00dbbc',
               backgroundColor: (metric.chartColor || '#00dbbc') + '22',
-              fill: true,
-              pointRadius: 0,
-              tension: 0.28,
+              fill: metric.kind === 'wallet' ? false : true,
+              pointRadius: metric.kind === 'wallet' ? 2 : 0,
+              pointHoverRadius: metric.kind === 'wallet' ? 4 : 2,
+              tension: metric.kind === 'wallet' ? 0.28 : 0.28,
+              stepped: false,
               spanGaps: false,
             }],
           },
@@ -3094,8 +3987,8 @@ function renderPage(model) {
             scales: {
               x: {
                 type: 'linear',
-                min: rangeStart,
-                max: rangeEnd,
+                min: Number.isFinite(rangeStart) ? rangeStart : undefined,
+                max: Number.isFinite(rangeEnd) ? rangeEnd : undefined,
                 ticks: {
                   color: '#8fa3b8',
                   maxTicksLimit: 8,
@@ -3117,6 +4010,7 @@ function renderPage(model) {
             },
           },
         });
+        updateWindowShiftControls(bounds, days);
         updateChartGapNote('history-modal-note', historyValues);
       }
 
@@ -3138,6 +4032,7 @@ function renderPage(model) {
           : (metric.rawValue !== null && metric.rawValue !== undefined
             ? ('Raw: ' + metric.rawValue)
             : 'Loading historical field...');
+        renderWalletDetails(metric);
         modalElements.samples.textContent = '—';
         if (modalElements.samplesNote) {
           modalElements.samplesNote.textContent = historyRangeSubtitle(state.modalHistoryDays);
@@ -3152,14 +4047,29 @@ function renderPage(model) {
         modalElements.subtitle.textContent = 'Loading ' + historyRangeLabel(days) + ' history for ' + metric.label + '...';
         modalElements.samples.textContent = '—';
         modalElements.captured.textContent = '—';
-        const history = await loadModalHistory(metric, days);
+        const [history, stakeHistory] = await Promise.all([
+          loadModalHistory(metric, days),
+          loadWalletStakeHistory(metric, days),
+        ]);
         if (!history) return;
+        if (metric.kind === 'wallet') {
+          state.modalStakeHistory = Array.isArray(stakeHistory) ? stakeHistory : [];
+        } else {
+          state.modalStakeHistory = null;
+        }
         const field = metric.historyField || metric.valueField;
         const points = historySeriesForMetric(metric, history);
-        const rangeStart = Date.now() - Math.max(1, days) * 86400000;
-        const rangeEnd = Date.now();
+        const bounds = getModalWindowBounds(metric, history);
+        const rangeStart = bounds ? bounds.start : (Date.now() - Math.max(1, days) * 86400000);
+        const rangeEnd = bounds ? bounds.end : Date.now();
         const visiblePoints = points.filter((point) => point.x >= rangeStart && point.x <= rangeEnd);
-        const latestPoint = visiblePoints.length ? visiblePoints[visiblePoints.length - 1] : null;
+        const visibleRows = Array.isArray(history)
+          ? history
+            .map((row) => ({ row, time: new Date(row.captured_at).getTime() }))
+            .filter((entry) => Number.isFinite(entry.time) && entry.time >= rangeStart && entry.time <= rangeEnd)
+            .sort((a, b) => a.time - b.time)
+          : [];
+        const latestPoint = visibleRows.length ? visibleRows[visibleRows.length - 1].row : null;
 
         modalElements.subtitle.textContent = 'Historical view for ' + metric.label + ' over the last ' + days + ' day' + (days === 1 ? '' : 's') + ' from the local SQLite database.';
         modalElements.latestValue.textContent = displayMetricText(metric);
@@ -3170,6 +4080,7 @@ function renderPage(model) {
             : (metric.rawValue !== null && metric.rawValue !== undefined
               ? ('Raw: ' + metric.rawValue)
               : ('Tracked field: ' + field)));
+        renderWalletDetails(metric);
         modalElements.samples.textContent = String(visiblePoints.length);
         if (modalElements.samplesNote) {
           modalElements.samplesNote.textContent = historyRangeSubtitle(days);
@@ -3192,8 +4103,30 @@ function renderPage(model) {
         state.modalMetric = metric;
         state.modalHistoryDays = 30;
         state.modalHistory = null;
-        renderModalMetric(metric);
+        state.modalStakeHistory = null;
+        state.modalHistoryWindowEndMs = null;
+        state.modalHistoryAutoFollow = true;
+        if (modalElements.walletDetails) {
+          modalElements.walletDetails.hidden = true;
+          modalElements.walletDetails.innerHTML = '';
+        }
+        modalElements.latestValue.textContent = '—';
+        modalElements.latestRaw.textContent = 'Loading historical field...';
+        modalElements.samples.textContent = '—';
+        modalElements.captured.textContent = '—';
+        modalElements.note.hidden = true;
+        modalElements.empty.hidden = true;
+        modalElements.canvas.hidden = false;
         openModal();
+        try {
+          renderModalMetric(metric);
+        } catch (error) {
+          console.error(error);
+          modalElements.subtitle.textContent = 'The metric dialog opened, but wallet details could not render.';
+          modalElements.empty.hidden = false;
+          modalElements.empty.textContent = 'Unable to render this wallet card.';
+          modalElements.canvas.hidden = true;
+        }
         try {
           await refreshModalHistory(metric, state.modalHistoryDays);
         } catch (error) {
@@ -3215,6 +4148,7 @@ function renderPage(model) {
         renderCharts();
         if (state.modalMetric) {
           modalElements.latestValue.textContent = displayMetricText(state.modalMetric);
+          renderWalletDetails(state.modalMetric);
           if (state.modalHistory) {
             renderHistoryChart(state.modalMetric, state.modalHistory);
           }
@@ -3288,11 +4222,36 @@ function renderPage(model) {
           if (!Number.isFinite(days)) return;
           if (state.modalHistoryDays === days && state.modalHistory) return;
           state.modalHistoryDays = days;
+          state.modalHistoryWindowEndMs = null;
+          state.modalHistoryAutoFollow = true;
           updateHistoryRangeButtons();
           if (state.modalMetric) {
             refreshModalHistory(state.modalMetric, days).catch((error) => console.error(error));
           }
         });
+      });
+
+      modalElements.windowPrev?.addEventListener('click', () => {
+        shiftModalHistoryWindow(-1);
+      });
+
+      modalElements.windowNext?.addEventListener('click', () => {
+        shiftModalHistoryWindow(1);
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (!state.modalMetric || modalElements.backdrop.getAttribute('aria-hidden') === 'true') return;
+        const target = event.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) {
+          return;
+        }
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          shiftModalHistoryWindow(-1);
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          shiftModalHistoryWindow(1);
+        }
       });
 
       modalElements.close.addEventListener('click', closeModal);
@@ -3419,7 +4378,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         return;
       }
 
-      const walletMatch = url.pathname.match(/^\/api\/wallets\/([^/]+)\/(latest|history)$/);
+      const walletMatch = url.pathname.match(/^\/api\/wallets\/([^/]+)\/(latest|history|stake-history)$/);
       if (req.method === 'GET' && walletMatch) {
         const address = decodeURIComponent(walletMatch[1]);
         const action = walletMatch[2];
@@ -3431,7 +4390,9 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         }
         const days = parseDays(url.searchParams);
         const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-        const history = getWalletHistory(db, address, sinceIso);
+        const history = action === 'stake-history'
+          ? getWalletStakePositionsHistory(db, address, sinceIso)
+          : getWalletHistory(db, address, sinceIso);
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ address, days, history }, null, 2));
         return;
@@ -3458,9 +4419,17 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         const payload = await readJsonBody(req);
         const backfill = await ingestService.backfillHistoricalSnapshots({ netuid, ...parseBackfillOptions(payload, config) });
         const live = await ingestService.ingestOnce({ netuid });
+        const error = summarizeBackfillOutcome(backfill, live);
+        const warnings = summarizeBackfillWarnings(backfill, live);
         const status = backfill.ok && live.ok ? 200 : 500;
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ netuid, backfill, live }, null, 2));
+        res.end(JSON.stringify({
+          netuid,
+          backfill,
+          live,
+          ...(error ? { error } : {}),
+          ...(warnings.length ? { warnings } : {}),
+        }, null, 2));
         return;
       }
 

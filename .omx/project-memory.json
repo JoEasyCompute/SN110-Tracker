@@ -1,20 +1,22 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-02T00:00:00Z",
+  "updated_at": "2026-05-03T00:00:00Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the dashboard.",
     "The top bar shows the current TAO price used for USD conversion and the next scheduled poll time.",
-    "The dashboard now opens with a collapsible financial perspective panel that explains price, flow, sentiment, and supply pressure in plain language.",
+    "The dashboard now opens with a wallet section first, followed by a collapsible financial perspective panel that explains price, flow, sentiment, and supply pressure in plain language.",
     "The dashboard also includes a 'What matters most today' panel that highlights the main correlation points for beginners.",
     "The financial perspective area now also includes a watchlist panel that keeps the core alerts (price vs flow, sentiment watch, supply watch) visible in a stable beginner-friendly format.",
-    "The dashboard can now track multiple configured wallet balances from Taostats account latest/history endpoints using ss58 addresses and wallet names from .env.",
+    "The dashboard can now track multiple configured wallet balances from Taostats account latest/history endpoints using coldkeys, optional hotkeys, and wallet names from .env, and the wallet modal now also shows a compact wallet profile with rank, created-on date, hotkey summary, current subnet stake positions, and a collapsible hotkey history section backed by historical stake snapshots with delta color-coding.",
     "The TAO price badge opens a historical TAO/USD modal chart.",
-    "Historical metric modals support 24H, 7D, 30D, and 60D windows and include beginner-friendly metric explanations.",
+    "Historical metric modals support 24H, 7D, 14D, 30D, and 60D windows, include beginner-friendly metric explanations, and can slide by 24 hours with arrow buttons or keyboard shortcuts.",
     "The main dashboard now keeps the Latest JSON, History JSON, Recent snapshots, and Latest ingest run inside a collapsible admin panel.",
     "The admin panel also exposes a browser-triggered backfill form that posts to /api/subnets/:netuid/backfill.",
-    "Backfill mode imports subnet history, TAO price history, Tao Flow history, and configured wallet history rows, then refreshes the live snapshot.",
+    "Backfill mode imports subnet history, TAO price history, Tao Flow history, configured wallet balance history, and historical hotkey stake snapshots, then refreshes the live snapshot.",
     "TAO-denominated values can be toggled between TAO and USD using the stored TAO price history.",
-    "Missing metric values must remain null in charts and render as gaps, not zeroes."
+    "Missing metric values must remain null in charts and render as gaps, not zeroes.",
+    "Current hotkey stake positions are fetched live, and historical hotkey stake snapshots are backfilled so the wallet modal can show a hotkey history section.",
+    "Subnet stats use a 4-column grid, and collapsible panels use a visible chevron affordance."
   ]
 }

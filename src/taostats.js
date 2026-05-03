@@ -486,6 +486,36 @@ function normalizeAccountSnapshot(raw, { source, sourceUrl, walletName, address,
   };
 }
 
+function normalizeStakeBalanceSnapshot(raw, { source, sourceUrl, walletName, address, capturedAt = nowIso() }) {
+  const payload = pickRecord(raw, null) || {};
+  const coldkeyPayload = payload.coldkey || {};
+  const hotkeyPayload = payload.hotkey || {};
+  const t = (value) => asText(value);
+  const n = (value) => asNumber(value);
+  const r = (value) => raoToTao(value);
+
+  return {
+    wallet_name: walletName,
+    wallet_address_ss58: t(coldkeyPayload.ss58 ?? address),
+    wallet_address_hex: t(coldkeyPayload.hex ?? null),
+    hotkey_name: t(payload.hotkey_name ?? null),
+    hotkey_address_ss58: t(hotkeyPayload.ss58 ?? null),
+    hotkey_address_hex: t(hotkeyPayload.hex ?? null),
+    netuid: asInteger(payload.netuid),
+    subnet_rank: asInteger(payload.subnet_rank),
+    subnet_total_holders: asInteger(payload.subnet_total_holders),
+    balance_text: t(payload.balance),
+    balance_num: n(payload.balance),
+    balance_as_tao_text: t(payload.balance_as_tao ?? payload.balance),
+    balance_as_tao_num: r(payload.balance_as_tao ?? payload.balance),
+    source,
+    source_url: sourceUrl,
+    captured_at: capturedAt,
+    remote_timestamp: t(payload.timestamp ?? payload.last_updated ?? payload.updated_at ?? payload.created_at ?? null),
+    raw_json: JSON.stringify(payload),
+  };
+}
+
 function historyTimestampToIso(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'string' && value.includes('T')) return value;
@@ -717,6 +747,94 @@ async function fetchAccountHistory({
   }));
 }
 
+async function fetchStakeBalanceLatest({
+  coldkey,
+  hotkey = null,
+  netuid = null,
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  capturedAt = nowIso(),
+  limit = 200,
+}) {
+  if (!taostatsAuthHeader) {
+    return [];
+  }
+
+  const headers = { authorization: taostatsAuthHeader };
+  const rows = [];
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL('/api/dtao/stake_balance/latest/v1', taostatsBaseUrl);
+    if (coldkey) url.searchParams.set('coldkey', coldkey);
+    if (hotkey) url.searchParams.set('hotkey', hotkey);
+    if (netuid !== null && netuid !== undefined) url.searchParams.set('netuid', String(netuid));
+    url.searchParams.set('order', 'balance_as_tao_desc');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('page', String(page));
+    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+    const pageRows = extractRecords(json);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    if (pageRows.length < limit) break;
+  }
+
+  return rows.map((row) => normalizeStakeBalanceSnapshot(row, {
+    source: 'api',
+    sourceUrl: `${taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/stake_balance/latest/v1`,
+    walletName: null,
+    address: coldkey || null,
+    capturedAt,
+  }));
+}
+
+async function fetchHistoricalStakeBalance({
+  coldkey,
+  hotkey = null,
+  netuid = null,
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  days = 30,
+  limit = 200,
+}) {
+  if (!taostatsAuthHeader) {
+    return [];
+  }
+
+  const now = Date.now();
+  const startIso = new Date(now - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString();
+  const timestampStart = Math.floor(new Date(startIso).getTime() / 1000);
+  const timestampEnd = Math.floor(now / 1000);
+  const headers = { authorization: taostatsAuthHeader };
+  const rows = [];
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL('/api/dtao/stake_balance/history/v1', taostatsBaseUrl);
+    if (coldkey) url.searchParams.set('coldkey', coldkey);
+    if (hotkey) url.searchParams.set('hotkey', hotkey);
+    if (netuid !== null && netuid !== undefined) url.searchParams.set('netuid', String(netuid));
+    url.searchParams.set('timestamp_start', String(timestampStart));
+    url.searchParams.set('timestamp_end', String(timestampEnd));
+    url.searchParams.set('order', 'timestamp_asc');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('page', String(page));
+    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+    const pageRows = extractRecords(json);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    if (pageRows.length < limit) break;
+  }
+
+  return rows.map((row) => normalizeStakeBalanceSnapshot(row, {
+    source: 'api-history',
+    sourceUrl: `${taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/stake_balance/history/v1`,
+    walletName: null,
+    address: coldkey || null,
+    capturedAt: historyTimestampToIso(row.timestamp ?? row.last_updated ?? row.updated_at ?? row.created_at) || nowIso(),
+  }));
+}
+
 async function fetchHistoricalSnapshots({
   netuid,
   taostatsBaseUrl,
@@ -880,12 +998,15 @@ module.exports = {
   fetchTaoFlowHistory,
   fetchAccountLatest,
   fetchAccountHistory,
+  fetchStakeBalanceLatest,
+  fetchHistoricalStakeBalance,
   fetchHistoricalSnapshots,
   extractEscapedJsonObject,
   normalizeSnapshot,
   normalizeTaoPriceSnapshot,
   normalizeTaoFlowSnapshot,
   normalizeAccountSnapshot,
+  normalizeStakeBalanceSnapshot,
   pickRecord,
   extractRecords,
   asNumber,

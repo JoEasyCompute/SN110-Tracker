@@ -23,6 +23,35 @@ function normalizePollIntervalMinutes(value, fallback = 60) {
   return POLL_INTERVAL_OPTIONS.includes(parsed) ? parsed : fallback;
 }
 
+function parseWalletHotkeys(env = process.env, walletPrefix = '', fallbackNetwork = 'finney') {
+  const hotkeys = [];
+  const maxHotkeys = 20;
+
+  for (let index = 1; index <= maxHotkeys; index += 1) {
+    const prefix = `${walletPrefix}HOTKEY_${index}_`;
+    const ss58 = String(env[`${prefix}SS58`] || env[`${prefix}ADDRESS`] || '').trim();
+    const name = String(env[`${prefix}NAME`] || '').trim();
+    const network = String(env[`${prefix}NETWORK`] || fallbackNetwork || 'finney').trim() || (fallbackNetwork || 'finney');
+    const netuid = intOr(null, env[`${prefix}NETUID`]);
+
+    if (!ss58 && !name && netuid === null && !env[`${prefix}NETWORK`]) {
+      continue;
+    }
+    if (!ss58) {
+      continue;
+    }
+
+    hotkeys.push({
+      name: name || ss58,
+      ss58,
+      network,
+      netuid,
+    });
+  }
+
+  return hotkeys;
+}
+
 function parseWalletConfigs(env = process.env) {
   const wallets = [];
   const maxWallets = 20;
@@ -30,20 +59,23 @@ function parseWalletConfigs(env = process.env) {
   for (let index = 1; index <= maxWallets; index += 1) {
     const prefix = `TAOSTATS_WALLET_${index}_`;
     const name = String(env[`${prefix}NAME`] || '').trim();
-    const address = String(env[`${prefix}SS58`] || env[`${prefix}ADDRESS`] || '').trim();
+    const coldkey = String(env[`${prefix}COLDKEY`] || env[`${prefix}SS58`] || env[`${prefix}ADDRESS`] || '').trim();
     const network = String(env[`${prefix}NETWORK`] || 'finney').trim() || 'finney';
 
-    if (!name && !address && !env[`${prefix}NETWORK`]) {
+    if (!name && !coldkey && !env[`${prefix}NETWORK`]) {
       continue;
     }
-    if (!name || !address) {
+    if (!name || !coldkey) {
       continue;
     }
 
+    const hotkeys = parseWalletHotkeys(env, prefix, network);
     wallets.push({
       name,
-      ss58: address,
+      coldkey,
+      ss58: coldkey,
       network,
+      hotkeys,
     });
   }
 
@@ -129,6 +161,7 @@ module.exports = {
   loadConfig,
   loadDotEnvFile,
   parseEnvLine,
+  parseWalletHotkeys,
   parseWalletConfigs,
   boolOr,
   normalizePollIntervalMinutes,

@@ -216,6 +216,38 @@ function openDatabase(filePath) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_snapshots_address_block_number
       ON wallet_snapshots(wallet_address_ss58, block_number);
 
+    CREATE TABLE IF NOT EXISTS wallet_stake_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_name TEXT NOT NULL,
+      wallet_address_ss58 TEXT NOT NULL,
+      wallet_address_hex TEXT,
+      hotkey_name TEXT,
+      hotkey_address_ss58 TEXT,
+      hotkey_address_hex TEXT,
+      netuid INTEGER,
+      subnet_rank INTEGER,
+      subnet_total_holders INTEGER,
+      balance_text TEXT,
+      balance_num REAL,
+      balance_as_tao_text TEXT,
+      balance_as_tao_num REAL,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      captured_at TEXT NOT NULL,
+      remote_timestamp TEXT,
+      raw_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wallet_stake_positions_address_balance
+      ON wallet_stake_positions(wallet_address_ss58, balance_as_tao_num DESC, netuid ASC, id DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_wallet_stake_positions_address_captured_at
+      ON wallet_stake_positions(wallet_address_ss58, captured_at DESC, id DESC);
+
+    DROP INDEX IF EXISTS idx_wallet_stake_positions_address_netuid_hotkey;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_stake_positions_address_netuid_hotkey
+      ON wallet_stake_positions(wallet_address_ss58, netuid, hotkey_address_ss58, captured_at);
+
     CREATE TABLE IF NOT EXISTS ingest_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       netuid INTEGER NOT NULL,
@@ -253,10 +285,28 @@ function ensureSnapshotColumns(db) {
   );
 
   const additions = [
+    ['remote_timestamp', 'TEXT'],
+    ['source_url', 'TEXT'],
+    ['block_number', 'INTEGER'],
+    ['name', 'TEXT'],
+    ['symbol', 'TEXT'],
+    ['rank', 'INTEGER'],
+    ['price_text', 'TEXT'],
+    ['price_num', 'REAL'],
+    ['market_cap_text', 'TEXT'],
+    ['market_cap_num', 'REAL'],
+    ['liquidity_text', 'TEXT'],
+    ['liquidity_num', 'REAL'],
     ['emission_text', 'TEXT'],
     ['emission_num', 'REAL'],
     ['emission_percent_text', 'TEXT'],
     ['emission_percent_num', 'REAL'],
+    ['total_tao_text', 'TEXT'],
+    ['total_tao_num', 'REAL'],
+    ['total_alpha_text', 'TEXT'],
+    ['alpha_in_pool_text', 'TEXT'],
+    ['alpha_staked_text', 'TEXT'],
+    ['root_prop_text', 'TEXT'],
     ['emission_per_day_tao_text', 'TEXT'],
     ['emission_per_day_tao_num', 'REAL'],
     ['owner_per_day_tao_text', 'TEXT'],
@@ -290,8 +340,30 @@ function ensureSnapshotColumns(db) {
     ['sentiment_index_text', 'TEXT'],
     ['sentiment_index_num', 'REAL'],
     ['sentiment_index_source_text', 'TEXT'],
+    ['fee_rate_text', 'TEXT'],
+    ['market_cap_change_1_day_text', 'TEXT'],
+    ['price_change_1_hour_text', 'TEXT'],
+    ['price_change_1_day_text', 'TEXT'],
+    ['price_change_1_week_text', 'TEXT'],
+    ['price_change_1_month_text', 'TEXT'],
+    ['tao_volume_24_hr_text', 'TEXT'],
+    ['tao_volume_24_hr_num', 'REAL'],
+    ['tao_volume_24_hr_change_1_day_text', 'TEXT'],
+    ['tao_buy_volume_24_hr_text', 'TEXT'],
+    ['tao_sell_volume_24_hr_text', 'TEXT'],
+    ['alpha_volume_24_hr_text', 'TEXT'],
+    ['alpha_volume_24_hr_num', 'REAL'],
+    ['alpha_volume_24_hr_change_1_day_text', 'TEXT'],
+    ['fear_and_greed_index', 'TEXT'],
+    ['fear_and_greed_sentiment', 'TEXT'],
+    ['startup_mode', 'INTEGER'],
+    ['swap_v3_initialized', 'INTEGER'],
+    ['enabled_user_liquidity', 'INTEGER'],
+    ['current_tick', 'INTEGER'],
+    ['liquidity_raw', 'TEXT'],
     ['root_sell_text', 'TEXT'],
     ['root_sell_bool', 'INTEGER'],
+    ['raw_json', 'TEXT'],
   ];
 
   for (const [name, type] of additions) {
@@ -786,6 +858,47 @@ function insertWalletSnapshot(db, snapshot) {
   return Number(info.lastInsertRowid);
 }
 
+function insertWalletStakePosition(db, snapshot) {
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO wallet_stake_positions (
+      wallet_name, wallet_address_ss58, wallet_address_hex,
+      hotkey_name, hotkey_address_ss58, hotkey_address_hex,
+      netuid, subnet_rank, subnet_total_holders,
+      balance_text, balance_num, balance_as_tao_text, balance_as_tao_num,
+      source, source_url, captured_at, remote_timestamp, raw_json
+    ) VALUES (
+      @wallet_name, @wallet_address_ss58, @wallet_address_hex,
+      @hotkey_name, @hotkey_address_ss58, @hotkey_address_hex,
+      @netuid, @subnet_rank, @subnet_total_holders,
+      @balance_text, @balance_num, @balance_as_tao_text, @balance_as_tao_num,
+      @source, @source_url, @captured_at, @remote_timestamp, @raw_json
+    )
+  `);
+
+  const info = stmt.run({
+    wallet_name: snapshot.wallet_name,
+    wallet_address_ss58: snapshot.wallet_address_ss58,
+    wallet_address_hex: toDbValue(snapshot.wallet_address_hex),
+    hotkey_name: toDbValue(snapshot.hotkey_name),
+    hotkey_address_ss58: toDbValue(snapshot.hotkey_address_ss58),
+    hotkey_address_hex: toDbValue(snapshot.hotkey_address_hex),
+    netuid: toDbValue(snapshot.netuid),
+    subnet_rank: toDbValue(snapshot.subnet_rank),
+    subnet_total_holders: toDbValue(snapshot.subnet_total_holders),
+    balance_text: toDbValue(snapshot.balance_text),
+    balance_num: toDbValue(snapshot.balance_num),
+    balance_as_tao_text: toDbValue(snapshot.balance_as_tao_text),
+    balance_as_tao_num: toDbValue(snapshot.balance_as_tao_num),
+    source: snapshot.source,
+    source_url: toDbValue(snapshot.source_url),
+    captured_at: snapshot.captured_at,
+    remote_timestamp: toDbValue(snapshot.remote_timestamp),
+    raw_json: snapshot.raw_json,
+  });
+
+  return Number(info.lastInsertRowid);
+}
+
 function insertIngestRun(db, run) {
   const stmt = db.prepare(`
     INSERT INTO ingest_runs (
@@ -887,6 +1000,31 @@ function getLatestWalletSnapshot(db, address) {
   return stmt.get(address) || null;
 }
 
+function getLatestWalletStakePositions(db, address) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM wallet_stake_positions
+    WHERE wallet_address_ss58 = ?
+      AND captured_at = (
+        SELECT MAX(captured_at)
+        FROM wallet_stake_positions
+        WHERE wallet_address_ss58 = ?
+      )
+    ORDER BY balance_as_tao_num DESC, netuid ASC, hotkey_address_ss58 ASC, id DESC
+  `);
+  return stmt.all(address, address);
+}
+
+function getWalletStakePositionsHistory(db, address, sinceIso) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM wallet_stake_positions
+    WHERE wallet_address_ss58 = ? AND captured_at >= ?
+    ORDER BY captured_at ASC, netuid ASC, hotkey_address_ss58 ASC, id ASC
+  `);
+  return stmt.all(address, sinceIso);
+}
+
 function getWalletHistory(db, address, sinceIso) {
   const stmt = db.prepare(`
     SELECT *
@@ -909,6 +1047,43 @@ function countWalletSnapshots(db, address = null) {
       FROM wallet_snapshots
     `);
   return address ? stmt.get(address).count : stmt.get().count;
+}
+
+function deleteWalletStakePositions(db, address) {
+  const stmt = db.prepare(`
+    DELETE FROM wallet_stake_positions
+    WHERE wallet_address_ss58 = ?
+  `);
+  const info = stmt.run(address);
+  return Number(info.changes || 0);
+}
+
+function deleteWalletStakePositionsInRange(db, address, startIso, endIso) {
+  const rows = db.prepare(`
+    SELECT id
+    FROM wallet_stake_positions
+    WHERE wallet_address_ss58 = ?
+      AND captured_at >= ?
+      AND captured_at <= ?
+  `).all(address, startIso, endIso);
+
+  if (!rows.length) return 0;
+
+  const ids = rows.map((row) => row.id);
+  const placeholders = ids.map(() => '?').join(', ');
+
+  db.exec('BEGIN');
+  try {
+    const info = db.prepare(`
+      DELETE FROM wallet_stake_positions
+      WHERE id IN (${placeholders})
+    `).run(...ids);
+    db.exec('COMMIT');
+    return Number(info.changes || 0);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function walletSnapshotExists(db, address, blockNumber) {
@@ -1105,6 +1280,7 @@ module.exports = {
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
+  insertWalletStakePosition,
   insertIngestRun,
   getLatestSnapshot,
   getRecentSnapshots,
@@ -1113,6 +1289,8 @@ module.exports = {
   getTaoPriceHistory,
   getTaoFlowHistory,
   getLatestWalletSnapshot,
+  getLatestWalletStakePositions,
+  getWalletStakePositionsHistory,
   getWalletHistory,
   getLatestIngestRun,
   countSnapshots,
@@ -1120,6 +1298,8 @@ module.exports = {
   snapshotExists,
   taoFlowSnapshotExists,
   walletSnapshotExists,
+  deleteWalletStakePositions,
+  deleteWalletStakePositionsInRange,
   deleteSnapshotsInRange,
   deleteTaoPriceHistoryInRange,
   deleteTaoFlowHistoryInRange,
