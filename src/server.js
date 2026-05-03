@@ -4210,9 +4210,26 @@ function renderPage(model) {
         }
         .topbar .actions {
           width: 100%;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+          align-items: stretch;
         }
         .topbar .actions > * {
-          flex: 1 1 0;
+          width: 100%;
+          min-width: 0;
+        }
+        #next-poll-label {
+          grid-column: 1 / 2;
+        }
+        #currency-toggle {
+          grid-column: 2 / 3;
+        }
+        #tao-price-label {
+          grid-column: 1 / -1;
+          white-space: normal;
+          text-align: center;
+          justify-content: center;
         }
         .hero {
           padding: 20px;
@@ -4224,6 +4241,12 @@ function renderPage(model) {
           flex-direction: column;
           align-items: stretch;
         }
+        .modal-header .button {
+          align-self: flex-start;
+        }
+        .modal-title-row {
+          align-items: flex-start;
+        }
         .signal-badge,
         .window-shift-label {
           align-self: flex-start;
@@ -4234,14 +4257,30 @@ function renderPage(model) {
         .admin-form-row {
           grid-template-columns: 1fr;
         }
+        .admin-grid {
+          grid-template-columns: 1fr;
+        }
         .admin-controls .admin-actions {
           flex-direction: column;
         }
         .admin-controls .admin-actions > * {
           width: 100%;
         }
+        .admin-actions {
+          flex-direction: column;
+          margin-bottom: 12px;
+        }
+        .admin-actions > * {
+          width: 100%;
+        }
+        .admin-panel-body {
+          padding: 12px;
+        }
+        .admin-grid .panel {
+          padding: 14px;
+        }
         .modal-panel {
-          padding: 16px;
+          padding: 14px;
         }
         .wallet-breakdown-row,
         .wallet-current-stake-row {
@@ -4250,11 +4289,21 @@ function renderPage(model) {
         }
         .wallet-breakdown-row .wallet-breakdown-card {
           min-width: 0;
-          flex: 1 1 calc(50% - 12px);
+          flex: 1 1 100%;
         }
         .wallet-current-stake-card {
           min-width: 0;
           flex: 1 1 100%;
+        }
+        .wallet-positions-scroll {
+          max-height: 260px;
+        }
+        .wallet-history-details {
+          padding: 10px 12px;
+        }
+        .wallet-positions-table th,
+        .wallet-positions-table td {
+          padding: 8px 6px;
         }
         .wallet-hotkey-list {
           flex-direction: column;
@@ -4282,6 +4331,10 @@ function renderPage(model) {
         .topbar .actions > * {
           width: 100%;
           min-width: 0;
+        }
+        .price-badge {
+          font-size: 12px;
+          padding: 9px 11px;
         }
         .poll-switcher {
           width: 100%;

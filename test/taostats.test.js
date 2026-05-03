@@ -481,6 +481,12 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="tao-price-label"'), true);
   assert.equal(html.includes('title="Click to view TAO price history"'), true);
   assert.equal(html.includes('@media (max-width: 900px)'), true);
+  assert.equal(html.includes('.topbar .actions {'), true);
+  assert.equal(html.includes('grid-template-columns: repeat(2, minmax(0, 1fr));'), true);
+  assert.equal(html.includes('#tao-price-label {'), true);
+  assert.equal(html.includes('.modal-header .button {'), true);
+  assert.equal(html.includes('.wallet-history-details {'), true);
+  assert.equal(html.includes('.admin-grid {'), true);
   assert.equal(html.includes('admin-controls'), true);
   assert.equal(html.includes('tao-flow'), true);
   assert.equal(html.includes('data-poll-interval="60"'), true);
