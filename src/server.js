@@ -4202,12 +4202,140 @@ function renderPage(model) {
       body.modal-open {
         overflow: hidden;
       }
+      @media (max-width: 900px) {
+        .shell { padding: 20px; }
+        .topbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .topbar .actions {
+          width: 100%;
+        }
+        .topbar .actions > * {
+          flex: 1 1 0;
+        }
+        .hero {
+          padding: 20px;
+        }
+        .signal-panel-head,
+        .modal-header,
+        .window-shift-row,
+        .wallet-positions-head {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .signal-badge,
+        .window-shift-label {
+          align-self: flex-start;
+        }
+        .window-shift-center {
+          width: 100%;
+        }
+        .admin-form-row {
+          grid-template-columns: 1fr;
+        }
+        .admin-controls .admin-actions {
+          flex-direction: column;
+        }
+        .admin-controls .admin-actions > * {
+          width: 100%;
+        }
+        .modal-panel {
+          padding: 16px;
+        }
+        .wallet-breakdown-row,
+        .wallet-current-stake-row {
+          flex-wrap: wrap;
+          overflow-x: visible;
+        }
+        .wallet-breakdown-row .wallet-breakdown-card {
+          min-width: 0;
+          flex: 1 1 calc(50% - 12px);
+        }
+        .wallet-current-stake-card {
+          min-width: 0;
+          flex: 1 1 100%;
+        }
+        .wallet-hotkey-list {
+          flex-direction: column;
+        }
+        .wallet-hotkey-pill {
+          min-width: 0;
+          width: 100%;
+        }
+      }
       @media (max-width: 1100px) {
         .hero, .grid, .grid.stats, .chart-grid, .modal-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 700px) {
-        .shell { padding: 16px; }
+        .shell { padding: 14px; }
         .grid.compact { grid-template-columns: 1fr; }
+        .hero-meta {
+          grid-template-columns: 1fr;
+        }
+        .hero h1 {
+          font-size: clamp(28px, 8vw, 36px);
+        }
+        .topbar .actions {
+          gap: 8px;
+        }
+        .topbar .actions > * {
+          width: 100%;
+          min-width: 0;
+        }
+        .poll-switcher {
+          width: 100%;
+          justify-content: space-between;
+          overflow-x: auto;
+        }
+        .poll-switcher .poll-button {
+          flex: 1 0 auto;
+        }
+        .range-switcher {
+          width: 100%;
+          justify-content: space-between;
+        }
+        .window-shift-row .window-button {
+          min-width: 0;
+          flex: 1 1 0;
+        }
+        .modal-panel {
+          padding: 14px;
+          max-height: 94vh;
+        }
+        .modal-grid {
+          gap: 10px;
+        }
+        .chart-frame {
+          height: 210px;
+        }
+        .chart-frame.modal {
+          height: 300px;
+        }
+        .admin-actions {
+          flex-direction: column;
+        }
+        .admin-actions > * {
+          width: 100%;
+        }
+        .admin-panel-body,
+        .financial-panel-body {
+          padding: 12px;
+        }
+        .wallet-breakdown-row .wallet-breakdown-card {
+          flex-basis: 100%;
+        }
+        .wallet-positions-scroll,
+        .wallet-history-scroll {
+          max-height: 240px;
+        }
+        .wallet-positions-table {
+          min-width: 760px;
+        }
+        .footer {
+          flex-direction: column;
+          gap: 8px;
+        }
       }
     </style>
   </head>

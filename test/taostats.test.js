@@ -480,6 +480,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="currency-toggle"'), true);
   assert.equal(html.includes('id="tao-price-label"'), true);
   assert.equal(html.includes('title="Click to view TAO price history"'), true);
+  assert.equal(html.includes('@media (max-width: 900px)'), true);
+  assert.equal(html.includes('admin-controls'), true);
   assert.equal(html.includes('tao-flow'), true);
   assert.equal(html.includes('data-poll-interval="60"'), true);
   assert.equal(html.includes('data-poll-interval="120"'), true);
