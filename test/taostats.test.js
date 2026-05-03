@@ -419,7 +419,16 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     volume_24h: '1000',
     market_cap: '2000',
   }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z' }));
-  const model = buildPageModel({ db, config: { taostatsAuthHeader: '', pollIntervalMinutes: 15, wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney' }] }] }, netuid: 110 });
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 15,
+      wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney' }] }],
+    },
+    netuid: 110,
+  });
   const html = renderPage(model);
   assert.equal(html.includes('id="history-modal"'), true);
   assert.equal(html.includes('history-modal-info'), true);
@@ -457,6 +466,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Market mood'), true);
   assert.equal(html.includes('Supply pressure'), true);
   assert.equal(html.includes('Admin panel'), true);
+  assert.equal(html.includes('id="refresh-btn"'), true);
   assert.equal(html.includes('id="backfill-days"'), true);
   assert.equal(html.includes('id="backfill-frequency"'), true);
   assert.equal(html.includes('id="backfill-overwrite"'), true);
@@ -477,6 +487,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="poll-interval-label"'), true);
   assert.equal(html.includes('id="next-poll-label"'), true);
   assert.equal(html.includes('id="tao-price-label"'), true);
+  assert.equal(html.includes('Next poll: '), true);
   assert.equal(html.includes('title="Percentage value"'), true);
   assert.equal(html.includes('title="Percentage of the whole pool"'), true);
   assert.equal(html.includes('title="Percentage change"'), true);
@@ -504,6 +515,24 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Click a latest snapshot card'), true);
   assert.equal(html.includes('"historySource":"subnet"'), true);
   assert.equal(model.latest.tao_price_usd, 100);
+  db.close();
+});
+
+test('renderPage hides admin tools when no admin api key is configured', () => {
+  const db = openDatabase(':memory:');
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: '',
+      pollIntervalMinutes: 15,
+      wallets: [],
+    },
+    netuid: 110,
+  });
+  const html = renderPage(model);
+  assert.equal(html.includes('Admin panel'), false);
+  assert.equal(html.includes('id="refresh-btn"'), false);
+  assert.equal(html.includes('data-poll-interval="60"'), false);
   db.close();
 });
 
@@ -736,6 +765,7 @@ test('poll interval selector endpoint updates the interval setting', async () =>
     config: {
       netuid: 110,
       taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
       pollIntervalMinutes: 60,
     },
     onPollIntervalChange: async (minutes) => {
@@ -752,7 +782,7 @@ test('poll interval selector endpoint updates the interval setting', async () =>
   const { port } = server.address();
   const response = await fetch(`http://127.0.0.1:${port}/api/settings/poll-interval`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
     body: JSON.stringify({ minutes: 120 }),
   });
   const payload = await response.json();
@@ -761,6 +791,40 @@ test('poll interval selector endpoint updates the interval setting', async () =>
   assert.equal(typeof payload.nextPollAtIso, 'string');
   assert.equal(observedMinutes, 120);
   assert.equal(getSetting(db, 'poll_interval_minutes'), '120');
+  await app.close();
+  db.close();
+});
+
+test('admin routes reject missing admin api key when configured', async () => {
+  const db = openDatabase(':memory:');
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      ingestOnce: async () => ({ ok: true }),
+      backfillHistoricalSnapshots: async () => ({ ok: true }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+    },
+    onPollIntervalChange: async (minutes) => ({
+      pollIntervalMinutes: minutes,
+      nextPollAtIso: new Date(Date.now() + minutes * 60 * 1000).toISOString(),
+    }),
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/settings/poll-interval`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ minutes: 120 }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 403);
+  assert.equal(payload.error, 'Admin API key required.');
   await app.close();
   db.close();
 });
@@ -784,6 +848,7 @@ test('admin backfill endpoint runs backfill and live ingest', async () => {
     config: {
       netuid: 110,
       taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
       pollIntervalMinutes: 60,
       taostatsBackfillDays: 30,
       taostatsBackfillFrequency: 'by_hour',
@@ -795,7 +860,7 @@ test('admin backfill endpoint runs backfill and live ingest', async () => {
   const { port } = server.address();
   const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/backfill`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
     body: JSON.stringify({ days: 60, frequency: 'by_day', overwrite: false }),
   });
   const payload = await response.json();
@@ -831,6 +896,7 @@ test('admin backfill endpoint surfaces detailed failures', async () => {
     config: {
       netuid: 110,
       taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
       pollIntervalMinutes: 60,
     },
   });
@@ -839,7 +905,7 @@ test('admin backfill endpoint surfaces detailed failures', async () => {
   const { port } = server.address();
   const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/backfill`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
     body: JSON.stringify({ days: 30, frequency: 'by_hour', overwrite: true }),
   });
   const payload = await response.json();
@@ -946,6 +1012,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     'PORT=4567',
     'TAOSTATS_NETUID=110',
     'TAOSTATS_API_KEY=test-api-key',
+    'TAOSTATS_ADMIN_API_KEY=test-admin-key',
     'POLL_INTERVAL_MINUTES=120',
     'TAOSTATS_PUBLIC_BASE_URL=https://example.invalid',
     'TAOSTATS_BACKFILL_DAYS=14',
@@ -963,7 +1030,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     'TAOSTATS_WALLET_2_COLDKEY=5WalletBeta123456789ABCDEFGH',
   ].join('\n'));
 
-  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_COLDKEY', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_1_HOTKEY_1_NAME', 'TAOSTATS_WALLET_1_HOTKEY_1_SS58', 'TAOSTATS_WALLET_1_HOTKEY_1_NETUID', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_COLDKEY', 'TAOSTATS_WALLET_2_SS58'];
+  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_ADMIN_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_COLDKEY', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_1_HOTKEY_1_NAME', 'TAOSTATS_WALLET_1_HOTKEY_1_SS58', 'TAOSTATS_WALLET_1_HOTKEY_1_NETUID', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_COLDKEY', 'TAOSTATS_WALLET_2_SS58'];
   const backup = Object.fromEntries(envKeys.map((key) => [key, Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined]));
 
   try {
@@ -976,6 +1043,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     assert.equal(config.port, 4567);
     assert.equal(config.netuid, 110);
     assert.equal(config.taostatsApiKey, 'test-api-key');
+    assert.equal(config.taostatsAdminApiKey, 'test-admin-key');
     assert.equal(config.taostatsAuthHeader, 'test-api-key');
     assert.equal(config.pollIntervalMinutes, 120);
     assert.equal(config.taostatsPublicBaseUrl, 'https://example.invalid');

@@ -11,16 +11,16 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Stores snapshots in a local SQLite database
 - Serves a browser dashboard with a beginner-friendly signal summary, supporting evidence cards, and historical charts
 - Adds a "What matters most today" panel that explains the main correlation points in plain language
-- Lets you switch the live poller between 1h / 2h / 4h from the dashboard, with the choice saved in SQLite
+- Lets you switch the live poller between 1h / 2h / 4h from the admin drawer, with the choice saved in SQLite
 - Lets you click the TAO price badge to open a historical TAO/USD chart
-- Shows the next scheduled poll time in the top bar
+- Shows the next scheduled poll time in the top bar as a local timestamp
 - Lets you switch historical metric charts between 24H / 7D / 14D / 30D / 60D in the modal
 - Lets you slide the modal chart window by 24 hours with left/right buttons or keyboard arrows
 - Lets you click any latest snapshot card to open a historical modal with metric help text
 - Tracks configured wallet balances from Taostats account latest/history endpoints, using wallet coldkeys, optional hotkeys, and human-friendly names from `.env`
 - Shows wallet balances above the financial perspective panel, with the wallet modal presenting the breakdown in a single row and the current subnet stake in a compact horizontal strip
 - Includes a collapsible hotkey history section in the wallet modal with positive/negative deltas so you can see whether each hotkey is moving up or down over time
-- Keeps operational JSON/debug views inside a collapsible admin panel so the main dashboard stays clean
+- Keeps operational JSON/debug views inside a collapsible admin panel that only appears when `TAOSTATS_ADMIN_API_KEY` is set, so the main dashboard stays clean
 - Includes a subnet sentiment card that prefers Taostats SSI when available and falls back to the legacy Fear & Greed value on older rows
 - Money In/Out charts use Taostats Tao Flow history so the historical view stays available even when the subnet snapshot history is sparse
 - Subnet stats are arranged as a 4-column grid so the ten cards flow into three neat rows
@@ -47,6 +47,7 @@ Environment variables:
 - `TAOSTATS_NETUID` - subnet id, defaults to `110`
 - `TAOSTATS_API_KEY` - optional API token for Taostats
 - `TAOSTATS_AUTH_HEADER` - optional full `Authorization` header value
+- `TAOSTATS_ADMIN_API_KEY` - optional feature flag that enables the admin drawer and its controls
 - `TAOSTATS_API_MAX_REQUESTS_PER_MINUTE` - API budget cap, defaults to `5`
 - `TAOSTATS_BACKFILL_DAYS` - number of days to backfill when using backfill mode, defaults to `0`
 - `TAOSTATS_BACKFILL_FREQUENCY` - backfill resolution, defaults to `by_hour`
@@ -69,6 +70,7 @@ The checked-in `.env.example` is intentionally redacted, so copy it locally and 
 
 If the Taostats API requires a prefix like `Bearer`, put the full header value in `TAOSTATS_AUTH_HEADER`.
 When an API key is configured, the app rate-limits Taostats API requests to 5 per minute by default so the free tier is respected.
+If `TAOSTATS_ADMIN_API_KEY` is set, the admin drawer appears with the manual refresh button, poll interval controls, JSON links, backfill form, and ingest history views; without it, those controls stay hidden. The POST admin routes (`/api/subnets/:netuid/ingest`, `/api/subnets/:netuid/backfill`, and `/api/settings/poll-interval`) also require the matching `X-Admin-API-Key` header when the admin key is configured.
 The dashboard also shows the current TAO price used for USD conversion and uses the stored TAO price history when you open the TAO price badge modal.
 
 ## Historical backfill

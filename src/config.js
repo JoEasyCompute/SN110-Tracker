@@ -127,6 +127,7 @@ function loadConfig() {
   const dbPath = process.env.DB_PATH || path.join(process.cwd(), 'data', 'sn110-tracker.sqlite');
   const taostatsApiKey = process.env.TAOSTATS_API_KEY || '';
   const taostatsAuthHeader = process.env.TAOSTATS_AUTH_HEADER || taostatsApiKey;
+  const taostatsAdminApiKey = process.env.TAOSTATS_ADMIN_API_KEY || '';
   const taostatsBaseUrl = process.env.TAOSTATS_BASE_URL || 'https://api.taostats.io';
   const taostatsPublicBaseUrl = process.env.TAOSTATS_PUBLIC_BASE_URL || 'https://taostats.io';
   const taostatsApiMaxRequestsPerMinute = intOr(5, process.env.TAOSTATS_API_MAX_REQUESTS_PER_MINUTE);
@@ -144,6 +145,7 @@ function loadConfig() {
     pollIntervalMs: pollIntervalMinutes * 60 * 1000,
     taostatsApiKey,
     taostatsAuthHeader,
+    taostatsAdminApiKey,
     taostatsBaseUrl,
     taostatsPublicBaseUrl,
     taostatsApiMaxRequestsPerMinute,

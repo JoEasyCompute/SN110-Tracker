@@ -35,7 +35,22 @@ function formatPollTime(value) {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function readAdminApiKey(req) {
+  return String(req.headers['x-admin-api-key'] || '').trim();
+}
+
+function requireAdminApiKey(req, config) {
+  const expected = String(config?.taostatsAdminApiKey || '').trim();
+  if (!expected) return null;
+  const provided = readAdminApiKey(req);
+  if (provided && provided === expected) return null;
+  return {
+    error: 'Admin API key required.',
+    status: 403,
+  };
 }
 
 function escapeHtml(value) {
@@ -1410,11 +1425,23 @@ function renderHistoryTable(rows) {
   `;
 }
 
-function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun }) {
+function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons }) {
+  if (!config.taostatsAdminApiKey) {
+    return '';
+  }
   return `
       <details class="admin-panel">
         <summary>Admin panel</summary>
         <div class="admin-panel-body">
+          <div class="panel admin-controls">
+            <h3>Live controls</h3>
+            <div class="admin-actions">
+              <button class="button primary" type="button" id="refresh-btn">Refresh now</button>
+              <div class="poll-switcher" role="tablist" aria-label="Polling interval">
+                ${pollIntervalButtons}
+              </div>
+            </div>
+          </div>
           <div class="admin-actions">
             <a class="button" href="/api/subnets/${netuid}/latest">Latest JSON</a>
             <a class="button" href="/api/subnets/${netuid}/history?days=30">History JSON</a>
@@ -1463,954 +1490,8 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun }) 
       </details>`;
 }
 
-function renderPage(model) {
-  const { latest, recent, ingestRun, totalSnapshots, totalWalletSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso, walletEntries } = model;
-  const latestMetricDefs = getLatestMetricDefs();
-  const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
-  const insight = buildInsightSummary(latest, comparisons, signal);
-  const title = `SN${netuid} Tracker`;
-  const subtitle = latest
-    ? `Latest snapshot captured ${formatRelativeIso(latest.captured_at)}`
-    : 'No snapshots captured yet';
-
-  const cards = latest ? renderLatestSnapshotCards(latest, latestMetricDefs) : '';
-  const pollIntervalButtons = POLL_INTERVAL_OPTIONS.map((minutes) => {
-    const active = Number(config.pollIntervalMinutes) === minutes;
-    return `<button class="button poll-button${active ? ' active' : ''}" type="button" data-poll-interval="${minutes}" aria-pressed="${active ? 'true' : 'false'}">${minutes / 60}h</button>`;
-  }).join('');
-  const taoPriceText = Number.isFinite(Number(latestTaoPriceUsd))
-    ? `TAO price used: τ 1 ≈ ${formatUsd(latestTaoPriceUsd, 2)}`
-    : 'TAO price used: unavailable';
-  const nextPollText = nextPollAtIso ? `Next poll: ${formatPollTime(nextPollAtIso)}` : 'Next poll: —';
-  const nextPollTitle = nextPollAtIso ? `Scheduled for ${formatIso(nextPollAtIso)}` : 'Poll schedule unavailable';
-
-  const latestRunCard = ingestRun
-    ? metricCard({
-        label: 'Latest ingest',
-        value: ingestRun.ok ? 'OK' : 'Failed',
-        subtext: `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}${ingestRun.fallback_used ? ' • fallback used' : ''} • ${ingestRun.duration_ms} ms`,
-        tone: ingestRun.ok ? 'positive' : 'negative',
-      })
-    : metricCard({ label: 'Latest ingest', value: '—', subtext: 'No run yet' });
-
-  const latestCard = latest
-    ? `
-      <section class="hero">
-        <div class="hero-copy">
-          <div class="eyebrow">Subnet SN${netuid}</div>
-          <h1>${escapeHtml(title)}</h1>
-          <p>${escapeHtml(subtitle)}</p>
-        </div>
-        <div class="hero-meta">
-          <div><strong>Snapshots</strong><span>${totalSnapshots}</span></div>
-          <div><strong>Latest block</strong><span>${escapeHtml(latest.block_number ?? '—')}</span></div>
-          <div><strong>Remote time</strong><span>${escapeHtml(formatIso(latest.remote_timestamp))}</span></div>
-          <div><strong>Source</strong><span>${escapeHtml(latest.source)}</span></div>
-        </div>
-      </section>
-    `
-    : `
-      <section class="hero">
-        <div class="hero-copy">
-          <div class="eyebrow">Subnet SN${netuid}</div>
-          <h1>${escapeHtml(title)}</h1>
-          <p>${escapeHtml(subtitle)}</p>
-        </div>
-        <div class="hero-meta">
-          <div><strong>Snapshots</strong><span>${totalSnapshots}</span></div>
-          <div><strong>API key</strong><span>${config.taostatsAuthHeader ? 'configured' : 'not configured'}</span></div>
-          <div><strong>Poll interval</strong><span>${config.pollIntervalMinutes} min</span></div>
-        </div>
-      </section>
-    `;
-
-  return `<!doctype html>
-  <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        --bg: #0b0f14;
-        --panel: #101722;
-        --panel-2: #131d2b;
-        --border: #223043;
-        --text: #e7eef7;
-        --muted: #8fa3b8;
-        --positive: #1db954;
-        --negative: #ff6b6b;
-        --accent: #00dbbc;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: linear-gradient(180deg, #071019 0%, #0b0f14 100%);
-        color: var(--text);
-      }
-      a { color: var(--accent); }
-      .shell { max-width: 1480px; margin: 0 auto; padding: 28px; }
-      .topbar {
-        display: flex; justify-content: space-between; gap: 16px; align-items: center;
-        margin-bottom: 24px;
-      }
-      .topbar .actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-      .poll-switcher {
-        display: inline-flex;
-        gap: 6px;
-        padding: 4px;
-        border-radius: 999px;
-        border: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.03);
-      }
-      .poll-switcher .poll-button {
-        padding: 9px 12px;
-        border-radius: 999px;
-        font-size: 12px;
-        letter-spacing: .06em;
-        text-transform: uppercase;
-        min-width: 64px;
-      }
-      .poll-switcher .poll-button.active {
-        background: rgba(0, 219, 188, 0.14);
-        border-color: rgba(0, 219, 188, 0.65);
-      }
-      .price-badge {
-        display: inline-flex;
-        align-items: center;
-        padding: 10px 12px;
-        border-radius: 999px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        background: rgba(255, 255, 255, 0.03);
-        color: #cbd5e1;
-        font-size: 13px;
-        line-height: 1;
-        white-space: nowrap;
-      }
-      .price-badge-button {
-        appearance: none;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        cursor: pointer;
-        font: inherit;
-      }
-      .price-badge-button:hover {
-        border-color: var(--accent);
-        transform: translateY(-1px);
-      }
-      .price-badge strong { color: #fff; font-weight: 700; }
-      .button {
-        appearance: none; border: 1px solid var(--border); background: var(--panel);
-        color: var(--text); padding: 10px 14px; border-radius: 12px; cursor: pointer;
-      }
-      .button:hover { border-color: var(--accent); }
-      .button.primary { background: rgba(0, 219, 188, 0.1); border-color: rgba(0, 219, 188, 0.5); }
-      .hero {
-        background: radial-gradient(circle at top right, rgba(0, 219, 188, 0.12), transparent 32%),
-                    linear-gradient(180deg, var(--panel), var(--panel-2));
-        border: 1px solid var(--border); border-radius: 24px; padding: 24px;
-        display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.7fr); gap: 20px;
-      }
-      .hero-copy { display: grid; align-content: start; }
-      .eyebrow { color: var(--accent); letter-spacing: .18em; text-transform: uppercase; font-size: 12px; margin-bottom: 8px; }
-      h1 { margin: 0; font-size: clamp(32px, 4vw, 48px); }
-      .hero p { color: var(--muted); margin: 12px 0 0; }
-      .hero-meta {
-        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
-      }
-      .hero-meta div, .card {
-        background: rgba(6, 10, 16, 0.45);
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        padding: 14px;
-      }
-      .hero-meta strong, .card-label {
-        display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
-      }
-      .hero-meta span, .card-value {
-        display: block; margin-top: 8px; font-size: 18px; font-weight: 700;
-      }
-      .card-button {
-        width: 100%;
-        text-align: left;
-        cursor: pointer;
-        appearance: none;
-        position: relative;
-        overflow: hidden;
-        padding-right: 46px;
-      }
-      .card-button:hover {
-        border-color: rgba(0, 219, 188, 0.7);
-        transform: translateY(-1px);
-      }
-      .card-button:focus-visible,
-      .button:focus-visible {
-        outline: 2px solid var(--accent);
-        outline-offset: 2px;
-      }
-      .card-subtext { color: var(--muted); margin-top: 6px; font-size: 12px; word-break: break-word; }
-      .card-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        margin-top: 8px;
-        padding: 4px 9px;
-        border-radius: 999px;
-        border: 1px solid rgba(0, 219, 188, 0.26);
-        background: rgba(0, 219, 188, 0.08);
-        color: #bffbf1;
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        width: fit-content;
-        max-width: 100%;
-      }
-      .card-badge span {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .card-info-badge {
-        position: absolute;
-        top: 12px;
-        right: 12px;
-        width: 22px;
-        height: 22px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 999px;
-        border: 1px solid rgba(143, 163, 184, 0.45);
-        background: rgba(0, 0, 0, 0.2);
-        color: var(--muted);
-        font-size: 11px;
-        font-weight: 700;
-        pointer-events: none;
-      }
-      .positive .card-value { color: var(--positive); }
-      .negative .card-value { color: var(--negative); }
-      .section { margin-top: 24px; }
-      .section h2 { margin: 0 0 12px; font-size: 20px; }
-      .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-      .grid.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .grid.stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-      .chart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-      .panel {
-        background: rgba(16, 23, 34, 0.88);
-        border: 1px solid var(--border);
-        border-radius: 20px;
-        padding: 16px;
-      }
-      .panel h3 { margin: 0 0 14px; font-size: 16px; }
-      .section-copy {
-        margin: 0 0 12px;
-      }
-      .section-copy p {
-        margin: 6px 0 0;
-        color: var(--muted);
-      }
-      .signal-panel {
-        display: grid;
-        gap: 14px;
-        padding: 20px;
-      }
-      .signal-panel.positive {
-        border-color: rgba(29, 185, 84, 0.45);
-        background: linear-gradient(180deg, rgba(29, 185, 84, 0.10), rgba(16, 23, 34, 0.92));
-      }
-      .signal-panel.negative {
-        border-color: rgba(255, 107, 107, 0.45);
-        background: linear-gradient(180deg, rgba(255, 107, 107, 0.10), rgba(16, 23, 34, 0.92));
-      }
-      .signal-panel.neutral {
-        border-color: rgba(143, 163, 184, 0.28);
-        background: linear-gradient(180deg, rgba(0, 219, 188, 0.06), rgba(16, 23, 34, 0.92));
-      }
-      .signal-panel-head {
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        align-items: start;
-      }
-      .signal-panel h2 { margin: 0; font-size: 26px; }
-      .signal-panel p { margin: 8px 0 0; color: var(--muted); }
-      .signal-badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 10px 14px;
-        border-radius: 999px;
-        border: 1px solid rgba(143, 163, 184, 0.22);
-        background: rgba(6, 10, 16, 0.45);
-        color: var(--text);
-        font-weight: 700;
-        white-space: nowrap;
-      }
-      .signal-bullets {
-        margin: 0;
-        padding-left: 18px;
-        color: var(--text);
-        display: grid;
-        gap: 6px;
-      }
-      .signal-hint {
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .signal-grid {
-        margin-top: 14px;
-      }
-      .watchlist-section {
-        margin-top: 16px;
-      }
-      .wallet-section {
-        margin-top: 16px;
-      }
-      .financial-panel {
-        margin-top: 16px;
-        border: 1px solid var(--border);
-        border-radius: 20px;
-        background: rgba(10, 15, 23, 0.72);
-        overflow: hidden;
-      }
-      .financial-panel > summary {
-        list-style: none;
-        cursor: pointer;
-        padding: 16px 18px;
-        font-weight: 700;
-        color: var(--text);
-        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-      .financial-panel > summary::-webkit-details-marker {
-        display: none;
-      }
-      .financial-panel > summary::before {
-        content: '▸';
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 16px;
-        height: 16px;
-        color: var(--accent);
-        transition: transform 0.18s ease;
-        flex: 0 0 auto;
-      }
-      .financial-panel[open] > summary::before {
-        transform: rotate(90deg);
-      }
-      .financial-panel[open] > summary {
-        border-bottom-color: rgba(143, 163, 184, 0.18);
-      }
-      .financial-panel-body {
-        padding: 16px;
-      }
-      .chart-frame {
-        position: relative;
-        width: 100%;
-        height: 240px;
-      }
-      .chart-frame.modal {
-        height: 420px;
-      }
-      .chart-note {
-        margin-top: 8px;
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.4;
-      }
-      .range-switcher {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-      .range-switcher .range-button {
-        padding: 8px 12px;
-        border-radius: 999px;
-        font-size: 12px;
-        letter-spacing: .06em;
-        text-transform: uppercase;
-      }
-      .range-switcher .range-button.active {
-        background: rgba(0, 219, 188, 0.14);
-        border-color: rgba(0, 219, 188, 0.65);
-      }
-      .window-shift-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin: 0 0 14px;
-      }
-      .window-shift-row .window-button {
-        min-width: 92px;
-        border-radius: 999px;
-        font-size: 12px;
-        letter-spacing: .06em;
-        text-transform: uppercase;
-      }
-      .window-shift-center {
-        flex: 1;
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 6px;
-      }
-      .window-shift-label {
-        text-align: center;
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.4;
-      }
-      .chart-frame canvas {
-        display: block;
-        width: 100% !important;
-        height: 100% !important;
-      }
-      .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 16px; }
-      table { width: 100%; border-collapse: collapse; min-width: 900px; background: rgba(16, 23, 34, 0.88); }
-      th, td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; }
-      th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-      .empty { color: var(--muted); padding: 16px; }
-      .empty[data-status=\"warning\"] { color: #f59e0b; }
-      .empty[data-status=\"error\"] { color: #f87171; }
-      .empty[data-status=\"success\"] { color: #34d399; }
-      .muted { color: var(--muted); }
-      .stack { display: grid; gap: 14px; }
-      .footer { margin-top: 18px; color: var(--muted); font-size: 13px; display: flex; gap: 18px; flex-wrap: wrap; }
-      .modal-backdrop {
-        position: fixed;
-        inset: 0;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        padding: 24px;
-        background: rgba(3, 7, 12, 0.78);
-        backdrop-filter: blur(8px);
-        z-index: 40;
-      }
-      .modal-backdrop.open { display: flex; }
-      .modal-panel {
-        width: min(1100px, 100%);
-        max-height: min(90vh, 980px);
-        overflow: auto;
-        border: 1px solid var(--border);
-        border-radius: 24px;
-        background: linear-gradient(180deg, rgba(16, 23, 34, 0.98), rgba(19, 29, 43, 0.98));
-        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.4);
-        padding: 20px;
-      }
-      .modal-header {
-        display: flex;
-        gap: 16px;
-        justify-content: space-between;
-        align-items: start;
-        margin-bottom: 16px;
-      }
-      .modal-header h3 {
-        margin: 0;
-        font-size: 22px;
-      }
-      .modal-header p {
-        margin: 8px 0 0;
-        color: var(--muted);
-      }
-      .modal-title-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      .info-button {
-        appearance: none;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 30px;
-        height: 30px;
-        border-radius: 999px;
-        border: 1px solid var(--border);
-        background: rgba(0, 219, 188, 0.08);
-        color: var(--text);
-        cursor: pointer;
-        font-weight: 700;
-        line-height: 1;
-        flex: 0 0 auto;
-      }
-      .info-button:hover {
-        border-color: var(--accent);
-      }
-      .modal-explanation {
-        margin-top: 12px;
-        padding: 12px 14px;
-        border: 1px solid rgba(0, 219, 188, 0.2);
-        border-radius: 16px;
-        background: rgba(0, 219, 188, 0.06);
-        color: var(--text);
-      }
-      .modal-explanation[hidden] {
-        display: none;
-      }
-      .modal-wallet-details {
-        margin-top: 12px;
-        padding: 14px;
-        border: 1px solid rgba(143, 163, 184, 0.18);
-        border-radius: 16px;
-        background: rgba(11, 16, 26, 0.55);
-      }
-      .modal-wallet-details[hidden] {
-        display: none;
-      }
-      .wallet-details-title {
-        margin: 0 0 12px;
-        font-size: 15px;
-        letter-spacing: 0.02em;
-        color: var(--muted);
-        text-transform: uppercase;
-      }
-      .wallet-breakdown-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-        gap: 12px;
-      }
-      .wallet-breakdown-card {
-        padding: 12px 14px;
-        border-radius: 14px;
-        border: 1px solid rgba(143, 163, 184, 0.16);
-        background: rgba(255, 255, 255, 0.02);
-      }
-      .wallet-breakdown-card .label {
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-      .wallet-breakdown-card .value {
-        margin-top: 6px;
-        font-size: 22px;
-        font-weight: 700;
-        color: var(--text);
-      }
-      .wallet-breakdown-card .subtext {
-        margin-top: 4px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .wallet-positions {
-        margin-top: 16px;
-      }
-      .wallet-profile {
-        margin-top: 16px;
-      }
-      .wallet-hotkeys {
-        margin: 0 0 14px;
-      }
-      .wallet-hotkey-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-      }
-      .wallet-hotkey-pill {
-        display: inline-flex;
-        flex-direction: column;
-        gap: 2px;
-        min-width: 180px;
-        padding: 10px 12px;
-        border-radius: 12px;
-        border: 1px solid rgba(143, 163, 184, 0.16);
-        background: rgba(255, 255, 255, 0.03);
-      }
-      .wallet-hotkey-pill strong {
-        font-size: 13px;
-        color: var(--text);
-        font-weight: 700;
-      }
-      .wallet-hotkey-pill small {
-        font-size: 11px;
-        color: var(--muted);
-        line-height: 1.35;
-      }
-      .wallet-positions-scroll {
-        max-height: 320px;
-        overflow: auto;
-        border: 1px solid rgba(143, 163, 184, 0.12);
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.02);
-      }
-      .wallet-positions-table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      .wallet-positions-table th,
-      .wallet-positions-table td {
-        padding: 10px 8px;
-        text-align: left;
-        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
-      }
-      .wallet-positions-table th {
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--muted);
-        position: sticky;
-        top: 0;
-        background: rgba(11, 16, 26, 0.95);
-        backdrop-filter: blur(8px);
-        z-index: 1;
-      }
-      .wallet-positions-table td {
-        font-size: 13px;
-      }
-      .wallet-positions-table tr:last-child td {
-        border-bottom: none;
-      }
-      .wallet-positions-empty {
-        color: var(--muted);
-        padding: 6px 0 0;
-      }
-      .wallet-breakdown-row {
-        display: flex;
-        gap: 12px;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        padding-bottom: 2px;
-      }
-      .wallet-breakdown-row .wallet-breakdown-card {
-        min-width: 150px;
-        flex: 1 0 0;
-      }
-      .wallet-positions-head {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      .wallet-current-stake-row {
-        display: flex;
-        gap: 10px;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        padding-bottom: 2px;
-      }
-      .wallet-current-stake-card {
-        min-width: 210px;
-        flex: 0 0 auto;
-        padding: 12px 14px;
-        border-radius: 14px;
-        border: 1px solid rgba(143, 163, 184, 0.16);
-        background: rgba(255, 255, 255, 0.03);
-      }
-      .wallet-current-stake-card .label {
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-      .wallet-current-stake-card .value {
-        margin-top: 6px;
-        font-size: 18px;
-        font-weight: 700;
-        color: var(--text);
-      }
-      .wallet-current-stake-card .subtext {
-        margin-top: 4px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .wallet-history-details {
-        margin-top: 14px;
-        padding: 12px 14px;
-        border: 1px solid rgba(143, 163, 184, 0.14);
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.02);
-      }
-      .wallet-history-details > summary {
-        cursor: pointer;
-        list-style: none;
-        font-size: 13px;
-        font-weight: 700;
-        color: var(--text);
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-      .wallet-history-details > summary::-webkit-details-marker {
-        display: none;
-      }
-      .wallet-history-details > summary::before {
-        content: '▸';
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 16px;
-        height: 16px;
-        color: var(--accent);
-        transition: transform 0.18s ease;
-        flex: 0 0 auto;
-      }
-      .wallet-history-details[open] > summary::before {
-        transform: rotate(90deg);
-      }
-      .wallet-history-note {
-        margin: 8px 0 10px;
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .wallet-history-scroll {
-        max-height: 280px;
-      }
-      .wallet-history-delta {
-        font-variant-numeric: tabular-nums;
-        font-weight: 700;
-      }
-      .wallet-history-delta.positive {
-        color: #34d399;
-      }
-      .wallet-history-delta.negative {
-        color: #f87171;
-      }
-      .wallet-history-delta.neutral {
-        color: var(--muted);
-      }
-      .modal-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
-        margin-bottom: 16px;
-      }
-      .modal-chart {
-        min-height: 360px;
-      }
-      .admin-panel {
-        margin-top: 16px;
-        border: 1px solid var(--border);
-        border-radius: 20px;
-        background: rgba(10, 15, 23, 0.72);
-        overflow: hidden;
-      }
-      .admin-panel > summary {
-        list-style: none;
-        cursor: pointer;
-        padding: 16px 18px;
-        font-weight: 700;
-        color: var(--text);
-        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-      .admin-panel > summary::-webkit-details-marker {
-        display: none;
-      }
-      .admin-panel > summary::before {
-        content: '▸';
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 16px;
-        height: 16px;
-        color: var(--accent);
-        transition: transform 0.18s ease;
-        flex: 0 0 auto;
-      }
-      .admin-panel[open] > summary::before {
-        transform: rotate(90deg);
-      }
-      .admin-panel[open] > summary {
-        border-bottom-color: rgba(143, 163, 184, 0.18);
-      }
-      .admin-panel-body {
-        padding: 16px;
-      }
-      .admin-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin-bottom: 16px;
-      }
-      .admin-form {
-        display: grid;
-        gap: 12px;
-        margin-bottom: 16px;
-      }
-      .admin-form-row {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 12px;
-      }
-      .admin-form label {
-        display: grid;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 13px;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-      }
-      .admin-form input,
-      .admin-form select {
-        width: 100%;
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        background: rgba(6, 10, 16, 0.85);
-        color: var(--text);
-        padding: 10px 12px;
-        font: inherit;
-      }
-      .admin-form .admin-checkbox {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 14px;
-        letter-spacing: 0;
-        text-transform: none;
-        color: var(--text);
-      }
-      .admin-form .admin-checkbox input {
-        width: auto;
-        margin: 0;
-      }
-      .admin-grid {
-        display: grid;
-        gap: 14px;
-      }
-      body.modal-open {
-        overflow: hidden;
-      }
-      @media (max-width: 1100px) {
-        .hero, .grid, .grid.stats, .chart-grid, .modal-grid { grid-template-columns: 1fr; }
-      }
-      @media (max-width: 700px) {
-        .shell { padding: 16px; }
-        .grid.compact { grid-template-columns: 1fr; }
-      }
-    </style>
-  </head>
-  <body>
-    <div class="shell" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}">
-      <div class="topbar">
-        <div class="muted">Local Taostats tracker for SN${netuid}</div>
-        <div class="actions">
-          <button class="price-badge price-badge-button" id="tao-price-label" type="button" aria-live="polite" title="Click to view TAO price history">${escapeHtml(taoPriceText)}</button>
-          <div class="price-badge next-poll-badge" id="next-poll-label" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" title="${escapeHtml(nextPollTitle)}">${escapeHtml(nextPollText)}</div>
-          <button class="button" id="currency-toggle" type="button" disabled>Show USD</button>
-          <div class="poll-switcher" role="tablist" aria-label="Polling interval">
-            ${pollIntervalButtons}
-          </div>
-          <button class="button primary" id="refresh-btn">Refresh now</button>
-        </div>
-      </div>
-
-      ${latestCard}
-
-      ${renderWalletSection(walletEntries)}
-
-      ${renderFinancialPerspectiveSection(signal, insight)}
-
-      <section class="section">
-        <h2>Key metrics</h2>
-        <div class="grid">${cards}</div>
-      </section>
-
-      <section class="section">
-        <h2>Subnet stats</h2>
-        <div class="grid stats">${latest ? renderSubnetDataCards(latest) : ''}</div>
-      </section>
-
-      <section class="section">
-        <h2>What changed in the last 24h</h2>
-        ${renderComparisonSection(comparisons)}
-      </section>
-
-      <section class="section">
-        <h2>Trend charts</h2>
-        <div class="chart-grid">
-          <div class="panel"><h3>Token Price</h3><div class="chart-frame"><canvas id="price-chart"></canvas></div><div class="chart-note" id="price-chart-note" hidden></div></div>
-          <div class="panel"><h3>Money In/Out (1d)</h3><div class="chart-frame"><canvas id="net-flow-1d-chart"></canvas></div><div class="chart-note" id="net-flow-1d-chart-note" hidden></div></div>
-          <div class="panel"><h3>Subnet Sentiment (SSI)</h3><div class="chart-frame"><canvas id="sentiment-chart"></canvas></div><div class="chart-note" id="sentiment-chart-note" hidden></div></div>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Supporting charts</h2>
-        <div class="chart-grid">
-          <div class="panel"><h3>Emission Rate</h3><div class="chart-frame"><canvas id="emission-rate-chart"></canvas></div><div class="chart-note" id="emission-rate-chart-note" hidden></div></div>
-          <div class="panel"><h3>Subnet Market Cap</h3><div class="chart-frame"><canvas id="market-cap-chart"></canvas></div><div class="chart-note" id="market-cap-chart-note" hidden></div></div>
-          <div class="panel"><h3>Pool Liquidity</h3><div class="chart-frame"><canvas id="liquidity-chart"></canvas></div><div class="chart-note" id="liquidity-chart-note" hidden></div></div>
-        </div>
-      </section>
-
-      ${renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun })}
-
-      <div class="footer">
-        <div>Database snapshots: ${totalSnapshots}</div>
-        <div>Wallet snapshots: ${totalWalletSnapshots}</div>
-        <div>Poll interval: <span id="poll-interval-label">${escapeHtml(formatPollInterval(config.pollIntervalMinutes))}</span></div>
-        <div>API source: ${config.taostatsAuthHeader ? 'enabled' : 'disabled'}</div>
-      </div>
-    </div>
-
-    <div class="modal-backdrop" id="history-modal" aria-hidden="true">
-      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="history-modal-title">
-        <div class="modal-header">
-          <div>
-            <div class="eyebrow">Historical snapshot chart</div>
-            <div class="modal-title-row">
-              <h3 id="history-modal-title">Select a metric</h3>
-              <button class="info-button" type="button" id="history-modal-info" aria-label="Show metric explanation" title="Show metric explanation" hidden>i</button>
-            </div>
-            <p id="history-modal-subtitle">Click a latest snapshot card to open its historical view.</p>
-          </div>
-          <button class="button" type="button" id="history-modal-close">Close</button>
-        </div>
-        <div class="modal-explanation" id="history-modal-explanation" hidden></div>
-        <div class="modal-wallet-details" id="history-modal-wallet-details" hidden></div>
-        <div class="window-shift-row">
-          <button class="button window-button" type="button" id="history-window-prev" aria-label="Show an earlier 24 hour window">← 24H</button>
-          <div class="window-shift-center">
-            <div class="range-switcher" role="tablist" aria-label="Historical range">
-              <button class="button range-button" type="button" data-history-range="1" aria-pressed="false">24H</button>
-              <button class="button range-button" type="button" data-history-range="7" aria-pressed="false">7D</button>
-              <button class="button range-button" type="button" data-history-range="14" aria-pressed="false">14D</button>
-              <button class="button range-button active" type="button" data-history-range="30" aria-pressed="true">30D</button>
-              <button class="button range-button" type="button" data-history-range="60" aria-pressed="false">60D</button>
-            </div>
-            <div class="window-shift-label" id="history-window-label">Use ← / → to move the visible window by 24 hours.</div>
-          </div>
-          <button class="button window-button" type="button" id="history-window-next" aria-label="Show a later 24 hour window">24H →</button>
-        </div>
-        <div class="modal-grid">
-          <section class="card">
-            <div class="card-label">Latest value</div>
-            <div class="card-value" id="history-modal-latest-value">—</div>
-            <div class="card-subtext" id="history-modal-latest-raw"></div>
-          </section>
-          <section class="card">
-            <div class="card-label">Samples</div>
-            <div class="card-value" id="history-modal-samples">—</div>
-            <div class="card-subtext" id="history-modal-samples-note">Stored historical points in the selected range</div>
-          </section>
-          <section class="card">
-            <div class="card-label">Latest capture</div>
-            <div class="card-value" id="history-modal-captured">—</div>
-            <div class="card-subtext">Newest value from the local SQLite history</div>
-          </section>
-        </div>
-        <div class="panel modal-chart">
-          <h3 id="history-modal-chart-title">Historical chart</h3>
-          <div class="chart-frame modal"><canvas id="history-modal-canvas"></canvas></div>
-          <div class="chart-note" id="history-modal-note" hidden></div>
-          <p class="empty" id="history-modal-empty" hidden></p>
-        </div>
-      </div>
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+function renderDashboardClientScript({ netuid, config }) {
+  return `    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script>
       const netuid = ${JSON.stringify(netuid)};
       const shell = document.querySelector('.shell');
@@ -2419,6 +1500,7 @@ function renderPage(model) {
         latestTaoPriceUsd: Number(shell?.dataset.taoPriceUsd || ''),
         nextPollAtIso: shell?.dataset.nextPollAt || null,
         pollIntervalMinutes: ${JSON.stringify(config.pollIntervalMinutes)},
+        adminApiKey: ${JSON.stringify(config.taostatsAdminApiKey || '')},
         history: null,
         flowHistory: null,
         walletStakeHistory: null,
@@ -2448,6 +1530,13 @@ function renderPage(model) {
           .replaceAll('>', '&gt;')
           .replaceAll('"', '&quot;')
           .replaceAll("'", '&#39;');
+      }
+
+      function adminFetchHeaders(contentType = 'application/json') {
+        const headers = {};
+        if (contentType) headers['content-type'] = contentType;
+        if (state.adminApiKey) headers['x-admin-api-key'] = state.adminApiKey;
+        return headers;
       }
 
       function shortAddress(address) {
@@ -3045,25 +2134,6 @@ function renderPage(model) {
         };
       }
 
-      function formatNextPollCountdown(target) {
-        const targetTime = target instanceof Date ? target.getTime() : Number(target);
-        if (!Number.isFinite(targetTime)) return '—';
-        const diffMs = targetTime - Date.now();
-        if (Math.abs(diffMs) < 30000) return 'now';
-        const absMs = Math.abs(diffMs);
-        const minutes = Math.floor(absMs / 60000);
-        const hours = Math.floor(minutes / 60);
-        const days = Math.floor(hours / 24);
-        const remainderHours = hours % 24;
-        const remainderMinutes = minutes % 60;
-        const parts = [];
-        if (days) parts.push(days + 'd');
-        if (remainderHours && parts.length < 2) parts.push(remainderHours + 'h');
-        if (remainderMinutes && parts.length < 2) parts.push(remainderMinutes + 'm');
-        if (!parts.length) parts.push('1m');
-        return diffMs > 0 ? 'in ' + parts.join(' ') : parts.join(' ') + ' ago';
-      }
-
       function updateNextPollLabel() {
         if (!nextPollLabel) return;
         const nextPollAt = state.nextPollAtIso ? new Date(state.nextPollAtIso) : null;
@@ -3074,8 +2144,9 @@ function renderPage(model) {
           return;
         }
         nextPollLabel.dataset.nextPollAt = state.nextPollAtIso;
-        nextPollLabel.textContent = 'Next poll: ' + formatNextPollCountdown(nextPollAt);
-        nextPollLabel.title = 'Scheduled for ' + nextPollAt.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+        const localText = nextPollAt.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+        nextPollLabel.textContent = 'Next poll: ' + localText;
+        nextPollLabel.title = 'Scheduled for ' + localText;
       }
 
       function updateBackfillStatus(message, kind = 'info') {
@@ -3111,7 +2182,7 @@ function renderPage(model) {
         try {
           const response = await fetch('/api/subnets/' + netuid + '/backfill', {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: adminFetchHeaders(),
             body: JSON.stringify(options),
           });
           const payload = await response.json().catch(() => ({}));
@@ -3192,7 +2263,7 @@ function renderPage(model) {
         try {
           const response = await fetch('/api/settings/poll-interval', {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: adminFetchHeaders(),
             body: JSON.stringify({ minutes }),
           });
           const payload = await response.json().catch(() => ({}));
@@ -4173,8 +3244,12 @@ function renderPage(model) {
         });
       }
 
-      document.getElementById('refresh-btn').addEventListener('click', async () => {
-        const response = await fetch('/api/subnets/' + netuid + '/ingest', { method: 'POST' });
+      const refreshButton = document.getElementById('refresh-btn');
+      refreshButton?.addEventListener('click', async () => {
+        const response = await fetch('/api/subnets/' + netuid + '/ingest', {
+          method: 'POST',
+          headers: adminFetchHeaders(null),
+        });
         if (!response.ok) {
           alert('Ingest failed');
           return;
@@ -4300,6 +3375,953 @@ function renderPage(model) {
         syncCurrencyMode();
       }).catch((error) => console.error(error));
     </script>
+`;
+}
+
+function renderPage(model) {
+  const { latest, recent, ingestRun, totalSnapshots, totalWalletSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso, walletEntries } = model;
+  const latestMetricDefs = getLatestMetricDefs();
+  const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
+  const insight = buildInsightSummary(latest, comparisons, signal);
+  const title = `SN${netuid} Tracker`;
+  const subtitle = latest
+    ? `Latest snapshot captured ${formatRelativeIso(latest.captured_at)}`
+    : 'No snapshots captured yet';
+
+  const cards = latest ? renderLatestSnapshotCards(latest, latestMetricDefs) : '';
+  const pollIntervalButtons = POLL_INTERVAL_OPTIONS.map((minutes) => {
+    const active = Number(config.pollIntervalMinutes) === minutes;
+    return `<button class="button poll-button${active ? ' active' : ''}" type="button" data-poll-interval="${minutes}" aria-pressed="${active ? 'true' : 'false'}">${minutes / 60}h</button>`;
+  }).join('');
+  const taoPriceText = Number.isFinite(Number(latestTaoPriceUsd))
+    ? `TAO price used: τ 1 ≈ ${formatUsd(latestTaoPriceUsd, 2)}`
+    : 'TAO price used: unavailable';
+  const nextPollText = nextPollAtIso ? `Next poll: ${formatPollTime(nextPollAtIso)}` : 'Next poll: —';
+  const nextPollTitle = nextPollAtIso ? `Scheduled for ${formatIso(nextPollAtIso)}` : 'Poll schedule unavailable';
+
+  const latestRunCard = ingestRun
+    ? metricCard({
+        label: 'Latest ingest',
+        value: ingestRun.ok ? 'OK' : 'Failed',
+        subtext: `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}${ingestRun.fallback_used ? ' • fallback used' : ''} • ${ingestRun.duration_ms} ms`,
+        tone: ingestRun.ok ? 'positive' : 'negative',
+      })
+    : metricCard({ label: 'Latest ingest', value: '—', subtext: 'No run yet' });
+
+  const latestCard = latest
+    ? `
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">Subnet SN${netuid}</div>
+          <h1>${escapeHtml(title)}</h1>
+          <p>${escapeHtml(subtitle)}</p>
+        </div>
+        <div class="hero-meta">
+          <div><strong>Snapshots</strong><span>${totalSnapshots}</span></div>
+          <div><strong>Latest block</strong><span>${escapeHtml(latest.block_number ?? '—')}</span></div>
+          <div><strong>Remote time</strong><span>${escapeHtml(formatIso(latest.remote_timestamp))}</span></div>
+          <div><strong>Source</strong><span>${escapeHtml(latest.source)}</span></div>
+        </div>
+      </section>
+    `
+    : `
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">Subnet SN${netuid}</div>
+          <h1>${escapeHtml(title)}</h1>
+          <p>${escapeHtml(subtitle)}</p>
+        </div>
+        <div class="hero-meta">
+          <div><strong>Snapshots</strong><span>${totalSnapshots}</span></div>
+          <div><strong>API key</strong><span>${config.taostatsAuthHeader ? 'configured' : 'not configured'}</span></div>
+          <div><strong>Poll interval</strong><span>${config.pollIntervalMinutes} min</span></div>
+        </div>
+      </section>
+    `;
+
+  return `<!doctype html>
+  <html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f14;
+        --panel: #101722;
+        --panel-2: #131d2b;
+        --border: #223043;
+        --text: #e7eef7;
+        --muted: #8fa3b8;
+        --positive: #1db954;
+        --negative: #ff6b6b;
+        --accent: #00dbbc;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: linear-gradient(180deg, #071019 0%, #0b0f14 100%);
+        color: var(--text);
+      }
+      a { color: var(--accent); }
+      .shell { max-width: 1480px; margin: 0 auto; padding: 28px; }
+      .topbar {
+        display: flex; justify-content: space-between; gap: 16px; align-items: center;
+        margin-bottom: 24px;
+      }
+      .topbar .actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .poll-switcher {
+        display: inline-flex;
+        gap: 6px;
+        padding: 4px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .poll-switcher .poll-button {
+        padding: 9px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+        min-width: 64px;
+      }
+      .poll-switcher .poll-button.active {
+        background: rgba(0, 219, 188, 0.14);
+        border-color: rgba(0, 219, 188, 0.65);
+      }
+      .price-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.03);
+        color: #cbd5e1;
+        font-size: 13px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      .price-badge-button {
+        appearance: none;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+        font: inherit;
+      }
+      .price-badge-button:hover {
+        border-color: var(--accent);
+        transform: translateY(-1px);
+      }
+      .price-badge strong { color: #fff; font-weight: 700; }
+      .button {
+        appearance: none; border: 1px solid var(--border); background: var(--panel);
+        color: var(--text); padding: 10px 14px; border-radius: 12px; cursor: pointer;
+      }
+      .button:hover { border-color: var(--accent); }
+      .button.primary { background: rgba(0, 219, 188, 0.1); border-color: rgba(0, 219, 188, 0.5); }
+      .hero {
+        background: radial-gradient(circle at top right, rgba(0, 219, 188, 0.12), transparent 32%),
+                    linear-gradient(180deg, var(--panel), var(--panel-2));
+        border: 1px solid var(--border); border-radius: 24px; padding: 24px;
+        display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.7fr); gap: 20px;
+      }
+      .hero-copy { display: grid; align-content: start; }
+      .eyebrow { color: var(--accent); letter-spacing: .18em; text-transform: uppercase; font-size: 12px; margin-bottom: 8px; }
+      h1 { margin: 0; font-size: clamp(32px, 4vw, 48px); }
+      .hero p { color: var(--muted); margin: 12px 0 0; }
+      .hero-meta {
+        display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+      }
+      .hero-meta div, .card {
+        background: rgba(6, 10, 16, 0.45);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 14px;
+      }
+      .hero-meta strong, .card-label {
+        display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+      }
+      .hero-meta span, .card-value {
+        display: block; margin-top: 8px; font-size: 18px; font-weight: 700;
+      }
+      .card-button {
+        width: 100%;
+        text-align: left;
+        cursor: pointer;
+        appearance: none;
+        position: relative;
+        overflow: hidden;
+        padding-right: 46px;
+      }
+      .card-button:hover {
+        border-color: rgba(0, 219, 188, 0.7);
+        transform: translateY(-1px);
+      }
+      .card-button:focus-visible,
+      .button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .card-subtext { color: var(--muted); margin-top: 6px; font-size: 12px; word-break: break-word; }
+      .card-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 8px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(0, 219, 188, 0.26);
+        background: rgba(0, 219, 188, 0.08);
+        color: #bffbf1;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        width: fit-content;
+        max-width: 100%;
+      }
+      .card-badge span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .card-info-badge {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 22px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        border: 1px solid rgba(143, 163, 184, 0.45);
+        background: rgba(0, 0, 0, 0.2);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        pointer-events: none;
+      }
+      .positive .card-value { color: var(--positive); }
+      .negative .card-value { color: var(--negative); }
+      .section { margin-top: 24px; }
+      .section h2 { margin: 0 0 12px; font-size: 20px; }
+      .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+      .grid.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid.stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .chart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+      .panel {
+        background: rgba(16, 23, 34, 0.88);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 16px;
+      }
+      .panel h3 { margin: 0 0 14px; font-size: 16px; }
+      .section-copy {
+        margin: 0 0 12px;
+      }
+      .section-copy p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .signal-panel {
+        display: grid;
+        gap: 14px;
+        padding: 20px;
+      }
+      .signal-panel.positive {
+        border-color: rgba(29, 185, 84, 0.45);
+        background: linear-gradient(180deg, rgba(29, 185, 84, 0.10), rgba(16, 23, 34, 0.92));
+      }
+      .signal-panel.negative {
+        border-color: rgba(255, 107, 107, 0.45);
+        background: linear-gradient(180deg, rgba(255, 107, 107, 0.10), rgba(16, 23, 34, 0.92));
+      }
+      .signal-panel.neutral {
+        border-color: rgba(143, 163, 184, 0.28);
+        background: linear-gradient(180deg, rgba(0, 219, 188, 0.06), rgba(16, 23, 34, 0.92));
+      }
+      .signal-panel-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: start;
+      }
+      .signal-panel h2 { margin: 0; font-size: 26px; }
+      .signal-panel p { margin: 8px 0 0; color: var(--muted); }
+      .signal-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(143, 163, 184, 0.22);
+        background: rgba(6, 10, 16, 0.45);
+        color: var(--text);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .signal-bullets {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--text);
+        display: grid;
+        gap: 6px;
+      }
+      .signal-hint {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .signal-grid {
+        margin-top: 14px;
+      }
+      .watchlist-section {
+        margin-top: 16px;
+      }
+      .wallet-section {
+        margin-top: 16px;
+      }
+      .financial-panel {
+        margin-top: 16px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        background: rgba(10, 15, 23, 0.72);
+        overflow: hidden;
+      }
+      .financial-panel > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 16px 18px;
+        font-weight: 700;
+        color: var(--text);
+        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .financial-panel > summary::-webkit-details-marker {
+        display: none;
+      }
+      .financial-panel > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .financial-panel[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .financial-panel[open] > summary {
+        border-bottom-color: rgba(143, 163, 184, 0.18);
+      }
+      .financial-panel-body {
+        padding: 16px;
+      }
+      .chart-frame {
+        position: relative;
+        width: 100%;
+        height: 240px;
+      }
+      .chart-frame.modal {
+        height: 420px;
+      }
+      .chart-note {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .range-switcher {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .range-switcher .range-button {
+        padding: 8px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+      }
+      .range-switcher .range-button.active {
+        background: rgba(0, 219, 188, 0.14);
+        border-color: rgba(0, 219, 188, 0.65);
+      }
+      .window-shift-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 0 14px;
+      }
+      .window-shift-row .window-button {
+        min-width: 92px;
+        border-radius: 999px;
+        font-size: 12px;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+      }
+      .window-shift-center {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      .window-shift-label {
+        text-align: center;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .chart-frame canvas {
+        display: block;
+        width: 100% !important;
+        height: 100% !important;
+      }
+      .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 16px; }
+      table { width: 100%; border-collapse: collapse; min-width: 900px; background: rgba(16, 23, 34, 0.88); }
+      th, td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; }
+      th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+      .empty { color: var(--muted); padding: 16px; }
+      .empty[data-status=\"warning\"] { color: #f59e0b; }
+      .empty[data-status=\"error\"] { color: #f87171; }
+      .empty[data-status=\"success\"] { color: #34d399; }
+      .muted { color: var(--muted); }
+      .stack { display: grid; gap: 14px; }
+      .footer { margin-top: 18px; color: var(--muted); font-size: 13px; display: flex; gap: 18px; flex-wrap: wrap; }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(3, 7, 12, 0.78);
+        backdrop-filter: blur(8px);
+        z-index: 40;
+      }
+      .modal-backdrop.open { display: flex; }
+      .modal-panel {
+        width: min(1100px, 100%);
+        max-height: min(90vh, 980px);
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        background: linear-gradient(180deg, rgba(16, 23, 34, 0.98), rgba(19, 29, 43, 0.98));
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.4);
+        padding: 20px;
+      }
+      .modal-header {
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+        align-items: start;
+        margin-bottom: 16px;
+      }
+      .modal-header h3 {
+        margin: 0;
+        font-size: 22px;
+      }
+      .modal-header p {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+      .modal-title-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .info-button {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(0, 219, 188, 0.08);
+        color: var(--text);
+        cursor: pointer;
+        font-weight: 700;
+        line-height: 1;
+        flex: 0 0 auto;
+      }
+      .info-button:hover {
+        border-color: var(--accent);
+      }
+      .modal-explanation {
+        margin-top: 12px;
+        padding: 12px 14px;
+        border: 1px solid rgba(0, 219, 188, 0.2);
+        border-radius: 16px;
+        background: rgba(0, 219, 188, 0.06);
+        color: var(--text);
+      }
+      .modal-explanation[hidden] {
+        display: none;
+      }
+      .modal-wallet-details {
+        margin-top: 12px;
+        padding: 14px;
+        border: 1px solid rgba(143, 163, 184, 0.18);
+        border-radius: 16px;
+        background: rgba(11, 16, 26, 0.55);
+      }
+      .modal-wallet-details[hidden] {
+        display: none;
+      }
+      .wallet-details-title {
+        margin: 0 0 12px;
+        font-size: 15px;
+        letter-spacing: 0.02em;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+      .wallet-breakdown-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 12px;
+      }
+      .wallet-breakdown-card {
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(143, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .wallet-breakdown-card .label {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .wallet-breakdown-card .value {
+        margin-top: 6px;
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .wallet-breakdown-card .subtext {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .wallet-positions {
+        margin-top: 16px;
+      }
+      .wallet-profile {
+        margin-top: 16px;
+      }
+      .wallet-hotkeys {
+        margin: 0 0 14px;
+      }
+      .wallet-hotkey-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .wallet-hotkey-pill {
+        display: inline-flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 180px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(143, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .wallet-hotkey-pill strong {
+        font-size: 13px;
+        color: var(--text);
+        font-weight: 700;
+      }
+      .wallet-hotkey-pill small {
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.35;
+      }
+      .wallet-positions-scroll {
+        max-height: 320px;
+        overflow: auto;
+        border: 1px solid rgba(143, 163, 184, 0.12);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .wallet-positions-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .wallet-positions-table th,
+      .wallet-positions-table td {
+        padding: 10px 8px;
+        text-align: left;
+        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+      }
+      .wallet-positions-table th {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        position: sticky;
+        top: 0;
+        background: rgba(11, 16, 26, 0.95);
+        backdrop-filter: blur(8px);
+        z-index: 1;
+      }
+      .wallet-positions-table td {
+        font-size: 13px;
+      }
+      .wallet-positions-table tr:last-child td {
+        border-bottom: none;
+      }
+      .wallet-positions-empty {
+        color: var(--muted);
+        padding: 6px 0 0;
+      }
+      .wallet-breakdown-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+      .wallet-breakdown-row .wallet-breakdown-card {
+        min-width: 150px;
+        flex: 1 0 0;
+      }
+      .wallet-positions-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .wallet-current-stake-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+      .wallet-current-stake-card {
+        min-width: 210px;
+        flex: 0 0 auto;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(143, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .wallet-current-stake-card .label {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .wallet-current-stake-card .value {
+        margin-top: 6px;
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .wallet-current-stake-card .subtext {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .wallet-history-details {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid rgba(143, 163, 184, 0.14);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .wallet-history-details > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .wallet-history-details > summary::-webkit-details-marker {
+        display: none;
+      }
+      .wallet-history-details > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .wallet-history-details[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .wallet-history-note {
+        margin: 8px 0 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .wallet-history-scroll {
+        max-height: 280px;
+      }
+      .wallet-history-delta {
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+      .wallet-history-delta.positive {
+        color: #34d399;
+      }
+      .wallet-history-delta.negative {
+        color: #f87171;
+      }
+      .wallet-history-delta.neutral {
+        color: var(--muted);
+      }
+      .modal-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+      .modal-chart {
+        min-height: 360px;
+      }
+      .admin-panel {
+        margin-top: 16px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        background: rgba(10, 15, 23, 0.72);
+        overflow: hidden;
+      }
+      .admin-panel > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 16px 18px;
+        font-weight: 700;
+        color: var(--text);
+        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .admin-panel > summary::-webkit-details-marker {
+        display: none;
+      }
+      .admin-panel > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .admin-panel[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .admin-panel[open] > summary {
+        border-bottom-color: rgba(143, 163, 184, 0.18);
+      }
+      .admin-panel-body {
+        padding: 16px;
+      }
+      .admin-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .admin-form {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .admin-form-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .admin-form label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .admin-form input,
+      .admin-form select {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(6, 10, 16, 0.85);
+        color: var(--text);
+        padding: 10px 12px;
+        font: inherit;
+      }
+      .admin-form .admin-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--text);
+      }
+      .admin-form .admin-checkbox input {
+        width: auto;
+        margin: 0;
+      }
+      .admin-grid {
+        display: grid;
+        gap: 14px;
+      }
+      body.modal-open {
+        overflow: hidden;
+      }
+      @media (max-width: 1100px) {
+        .hero, .grid, .grid.stats, .chart-grid, .modal-grid { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 700px) {
+        .shell { padding: 16px; }
+        .grid.compact { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}">
+      <div class="topbar">
+        <div class="muted">Local Taostats tracker for SN${netuid}</div>
+        <div class="actions">
+          <button class="price-badge price-badge-button" id="tao-price-label" type="button" aria-live="polite" title="Click to view TAO price history">${escapeHtml(taoPriceText)}</button>
+          <div class="price-badge next-poll-badge" id="next-poll-label" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" title="${escapeHtml(nextPollTitle)}">${escapeHtml(nextPollText)}</div>
+          <button class="button" id="currency-toggle" type="button" disabled>Show USD</button>
+        </div>
+      </div>
+
+      ${latestCard}
+
+      ${renderWalletSection(walletEntries)}
+
+      ${renderFinancialPerspectiveSection(signal, insight)}
+
+      <section class="section">
+        <h2>Key metrics</h2>
+        <div class="grid">${cards}</div>
+      </section>
+
+      <section class="section">
+        <h2>Subnet stats</h2>
+        <div class="grid stats">${latest ? renderSubnetDataCards(latest) : ''}</div>
+      </section>
+
+      <section class="section">
+        <h2>What changed in the last 24h</h2>
+        ${renderComparisonSection(comparisons)}
+      </section>
+
+      <section class="section">
+        <h2>Trend charts</h2>
+        <div class="chart-grid">
+          <div class="panel"><h3>Token Price</h3><div class="chart-frame"><canvas id="price-chart"></canvas></div><div class="chart-note" id="price-chart-note" hidden></div></div>
+          <div class="panel"><h3>Money In/Out (1d)</h3><div class="chart-frame"><canvas id="net-flow-1d-chart"></canvas></div><div class="chart-note" id="net-flow-1d-chart-note" hidden></div></div>
+          <div class="panel"><h3>Subnet Sentiment (SSI)</h3><div class="chart-frame"><canvas id="sentiment-chart"></canvas></div><div class="chart-note" id="sentiment-chart-note" hidden></div></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Supporting charts</h2>
+        <div class="chart-grid">
+          <div class="panel"><h3>Emission Rate</h3><div class="chart-frame"><canvas id="emission-rate-chart"></canvas></div><div class="chart-note" id="emission-rate-chart-note" hidden></div></div>
+          <div class="panel"><h3>Subnet Market Cap</h3><div class="chart-frame"><canvas id="market-cap-chart"></canvas></div><div class="chart-note" id="market-cap-chart-note" hidden></div></div>
+          <div class="panel"><h3>Pool Liquidity</h3><div class="chart-frame"><canvas id="liquidity-chart"></canvas></div><div class="chart-note" id="liquidity-chart-note" hidden></div></div>
+        </div>
+      </section>
+
+      ${renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons })}
+
+      <div class="footer">
+        <div>Database snapshots: ${totalSnapshots}</div>
+        <div>Wallet snapshots: ${totalWalletSnapshots}</div>
+        <div>Poll interval: <span id="poll-interval-label">${escapeHtml(formatPollInterval(config.pollIntervalMinutes))}</span></div>
+        <div>API source: ${config.taostatsAuthHeader ? 'enabled' : 'disabled'}</div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="history-modal" aria-hidden="true">
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="history-modal-title">
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">Historical snapshot chart</div>
+            <div class="modal-title-row">
+              <h3 id="history-modal-title">Select a metric</h3>
+              <button class="info-button" type="button" id="history-modal-info" aria-label="Show metric explanation" title="Show metric explanation" hidden>i</button>
+            </div>
+            <p id="history-modal-subtitle">Click a latest snapshot card to open its historical view.</p>
+          </div>
+          <button class="button" type="button" id="history-modal-close">Close</button>
+        </div>
+        <div class="modal-explanation" id="history-modal-explanation" hidden></div>
+        <div class="modal-wallet-details" id="history-modal-wallet-details" hidden></div>
+        <div class="window-shift-row">
+          <button class="button window-button" type="button" id="history-window-prev" aria-label="Show an earlier 24 hour window">← 24H</button>
+          <div class="window-shift-center">
+            <div class="range-switcher" role="tablist" aria-label="Historical range">
+              <button class="button range-button" type="button" data-history-range="1" aria-pressed="false">24H</button>
+              <button class="button range-button" type="button" data-history-range="7" aria-pressed="false">7D</button>
+              <button class="button range-button" type="button" data-history-range="14" aria-pressed="false">14D</button>
+              <button class="button range-button active" type="button" data-history-range="30" aria-pressed="true">30D</button>
+              <button class="button range-button" type="button" data-history-range="60" aria-pressed="false">60D</button>
+            </div>
+            <div class="window-shift-label" id="history-window-label">Use ← / → to move the visible window by 24 hours.</div>
+          </div>
+          <button class="button window-button" type="button" id="history-window-next" aria-label="Show a later 24 hour window">24H →</button>
+        </div>
+        <div class="modal-grid">
+          <section class="card">
+            <div class="card-label">Latest value</div>
+            <div class="card-value" id="history-modal-latest-value">—</div>
+            <div class="card-subtext" id="history-modal-latest-raw"></div>
+          </section>
+          <section class="card">
+            <div class="card-label">Samples</div>
+            <div class="card-value" id="history-modal-samples">—</div>
+            <div class="card-subtext" id="history-modal-samples-note">Stored historical points in the selected range</div>
+          </section>
+          <section class="card">
+            <div class="card-label">Latest capture</div>
+            <div class="card-value" id="history-modal-captured">—</div>
+            <div class="card-subtext">Newest value from the local SQLite history</div>
+          </section>
+        </div>
+        <div class="panel modal-chart">
+          <h3 id="history-modal-chart-title">Historical chart</h3>
+          <div class="chart-frame modal"><canvas id="history-modal-canvas"></canvas></div>
+          <div class="chart-note" id="history-modal-note" hidden></div>
+          <p class="empty" id="history-modal-empty" hidden></p>
+        </div>
+      </div>
+    </div>
+
+      ${renderDashboardClientScript({ netuid, config })}
   </body>
   </html>`;
 }
@@ -4411,6 +4433,12 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
       }
 
       if (req.method === 'POST' && url.pathname === `/api/subnets/${netuid}/ingest`) {
+        const authError = requireAdminApiKey(req, config);
+        if (authError) {
+          res.writeHead(authError.status, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: authError.error }, null, 2));
+          return;
+        }
         const result = await ingestService.ingestOnce({ netuid });
         const status = result.ok ? 200 : 500;
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
@@ -4419,6 +4447,12 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
       }
 
       if (req.method === 'POST' && url.pathname === `/api/subnets/${netuid}/backfill`) {
+        const authError = requireAdminApiKey(req, config);
+        if (authError) {
+          res.writeHead(authError.status, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: authError.error }, null, 2));
+          return;
+        }
         const payload = await readJsonBody(req);
         const backfill = await ingestService.backfillHistoricalSnapshots({ netuid, ...parseBackfillOptions(payload, config) });
         const live = await ingestService.ingestOnce({ netuid });
@@ -4437,6 +4471,12 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
       }
 
       if (req.method === 'POST' && url.pathname === '/api/settings/poll-interval') {
+        const authError = requireAdminApiKey(req, config);
+        if (authError) {
+          res.writeHead(authError.status, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: authError.error }, null, 2));
+          return;
+        }
         const payload = await readJsonBody(req);
         const minutes = Number.parseInt(String(payload.minutes ?? ''), 10);
         if (!POLL_INTERVAL_OPTIONS.includes(minutes)) {
