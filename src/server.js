@@ -1499,11 +1499,15 @@ function renderDashboardClientScript({ netuid, config }) {
         displayCurrency: localStorage.getItem('sn110-display-currency') === 'usd' ? 'usd' : 'tao',
         latestTaoPriceUsd: Number(shell?.dataset.taoPriceUsd || ''),
         nextPollAtIso: shell?.dataset.nextPollAt || null,
+        latestSnapshotSignature: shell?.dataset.latestSnapshotSignature || '',
+        latestIngestRunId: shell?.dataset.latestIngestRunId || '',
         pollIntervalMinutes: ${JSON.stringify(config.pollIntervalMinutes)},
         adminApiKey: ${JSON.stringify(config.taostatsAdminApiKey || '')},
         history: null,
         flowHistory: null,
         walletStakeHistory: null,
+        pendingLiveReload: false,
+        liveRefreshInFlight: false,
         loading: null,
         historyCache: new Map(),
         historyLoading: new Map(),
@@ -2154,6 +2158,23 @@ function renderDashboardClientScript({ netuid, config }) {
         nextPollLabel.title = 'Scheduled for ' + localText;
       }
 
+      function snapshotSignatureFromPayload(latest) {
+        if (!latest) return '';
+        return [latest.captured_at || '', latest.block_number ?? '', latest.source || ''].join('|');
+      }
+
+      function ingestRunIdFromPayload(ingestRun) {
+        if (!ingestRun) return '';
+        return String(ingestRun.id ?? ingestRun.run_id ?? ingestRun.started_at ?? '');
+      }
+
+      function requestDashboardReload() {
+        state.pendingLiveReload = true;
+        if (document.visibilityState === 'visible' && !modalElements.backdrop.classList.contains('open')) {
+          window.location.reload();
+        }
+      }
+
       function updateBackfillStatus(message, kind = 'info') {
         if (!backfillStatus) return;
         if (!message) {
@@ -2228,6 +2249,31 @@ function renderDashboardClientScript({ netuid, config }) {
           updateNextPollLabel();
         } catch (error) {
           console.error(error);
+        }
+      }
+
+      async function syncLiveSnapshotState() {
+        if (state.liveRefreshInFlight) return;
+        state.liveRefreshInFlight = true;
+        try {
+          const response = await fetch('/api/subnets/' + netuid + '/latest', { cache: 'no-store' });
+          if (!response.ok) return;
+          const payload = await response.json().catch(() => ({}));
+          const nextSnapshotSignature = snapshotSignatureFromPayload(payload?.latest);
+          const nextIngestRunId = ingestRunIdFromPayload(payload?.ingestRun);
+          const nextTaoPrice = Number(payload?.taoPrice?.price_usd);
+          const signatureChanged = nextSnapshotSignature && nextSnapshotSignature !== state.latestSnapshotSignature;
+          const ingestRunChanged = nextIngestRunId && nextIngestRunId !== state.latestIngestRunId;
+          const priceChanged = Number.isFinite(nextTaoPrice) && nextTaoPrice !== state.latestTaoPriceUsd;
+          if (signatureChanged || ingestRunChanged || priceChanged) {
+            state.latestSnapshotSignature = nextSnapshotSignature;
+            state.latestIngestRunId = nextIngestRunId;
+            requestDashboardReload();
+          }
+        } catch (error) {
+          console.error(error);
+        } finally {
+          state.liveRefreshInFlight = false;
         }
       }
 
@@ -2309,6 +2355,10 @@ function renderDashboardClientScript({ netuid, config }) {
         }
         state.modalMetric = null;
         state.modalStakeHistory = null;
+        if (state.pendingLiveReload && document.visibilityState === 'visible') {
+          state.pendingLiveReload = false;
+          window.location.reload();
+        }
       }
 
       function loadHistory(days = 30, source = 'subnet', id = '') {
@@ -3355,6 +3405,13 @@ function renderDashboardClientScript({ netuid, config }) {
           closeModal();
         }
       });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        if (!state.pendingLiveReload) return;
+        if (modalElements.backdrop.classList.contains('open')) return;
+        state.pendingLiveReload = false;
+        window.location.reload();
+      });
 
       bindMetricClicks();
       updateCurrencyToggleButton();
@@ -3363,8 +3420,10 @@ function renderDashboardClientScript({ netuid, config }) {
       updatePollIntervalButtons();
       updatePollIntervalLabel();
       syncSchedulerState();
+      syncLiveSnapshotState();
       setInterval(() => {
         syncSchedulerState();
+        syncLiveSnapshotState();
       }, 60000);
 
       Promise.all([
@@ -4393,7 +4452,7 @@ function renderPage(model) {
     </style>
   </head>
   <body>
-    <div class="shell" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}">
+    <div class="shell" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" data-latest-snapshot-signature="${escapeHtml(latest?.captured_at ? `${latest.captured_at}|${latest.block_number ?? ''}|${latest.source ?? ''}` : '')}" data-latest-ingest-run-id="${escapeHtml(ingestRun?.id ?? '')}">
       <div class="topbar">
         <div class="muted">Local Taostats tracker for SN${netuid}</div>
         <div class="actions">

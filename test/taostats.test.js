@@ -480,6 +480,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="currency-toggle"'), true);
   assert.equal(html.includes('id="tao-price-label"'), true);
   assert.equal(html.includes('title="Click to view TAO price history"'), true);
+  assert.equal(html.includes('data-latest-snapshot-signature='), true);
+  assert.equal(html.includes('data-latest-ingest-run-id='), true);
   assert.equal(html.includes('@media (max-width: 900px)'), true);
   assert.equal(html.includes('.topbar .actions {'), true);
   assert.equal(html.includes('grid-template-columns: repeat(2, minmax(0, 1fr));'), true);
@@ -522,6 +524,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('displayMetricText(metric)'), true);
   assert.equal(html.includes('Click a latest snapshot card'), true);
   assert.equal(html.includes('"historySource":"subnet"'), true);
+  assert.equal(html.includes('/api/subnets/' + model.netuid + '/latest'), true);
+  assert.equal(html.includes('syncLiveSnapshotState()'), true);
   assert.equal(model.latest.tao_price_usd, 100);
   db.close();
 });
