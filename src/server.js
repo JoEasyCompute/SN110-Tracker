@@ -18,6 +18,7 @@ const {
   countWalletSnapshots,
 } = require('./db');
 const { POLL_INTERVAL_OPTIONS } = require('./config');
+const { buildPoolGrowthEstimatorState, estimatePoolGrowth } = require('./pool-estimator');
 
 const TAO_PER_RAO = 1_000_000_000;
 
@@ -242,6 +243,16 @@ function tao(value, digits = 4) {
   const num = Number(value);
   if (!Number.isFinite(num)) return String(value);
   return `τ ${new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(num)}`;
+}
+
+function alpha(value, digits = 4) {
+  if (value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  return `α ${new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: digits,
+  }).format(num)}`;
 }
 
 function formatUsd(value, digits = 2) {
@@ -1051,8 +1062,125 @@ function shortAddress(address) {
   return `${text.slice(0, 6)}…${text.slice(-6)}`;
 }
 
-function renderWalletSection(walletEntries) {
+function normalizeHotkeyRole(role) {
+  const text = String(role || '').trim().toLowerCase();
+  if (!text) return null;
+  if (['validator', 'owner', 'shared', 'other', 'unclassified', 'unknown'].includes(text)) {
+    return text === 'unknown' ? 'unclassified' : text;
+  }
+  return text;
+}
+
+function labelHotkeyRole(role) {
+  switch (normalizeHotkeyRole(role)) {
+    case 'validator':
+      return 'Validator';
+    case 'owner':
+      return 'Owner';
+    case 'shared':
+      return 'Shared';
+    case 'other':
+      return 'Other';
+    case 'unclassified':
+      return 'Unclassified';
+    default:
+      return '—';
+  }
+}
+
+function summarizeHotkeyRoles(hotkeys = []) {
+  const counts = new Map();
+  for (const hotkey of Array.isArray(hotkeys) ? hotkeys : []) {
+    const role = normalizeHotkeyRole(hotkey?.role) || 'unclassified';
+    counts.set(role, (counts.get(role) || 0) + 1);
+  }
+
+  const hasRecognizedRole = ['validator', 'owner', 'shared', 'other'].some((role) => (counts.get(role) || 0) > 0);
+  if (!hasRecognizedRole) {
+    const total = Array.isArray(hotkeys) ? hotkeys.length : 0;
+    return total > 0 ? `${total} hotkeys configured` : 'No hotkeys configured';
+  }
+
+  const parts = [];
+  const order = ['validator', 'owner', 'shared', 'other', 'unclassified'];
+  for (const role of order) {
+    const count = counts.get(role) || 0;
+    if (!count) continue;
+    parts.push(`${count} ${labelHotkeyRole(role).toLowerCase()}${count === 1 ? '' : 's'}`);
+  }
+
+  return parts.length ? parts.join(', ') : 'No hotkeys configured';
+}
+
+function inferHotkeyRoleFromMetadata(hotkey = null, configuredHotkeyMap = new Map()) {
+  if (!hotkey) return null;
+  const ss58 = hotkey.hotkey_address_ss58 ? String(hotkey.hotkey_address_ss58) : '';
+  if (ss58 && configuredHotkeyMap.has(ss58)) {
+    return normalizeHotkeyRole(configuredHotkeyMap.get(ss58)?.role);
+  }
+  const name = hotkey.hotkey_name ? String(hotkey.hotkey_name).trim().toLowerCase() : '';
+  if (name.includes('validator')) return 'validator';
+  if (name.includes('owner')) return 'owner';
+  if (name.includes('shared')) return 'shared';
+  return null;
+}
+
+function buildWalletAttributionSummary({ totalChange = null, stakePositions = [], configuredHotkeys = [] } = {}) {
+  const change = Number(totalChange);
+  const changeIsFinite = Number.isFinite(change);
+  const hotkeyMap = new Map(
+    (Array.isArray(configuredHotkeys) ? configuredHotkeys : [])
+      .filter((hotkey) => hotkey && hotkey.ss58)
+      .map((hotkey) => [String(hotkey.ss58), hotkey]),
+  );
+  const roleBalances = new Map();
+  let knownWeight = 0;
+  let hasRoleMetadata = false;
+
+  for (const position of Array.isArray(stakePositions) ? stakePositions : []) {
+    const balance = Number(position?.balance_as_tao_num ?? position?.balance_num ?? 0);
+    if (!Number.isFinite(balance) || balance <= 0) continue;
+    const role = inferHotkeyRoleFromMetadata(position, hotkeyMap) || 'unclassified';
+    if (role !== 'unclassified') hasRoleMetadata = true;
+    roleBalances.set(role, (roleBalances.get(role) || 0) + balance);
+    if (role !== 'unclassified') {
+      knownWeight += balance;
+    }
+  }
+
+  const prioritizedRoles = ['validator', 'owner', 'shared', 'other'];
+  const estimated = new Map();
+  let assigned = 0;
+
+  if (changeIsFinite && change !== 0 && knownWeight > 0) {
+    for (const role of prioritizedRoles) {
+      const weight = roleBalances.get(role) || 0;
+      if (!weight) continue;
+      const portion = (change * weight) / knownWeight;
+      estimated.set(role, portion);
+      assigned += portion;
+    }
+  }
+
+  const residual = changeIsFinite ? change - assigned : null;
+  const hasAnySplit = hasRoleMetadata && estimated.size > 0;
+
+  return {
+    hasRoleMetadata,
+    hasAnySplit,
+    totalChange: changeIsFinite ? change : null,
+    validator: estimated.get('validator') ?? null,
+    owner: estimated.get('owner') ?? null,
+    shared: estimated.get('shared') ?? null,
+    other: estimated.get('other') ?? null,
+    residual,
+    roleBalances,
+  };
+}
+
+function renderWalletSection(walletEntries, latestSubnet = null) {
   if (!Array.isArray(walletEntries) || !walletEntries.length) return '';
+  const poolEstimator = buildPoolGrowthEstimatorState(latestSubnet);
   const cards = walletEntries.map(({ wallet, latest, stakePositions = [], hotkeys = [] }) => {
     const total = latest ? numericMetricValue(latest.balance_total_num) : null;
     const free = latest ? numericMetricValue(latest.balance_free_num) : null;
@@ -1062,11 +1190,7 @@ function renderWalletSection(walletEntries) {
     const change24h = latest ? numericMetricValue(latest.balance_total_change_24hr_num) : null;
     const positions = Array.isArray(stakePositions) ? stakePositions : [];
     const configuredHotkeys = Array.isArray(hotkeys) ? hotkeys : [];
-    const hotkeySummary = configuredHotkeys.length
-      ? (configuredHotkeys.length === 1
-        ? `Hotkey ${configuredHotkeys[0].name || shortAddress(configuredHotkeys[0].ss58)}`
-        : `${configuredHotkeys.length} hotkeys configured`)
-      : 'No hotkeys configured';
+    const hotkeySummary = summarizeHotkeyRoles(configuredHotkeys);
     const walletProfile = latest ? {
       rank: latest.rank ?? null,
       createdOnDate: latest.created_on_date ?? null,
@@ -1096,6 +1220,7 @@ function renderWalletSection(walletEntries) {
       sourceText: wallet.ss58,
       badge: hotkeySummary,
       walletProfile,
+      poolEstimator,
       walletBreakdown: latest ? {
         total: latest.balance_total_num ?? null,
         free: latest.balance_free_num ?? null,
@@ -1144,6 +1269,109 @@ function renderWalletSection(walletEntries) {
         <p class="muted">Configured ss58 addresses from the .env file. Click a wallet card to inspect its historical balance chart.</p>
       </div>
       <div class="grid compact">${cards}</div>
+    </section>
+  `;
+}
+
+function renderPoolGrowthSection(latestSubnet = null) {
+  const poolEstimator = buildPoolGrowthEstimatorState(latestSubnet);
+  const rootAttrs = [
+    'id="pool-growth-estimator"',
+    'class="pool-growth-estimator"',
+    'open',
+    'data-pool-growth-root="page"',
+    'data-pool-available="' + (poolEstimator.available ? 'true' : 'false') + '"',
+    'data-pool-tao-in-pool="' + escapeHtml(poolEstimator.currentPool?.taoInPool ?? '') + '"',
+    'data-pool-alpha-in-pool="' + escapeHtml(poolEstimator.currentPool?.alphaInPool ?? '') + '"',
+    'data-pool-current-price="' + escapeHtml(poolEstimator.currentPool?.currentPrice ?? '') + '"',
+    'data-pool-reason="' + escapeHtml(poolEstimator.reason ?? '') + '"',
+    'data-pool-default-tao-injected="' + escapeHtml(poolEstimator.defaultTaoInjected ?? 10) + '"',
+    'data-pool-presets="' + escapeHtml((Array.isArray(poolEstimator.presets) ? poolEstimator.presets : [1, 10, 50]).join(',')) + '"',
+  ].join(' ');
+
+  if (!poolEstimator.available) {
+    return `
+      <section class="section pool-growth-section">
+        <div class="section-copy">
+          <h2>Pool growth estimator</h2>
+          <p class="muted">Estimate only — this uses the latest subnet snapshot and simulates TAO injection locally.</p>
+        </div>
+        <details ${rootAttrs}>
+          <summary>Pool growth estimator</summary>
+          <div class="pool-growth-estimator-body">
+            <p class="wallet-history-note">Estimate only — the latest subnet snapshot does not include enough pool data to simulate TAO injection safely.</p>
+            <p class="pool-estimator-unavailable">${escapeHtml(poolEstimator.reason || 'Pool data unavailable for this subnet.')}</p>
+          </div>
+        </details>
+      </section>
+    `;
+  }
+
+  const currentPool = poolEstimator.currentPool;
+  const initialResult = estimatePoolGrowth({
+    taoInPool: currentPool.taoInPool,
+    alphaInPool: currentPool.alphaInPool,
+    taoInjected: poolEstimator.defaultTaoInjected,
+  });
+  const presets = Array.isArray(poolEstimator.presets) && poolEstimator.presets.length ? poolEstimator.presets : [1, 10, 50];
+  const chartScale = Math.max(initialResult.currentPrice, initialResult.projectedPrice, initialResult.currentPrice * 1.25, 1e-12);
+  const currentWidth = Math.max(4, Math.min(100, (initialResult.currentPrice / chartScale) * 100));
+  const projectedWidth = Math.max(4, Math.min(100, (initialResult.projectedPrice / chartScale) * 100));
+
+  return `
+    <section class="section pool-growth-section">
+      <div class="section-copy">
+        <h2>Pool growth estimator</h2>
+        <p class="muted">Estimate only — this uses the latest subnet pool snapshot. TAO injection, alpha received, and price impact are simulated locally from the current reserves.</p>
+      </div>
+      <details ${rootAttrs}>
+        <summary>Pool growth estimator</summary>
+        <div class="pool-growth-estimator-body" data-pool-estimator="true">
+          <p class="wallet-history-note">Estimate only — this uses the current constant-product AMM reserve ratio. Fees, future emissions, and other live activity can move the outcome.</p>
+          <div class="pool-estimator-controls">
+            <div class="pool-estimator-input-row">
+              <label for="pool-growth-tao-injected">
+                TAO injected
+                <input id="pool-growth-tao-injected" type="number" min="0" step="0.1" inputmode="decimal" value="${escapeHtml(String(poolEstimator.defaultTaoInjected ?? 10))}">
+              </label>
+              <div class="pool-estimator-presets" role="group" aria-label="Quick TAO presets">
+                ${presets.map((preset) => `<button type="button" class="button" data-pool-preset="${escapeHtml(String(preset))}">${escapeHtml(tao(preset, 0))}</button>`).join('')}
+              </div>
+            </div>
+            <div class="pool-estimator-summary" id="pool-growth-summary">Current pool: ${escapeHtml(tao(currentPool.taoInPool, 2))} • ${escapeHtml(alpha(currentPool.alphaInPool, 2))} • price ${escapeHtml(tao(currentPool.currentPrice, 6))} / α</div>
+          </div>
+          <div class="wallet-breakdown-grid pool-estimator-results">
+            <div class="wallet-breakdown-card">
+              <div class="label">Estimated alpha received</div>
+              <div class="value" id="pool-growth-alpha-received">${escapeHtml(alpha(initialResult.alphaReceived, 4))}</div>
+              <div class="subtext" id="pool-growth-alpha-ideal">No-slippage baseline: ${escapeHtml(alpha(initialResult.idealAlphaReceived, 4))}</div>
+            </div>
+            <div class="wallet-breakdown-card">
+              <div class="label">Projected alpha price</div>
+              <div class="value" id="pool-growth-projected-price">${escapeHtml(tao(initialResult.projectedPrice, 6))} / α</div>
+              <div class="subtext" id="pool-growth-post-pool">Projected post-injection reserves: ${escapeHtml(tao(initialResult.projectedTaoInPool, 2))} • ${escapeHtml(alpha(initialResult.projectedAlphaInPool, 2))}</div>
+            </div>
+            <div class="wallet-breakdown-card">
+              <div class="label">Price change %</div>
+              <div class="value" id="pool-growth-price-change">${escapeHtml(signedPercent(initialResult.priceChangePct, 2))}</div>
+              <div class="subtext" id="pool-growth-slippage">Slippage: ${escapeHtml(alpha(initialResult.alphaShortfall, 4))} • ${escapeHtml(signedPercent(initialResult.slippagePct, 2))} of ideal</div>
+            </div>
+          </div>
+          <div class="pool-estimator-chart" aria-label="Current versus projected alpha price">
+            <div class="pool-estimator-chart-row">
+              <div class="pool-estimator-chart-label">Current</div>
+              <div class="pool-estimator-chart-track"><div class="pool-estimator-chart-fill current" style="width: ${currentWidth.toFixed(2)}%"></div></div>
+              <div class="pool-estimator-chart-value" id="pool-growth-chart-current-value">${escapeHtml(tao(initialResult.currentPrice, 6))} / α</div>
+            </div>
+            <div class="pool-estimator-chart-row">
+              <div class="pool-estimator-chart-label">Projected</div>
+              <div class="pool-estimator-chart-track"><div class="pool-estimator-chart-fill projected" style="width: ${projectedWidth.toFixed(2)}%"></div></div>
+              <div class="pool-estimator-chart-value" id="pool-growth-chart-projected-value">${escapeHtml(tao(initialResult.projectedPrice, 6))} / α</div>
+            </div>
+            <div class="pool-estimator-chart-caption" id="pool-growth-chart-caption">Current: ${escapeHtml(tao(initialResult.currentPrice, 6))} / α • projected: ${escapeHtml(tao(initialResult.projectedPrice, 6))} / α • TAO injected: ${escapeHtml(tao(initialResult.taoInjected, 2))}</div>
+          </div>
+        </div>
+      </details>
     </section>
   `;
 }
@@ -1579,6 +1807,98 @@ function renderDashboardClientScript({ netuid, config }) {
         return text;
       }
 
+      function normalizeHotkeyRole(role) {
+        const text = String(role || '').trim().toLowerCase();
+        if (!text) return null;
+        if (['validator', 'owner', 'shared', 'other', 'unclassified', 'unknown'].includes(text)) {
+          return text === 'unknown' ? 'unclassified' : text;
+        }
+        return text;
+      }
+
+      function labelHotkeyRole(role) {
+        switch (normalizeHotkeyRole(role)) {
+          case 'validator':
+            return 'Validator';
+          case 'owner':
+            return 'Owner';
+          case 'shared':
+            return 'Shared';
+          case 'other':
+            return 'Other';
+          case 'unclassified':
+            return 'Unclassified';
+          default:
+            return '—';
+        }
+      }
+
+      function inferHotkeyRoleFromMetadata(hotkey = null, configuredHotkeyMap = new Map()) {
+        if (!hotkey) return null;
+        const ss58 = hotkey.hotkey_address_ss58 ? String(hotkey.hotkey_address_ss58) : '';
+        if (ss58 && configuredHotkeyMap.has(ss58)) {
+          return normalizeHotkeyRole(configuredHotkeyMap.get(ss58)?.role);
+        }
+        const name = hotkey.hotkey_name ? String(hotkey.hotkey_name).trim().toLowerCase() : '';
+        if (name.includes('validator')) return 'validator';
+        if (name.includes('owner')) return 'owner';
+        if (name.includes('shared')) return 'shared';
+        return null;
+      }
+
+      function buildWalletAttributionSummary({ totalChange = null, stakePositions = [], configuredHotkeys = [] } = {}) {
+        const change = Number(totalChange);
+        const changeIsFinite = Number.isFinite(change);
+        const hotkeyMap = new Map(
+          (Array.isArray(configuredHotkeys) ? configuredHotkeys : [])
+            .filter((hotkey) => hotkey && hotkey.ss58)
+            .map((hotkey) => [String(hotkey.ss58), hotkey]),
+        );
+        const roleBalances = new Map();
+        let knownWeight = 0;
+        let hasRoleMetadata = false;
+
+        for (const position of Array.isArray(stakePositions) ? stakePositions : []) {
+          const balance = Number(position?.balance_as_tao_num ?? position?.balance_num ?? 0);
+          if (!Number.isFinite(balance) || balance <= 0) continue;
+          const role = inferHotkeyRoleFromMetadata(position, hotkeyMap) || 'unclassified';
+          if (role !== 'unclassified') hasRoleMetadata = true;
+          roleBalances.set(role, (roleBalances.get(role) || 0) + balance);
+          if (role !== 'unclassified') {
+            knownWeight += balance;
+          }
+        }
+
+        const prioritizedRoles = ['validator', 'owner', 'shared', 'other'];
+        const estimated = new Map();
+        let assigned = 0;
+
+        if (changeIsFinite && change !== 0 && knownWeight > 0) {
+          for (const role of prioritizedRoles) {
+            const weight = roleBalances.get(role) || 0;
+            if (!weight) continue;
+            const portion = (change * weight) / knownWeight;
+            estimated.set(role, portion);
+            assigned += portion;
+          }
+        }
+
+        const residual = changeIsFinite ? change - assigned : null;
+        const hasAnySplit = hasRoleMetadata && estimated.size > 0;
+
+        return {
+          hasRoleMetadata,
+          hasAnySplit,
+          totalChange: changeIsFinite ? change : null,
+          validator: estimated.get('validator') ?? null,
+          owner: estimated.get('owner') ?? null,
+          shared: estimated.get('shared') ?? null,
+          other: estimated.get('other') ?? null,
+          residual,
+          roleBalances,
+        };
+      }
+
       const modalElements = {
         backdrop: document.getElementById('history-modal'),
         title: document.getElementById('history-modal-title'),
@@ -1692,6 +2012,16 @@ function renderDashboardClientScript({ netuid, config }) {
         return 'τ ' + new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(num);
       }
 
+      function formatAlpha(value, digits = 4) {
+        if (value === null || value === undefined || value === '') return '—';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return String(value);
+        return 'α ' + new Intl.NumberFormat('en-US', {
+          notation: 'compact',
+          maximumFractionDigits: digits,
+        }).format(num);
+      }
+
       function formatSignedTao(value, digits = 4) {
         if (value === null || value === undefined || value === '') return '—';
         const num = Number(value);
@@ -1723,6 +2053,170 @@ function renderDashboardClientScript({ netuid, config }) {
         if (abs === 0) return '$0.00';
         if (abs < 0.01) return sign + '<$0.01';
         return sign + formatUsd(abs, digits);
+      }
+
+      function estimatePoolGrowthClient(pool, taoInjected) {
+        const taoInPool = Number(pool?.taoInPool);
+        const alphaInPool = Number(pool?.alphaInPool);
+        const injected = Number(taoInjected);
+        if (!Number.isFinite(taoInPool) || !Number.isFinite(alphaInPool) || taoInPool <= 0 || alphaInPool <= 0 || !Number.isFinite(injected) || injected < 0) {
+          return { available: false };
+        }
+        const currentPrice = Number(pool?.currentPrice);
+        const resolvedCurrentPrice = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : taoInPool / alphaInPool;
+        const taoInjectedSafe = Math.max(0, injected);
+        const projectedTaoInPool = taoInPool + taoInjectedSafe;
+        const alphaReceived = taoInjectedSafe === 0 ? 0 : (alphaInPool * taoInjectedSafe) / projectedTaoInPool;
+        const projectedAlphaInPool = alphaInPool - alphaReceived;
+        const projectedPrice = projectedTaoInPool / projectedAlphaInPool;
+        const idealAlphaReceived = taoInjectedSafe === 0 ? 0 : taoInjectedSafe / resolvedCurrentPrice;
+        const alphaShortfall = idealAlphaReceived - alphaReceived;
+        const slippagePct = idealAlphaReceived > 0 ? (alphaShortfall / idealAlphaReceived) * 100 : 0;
+        const priceChangePct = resolvedCurrentPrice > 0 ? ((projectedPrice - resolvedCurrentPrice) / resolvedCurrentPrice) * 100 : null;
+        return {
+          available: true,
+          taoInPool,
+          alphaInPool,
+          taoInjected: taoInjectedSafe,
+          currentPrice: resolvedCurrentPrice,
+          projectedTaoInPool,
+          projectedAlphaInPool,
+          projectedPrice,
+          alphaReceived,
+          idealAlphaReceived,
+          alphaShortfall,
+          slippagePct,
+          priceChangePct,
+        };
+      }
+
+      function getPoolGrowthEstimatorRoot() {
+        return document.getElementById('pool-growth-estimator');
+      }
+
+      function getPoolGrowthEstimatorState(root = getPoolGrowthEstimatorRoot()) {
+        if (!root) return { available: false };
+        return {
+          available: root.dataset.poolAvailable === 'true',
+          reason: root.dataset.poolReason || null,
+          taoInPool: Number(root.dataset.poolTaoInPool),
+          alphaInPool: Number(root.dataset.poolAlphaInPool),
+          currentPrice: Number(root.dataset.poolCurrentPrice),
+        };
+      }
+
+      function getPoolGrowthEstimatorInitialInjection(root = getPoolGrowthEstimatorRoot()) {
+        const existing = root?.querySelector('#pool-growth-tao-injected');
+        const persisted = existing ? Number(existing.value) : null;
+        if (Number.isFinite(persisted) && persisted >= 0) return persisted;
+        const preset = Number(root?.dataset.poolDefaultTaoInjected);
+        return Number.isFinite(preset) && preset >= 0 ? preset : 10;
+      }
+
+      function updatePoolGrowthEstimator(root = getPoolGrowthEstimatorRoot()) {
+        if (!root) return;
+        const pool = getPoolGrowthEstimatorState(root);
+        const input = root.querySelector('#pool-growth-tao-injected');
+        const summary = root.querySelector('#pool-growth-summary');
+        const alphaReceived = root.querySelector('#pool-growth-alpha-received');
+        const alphaIdeal = root.querySelector('#pool-growth-alpha-ideal');
+        const projectedPrice = root.querySelector('#pool-growth-projected-price');
+        const postPool = root.querySelector('#pool-growth-post-pool');
+        const priceChange = root.querySelector('#pool-growth-price-change');
+        const slippage = root.querySelector('#pool-growth-slippage');
+        const chartCaption = root.querySelector('#pool-growth-chart-caption');
+        const chartCurrentValue = root.querySelector('#pool-growth-chart-current-value');
+        const chartProjectedValue = root.querySelector('#pool-growth-chart-projected-value');
+        const currentBar = root.querySelector('.pool-estimator-chart-fill.current');
+        const projectedBar = root.querySelector('.pool-estimator-chart-fill.projected');
+        const injected = Number(input?.value);
+        const result = estimatePoolGrowthClient(pool, Number.isFinite(injected) ? injected : 0);
+        if (!result.available) {
+          if (summary) summary.textContent = pool.reason || 'Pool data unavailable for this subnet.';
+          if (alphaReceived) alphaReceived.textContent = '—';
+          if (alphaIdeal) alphaIdeal.textContent = 'No-slippage baseline';
+          if (projectedPrice) projectedPrice.textContent = '—';
+          if (postPool) postPool.textContent = 'Projected post-injection reserves';
+          if (priceChange) priceChange.textContent = '—';
+          if (slippage) slippage.textContent = 'Compared with current price';
+          if (chartCaption) chartCaption.textContent = 'Pool data unavailable.';
+          if (currentBar) currentBar.style.width = '0%';
+          if (projectedBar) projectedBar.style.width = '0%';
+          return;
+        }
+
+        const priceLabel = formatTao(result.currentPrice, 6) + ' / α';
+        const projectedLabel = formatTao(result.projectedPrice, 6) + ' / α';
+        const displayScale = Math.max(result.currentPrice, result.projectedPrice, result.currentPrice * 1.25, 1e-12);
+        const currentWidth = Math.max(4, Math.min(100, (result.currentPrice / displayScale) * 100));
+        const projectedWidth = Math.max(4, Math.min(100, (result.projectedPrice / displayScale) * 100));
+
+        if (summary) {
+          summary.textContent = [
+            'Current pool: ',
+            formatTao(result.taoInPool, 2),
+            ' • ',
+            formatAlpha(result.alphaInPool, 2),
+            ' • price ',
+            priceLabel,
+          ].join('');
+        }
+        if (alphaReceived) alphaReceived.textContent = formatAlpha(result.alphaReceived, 4);
+        if (alphaIdeal) alphaIdeal.textContent = 'No-slippage baseline: ' + formatAlpha(result.idealAlphaReceived, 4);
+        if (projectedPrice) projectedPrice.textContent = projectedLabel;
+        if (postPool) {
+          postPool.textContent = [
+            'Projected post-injection reserves: ',
+            formatTao(result.projectedTaoInPool, 2),
+            ' • ',
+            formatAlpha(result.projectedAlphaInPool, 2),
+          ].join('');
+        }
+        if (priceChange) {
+          const changeText = formatSignedPercent(result.priceChangePct, 2);
+          priceChange.textContent = changeText;
+        }
+        if (slippage) {
+          slippage.textContent = [
+            'Slippage: ',
+            formatAlpha(result.alphaShortfall, 4),
+            ' • ',
+            formatSignedPercent(result.slippagePct, 2),
+            ' of ideal',
+          ].join('');
+        }
+        if (chartCaption) {
+          chartCaption.textContent = [
+            'Current: ',
+            priceLabel,
+            ' • projected: ',
+            projectedLabel,
+            ' • TAO injected: ',
+            formatTao(result.taoInjected, 2),
+          ].join('');
+        }
+        if (chartCurrentValue) chartCurrentValue.textContent = priceLabel;
+        if (chartProjectedValue) chartProjectedValue.textContent = projectedLabel;
+        if (currentBar) currentBar.style.width = currentWidth.toFixed(2) + '%';
+        if (projectedBar) projectedBar.style.width = projectedWidth.toFixed(2) + '%';
+      }
+
+      function initializePoolGrowthEstimator(root = getPoolGrowthEstimatorRoot()) {
+        if (!root || root.dataset.poolGrowthInitialized === 'true') return;
+        root.dataset.poolGrowthInitialized = 'true';
+        const input = root.querySelector('#pool-growth-tao-injected');
+        if (input) {
+          input.addEventListener('input', () => updatePoolGrowthEstimator(root));
+          input.addEventListener('change', () => updatePoolGrowthEstimator(root));
+        }
+        root.querySelectorAll('[data-pool-preset]').forEach((button) => {
+          button.addEventListener('click', () => {
+            if (!input) return;
+            input.value = String(button.dataset.poolPreset || '');
+            updatePoolGrowthEstimator(root);
+          });
+        });
+        updatePoolGrowthEstimator(root);
       }
 
       function formatBaseMetric(value, format) {
@@ -1870,220 +2364,329 @@ function renderDashboardClientScript({ netuid, config }) {
           return;
         }
 
-        const breakdown = metric.walletBreakdown || {};
-        const toNumeric = (value) => {
-          if (value === null || value === undefined || value === '') return null;
-          const num = Number(value);
-          return Number.isFinite(num) ? num : null;
-        };
-        const total = toNumeric(breakdown.total);
-        const free = toNumeric(breakdown.free);
-        const staked = toNumeric(breakdown.staked);
-        const root = toNumeric(breakdown.root);
-        const alpha = toNumeric(breakdown.alpha);
-        const change24h = toNumeric(breakdown.change24h);
-        const priceUsd = resolveUsdPrice(metric.latestTaoPriceUsd, state.latestTaoPriceUsd);
-        const percent = (part, whole) => (Number.isFinite(part) && Number.isFinite(whole) && whole > 0 ? (part / whole) * 100 : null);
-        const rootPct = percent(root, staked);
-        const alphaPct = percent(alpha, staked);
-        const freePct = percent(free, total);
-        const stakedPct = percent(staked, total);
-        const stakeCount = Number(metric.stakeCount || 0);
-        const stakeSummary = Number.isFinite(stakeCount) && stakeCount > 0
-          ? stakeCount + ' current subnet stake position' + (stakeCount === 1 ? '' : 's')
-          : 'No current subnet stake positions were returned for this wallet.';
-        const stakePositions = Array.isArray(metric.stakePositions) ? metric.stakePositions.slice(0, 20) : [];
-        const configuredHotkeys = Array.isArray(metric.configuredHotkeys) ? metric.configuredHotkeys.slice(0, 20) : [];
-        const configuredHotkeyMap = new Map(configuredHotkeys
-          .filter((hotkey) => hotkey && hotkey.ss58)
-          .map((hotkey) => [String(hotkey.ss58), hotkey]));
-        const configuredHotkeyRows = configuredHotkeys.length
-          ? configuredHotkeys.map((hotkey) => {
-              const label = hotkey.name || shortAddress(hotkey.ss58 || '—');
-              const hotkeyNetuid = hotkey.netuid !== null && hotkey.netuid !== undefined ? 'Netuid ' + hotkey.netuid : null;
-              const hotkeyNetwork = hotkey.network ? String(hotkey.network) : null;
-              return [
-                '<span class="wallet-hotkey-pill">',
-                '<strong>' + escapeHtml(label) + '</strong>',
-                '<small>' + escapeHtml([shortAddress(hotkey.ss58 || '—'), hotkeyNetuid, hotkeyNetwork].filter(Boolean).join(' • ')) + '</small>',
-                '</span>',
-              ].join('');
-            }).join('')
-          : '';
-        const walletProfile = metric.walletProfile || {};
-        const walletProfileCards = [
-          {
-            label: 'Rank',
-            value: Number.isFinite(Number(walletProfile.rank)) ? formatInteger(walletProfile.rank) : '—',
-            subtext: 'Current Taostats rank',
-          },
-          {
-            label: 'Created',
-            value: walletProfile.createdOnDate || '—',
-            subtext: walletProfile.createdOnNetwork ? 'Created on ' + walletProfile.createdOnNetwork : 'Wallet creation date',
-          },
-          {
-            label: 'Hotkeys',
-            value: Number.isFinite(Number(walletProfile.hotkeyCount)) ? formatInteger(walletProfile.hotkeyCount) : '—',
-            subtext: walletProfile.hotkeySummary || 'Configured hotkeys',
-          },
-          {
-            label: 'Coldkey swap',
-            value: resolveColdkeySwapSummary(walletProfile.rawJson, walletProfile.coldkeySwap),
-            subtext: 'Coldkey swap status from Taostats',
-          },
-        ];
-        const walletProfileRows = walletProfileCards.map((item) => [
-          '<div class="wallet-breakdown-card">',
-          '  <div class="label">' + escapeHtml(item.label) + '</div>',
-          '  <div class="value">' + escapeHtml(item.value) + '</div>',
-          '  <div class="subtext">' + escapeHtml(item.subtext) + '</div>',
-          '</div>',
-        ].join('')).join('');
-        const stakeCards = stakePositions.map((position) => {
-          const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
-          const hotkeyLabel = position.hotkey_name
-            || (position.hotkey_address_ss58 && configuredHotkeyMap.has(String(position.hotkey_address_ss58))
-              ? (configuredHotkeyMap.get(String(position.hotkey_address_ss58)).name || shortAddress(position.hotkey_address_ss58))
-              : shortAddress(position.hotkey_address_ss58 || '—'));
-          return [
-            '<div class="wallet-current-stake-card">',
-            '  <div class="label">Netuid ' + escapeHtml(position.netuid ?? '—') + '</div>',
-            '  <div class="value">' + escapeHtml(formatWalletAmount(balance, 2, priceUsd)) + '</div>',
-            '  <div class="subtext">' + escapeHtml(hotkeyLabel) + ' • Rank ' + escapeHtml(position.subnet_rank ?? '—') + '</div>',
+        try {
+          const breakdown = metric.walletBreakdown || {};
+          const toNumeric = (value) => {
+            if (value === null || value === undefined || value === '') return null;
+            const num = Number(value);
+            return Number.isFinite(num) ? num : null;
+          };
+          const total = toNumeric(breakdown.total);
+          const free = toNumeric(breakdown.free);
+          const staked = toNumeric(breakdown.staked);
+          const root = toNumeric(breakdown.root);
+          const alpha = toNumeric(breakdown.alpha);
+          const change24h = toNumeric(breakdown.change24h);
+          const priceUsd = resolveUsdPrice(metric.latestTaoPriceUsd, state.latestTaoPriceUsd);
+          const percent = (part, whole) => (Number.isFinite(part) && Number.isFinite(whole) && whole > 0 ? (part / whole) * 100 : null);
+          const rootPct = percent(root, staked);
+          const alphaPct = percent(alpha, staked);
+          const freePct = percent(free, total);
+          const stakedPct = percent(staked, total);
+          const stakeCount = Number(metric.stakeCount || 0);
+          const stakeSummary = Number.isFinite(stakeCount) && stakeCount > 0
+            ? stakeCount + ' current subnet stake position' + (stakeCount === 1 ? '' : 's')
+            : 'No current subnet stake positions were returned for this wallet.';
+          const stakePositions = Array.isArray(metric.stakePositions) ? metric.stakePositions.slice(0, 20) : [];
+          const configuredHotkeys = Array.isArray(metric.configuredHotkeys) ? metric.configuredHotkeys.slice(0, 20) : [];
+          const configuredHotkeyMap = new Map(configuredHotkeys
+            .filter((hotkey) => hotkey && hotkey.ss58)
+            .map((hotkey) => [String(hotkey.ss58), hotkey]));
+          const walletAttribution = buildWalletAttributionSummary({
+            totalChange: change24h,
+            stakePositions,
+            configuredHotkeys,
+          });
+          const configuredHotkeyRows = configuredHotkeys.length
+            ? configuredHotkeys.map((hotkey) => {
+                const label = hotkey.name || shortAddress(hotkey.ss58 || '—');
+                const hotkeyNetuid = hotkey.netuid !== null && hotkey.netuid !== undefined ? 'Netuid ' + hotkey.netuid : null;
+                const hotkeyNetwork = hotkey.network ? String(hotkey.network) : null;
+                const hotkeyRole = labelHotkeyRole(hotkey.role);
+                return [
+                  '<span class="wallet-hotkey-pill">',
+                  '<strong>' + escapeHtml(label) + '</strong>',
+                  '<small>' + escapeHtml([shortAddress(hotkey.ss58 || '—'), hotkeyRole !== '—' ? hotkeyRole : null, hotkeyNetuid, hotkeyNetwork].filter(Boolean).join(' • ')) + '</small>',
+                  '</span>',
+                ].join('');
+              }).join('')
+            : '';
+          const walletProfile = metric.walletProfile || {};
+          const walletProfileCards = [
+            {
+              label: 'Rank',
+              value: Number.isFinite(Number(walletProfile.rank)) ? formatInteger(walletProfile.rank) : '—',
+              subtext: 'Current Taostats rank',
+            },
+            {
+              label: 'Created',
+              value: walletProfile.createdOnDate || '—',
+              subtext: walletProfile.createdOnNetwork ? 'Created on ' + walletProfile.createdOnNetwork : 'Wallet creation date',
+            },
+            {
+              label: 'Hotkeys',
+              value: Number.isFinite(Number(walletProfile.hotkeyCount)) ? formatInteger(walletProfile.hotkeyCount) : '—',
+              subtext: walletProfile.hotkeySummary || 'Configured hotkeys',
+            },
+            {
+              label: 'Coldkey swap',
+              value: resolveColdkeySwapSummary(walletProfile.rawJson, walletProfile.coldkeySwap),
+              subtext: 'Coldkey swap status from Taostats',
+            },
+          ];
+          const walletProfileRows = walletProfileCards.map((item) => [
+            '<div class="wallet-breakdown-card">',
+            '  <div class="label">' + escapeHtml(item.label) + '</div>',
+            '  <div class="value">' + escapeHtml(item.value) + '</div>',
+            '  <div class="subtext">' + escapeHtml(item.subtext) + '</div>',
+            '</div>',
+          ].join('')).join('');
+          const stakeCards = stakePositions.map((position) => {
+            const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
+            const hotkeyLabel = position.hotkey_name
+              || (position.hotkey_address_ss58 && configuredHotkeyMap.has(String(position.hotkey_address_ss58))
+                ? (configuredHotkeyMap.get(String(position.hotkey_address_ss58)).name || shortAddress(position.hotkey_address_ss58))
+                : shortAddress(position.hotkey_address_ss58 || '—'));
+            const hotkeyRole = labelHotkeyRole(inferHotkeyRoleFromMetadata(position, configuredHotkeyMap));
+            return [
+              '<div class="wallet-current-stake-card">',
+              '  <div class="label">Netuid ' + escapeHtml(position.netuid ?? '—') + '</div>',
+              '  <div class="value">' + escapeHtml(formatWalletAmount(balance, 2, priceUsd)) + '</div>',
+              '  <div class="subtext">' + escapeHtml(hotkeyLabel) + (hotkeyRole !== '—' ? ' • ' + escapeHtml(hotkeyRole) : '') + ' • Rank ' + escapeHtml(position.subnet_rank ?? '—') + '</div>',
+              '</div>',
+            ].join('');
+          }).join('');
+          const walletStakeHistoryRows = Array.isArray(state.modalStakeHistory) && state.modalStakeHistory.length
+            ? (() => {
+                const chronological = [...state.modalStakeHistory]
+                  .sort((a, b) => new Date(a.captured_at).getTime() - new Date(b.captured_at).getTime())
+                  .slice(0, 200);
+                const previousByKey = new Map();
+                const rows = [];
+                for (const position of chronological) {
+                  const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
+                  const hotkeyKey = String(position.hotkey_address_ss58 || position.hotkey_name || position.netuid || 'unknown');
+                  const priorBalance = previousByKey.has(hotkeyKey) ? previousByKey.get(hotkeyKey) : null;
+                  const delta = Number.isFinite(Number(balance)) && Number.isFinite(Number(priorBalance))
+                    ? Number(balance) - Number(priorBalance)
+                    : null;
+                  previousByKey.set(hotkeyKey, balance);
+                  const hotkeyLabel = position.hotkey_name
+                    || (position.hotkey_address_ss58 && configuredHotkeyMap.has(String(position.hotkey_address_ss58))
+                      ? (configuredHotkeyMap.get(String(position.hotkey_address_ss58)).name || shortAddress(position.hotkey_address_ss58))
+                      : shortAddress(position.hotkey_address_ss58 || '—'));
+                  const snapshotLabel = position.captured_at
+                    ? new Date(position.captured_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+                    : '—';
+                  const deltaClass = delta === null ? 'neutral' : (delta > 0 ? 'positive' : (delta < 0 ? 'negative' : 'neutral'));
+                  rows.push([
+                    '<tr>',
+                    '<td>' + escapeHtml(snapshotLabel) + '</td>',
+                    '<td>' + escapeHtml(hotkeyLabel) + '</td>',
+                    '<td>' + escapeHtml(position.netuid ?? '—') + '</td>',
+                    '<td>' + escapeHtml(formatWalletAmount(balance, 2, priceUsd)) + '</td>',
+                    '<td>' + escapeHtml(position.subnet_rank ?? '—') + '</td>',
+                    '<td><span class="wallet-history-delta ' + deltaClass + '">' + escapeHtml(delta === null ? '—' : formatWalletSignedAmount(delta, 2, priceUsd)) + '</span></td>',
+                    '</tr>',
+                  ].join(''));
+                }
+                return rows.reverse().join('');
+              })()
+            : '';
+          const walletAttributionHistoryRows = Array.isArray(state.modalHistory) && state.modalHistory.length > 1
+            ? (() => {
+                const chronological = [...state.modalHistory]
+                  .sort((a, b) => new Date(a.captured_at).getTime() - new Date(b.captured_at).getTime())
+                  .slice(0, 120);
+                const rows = [];
+                let previousTotal = null;
+                for (const row of chronological) {
+                  const currentTotal = Number(row.balance_total_num);
+                  if (!Number.isFinite(currentTotal)) {
+                    previousTotal = currentTotal;
+                    continue;
+                  }
+                  const delta = Number.isFinite(Number(previousTotal)) ? currentTotal - Number(previousTotal) : null;
+                  previousTotal = currentTotal;
+                  const attribution = buildWalletAttributionSummary({
+                    totalChange: delta,
+                    stakePositions,
+                    configuredHotkeys,
+                  });
+                  const snapshotLabel = row.captured_at
+                    ? new Date(row.captured_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+                    : '—';
+                  rows.push([
+                    '<tr>',
+                    '<td>' + escapeHtml(snapshotLabel) + '</td>',
+                    '<td>' + escapeHtml(formatWalletAmount(currentTotal, 2, priceUsd)) + '</td>',
+                    '<td><span class="wallet-history-delta ' + (attribution.validator === null ? 'neutral' : (attribution.validator > 0 ? 'positive' : (attribution.validator < 0 ? 'negative' : 'neutral'))) + '">' + escapeHtml(formatWalletSignedAmount(attribution.validator, 2, priceUsd)) + '</span></td>',
+                    '<td><span class="wallet-history-delta ' + (attribution.owner === null ? 'neutral' : (attribution.owner > 0 ? 'positive' : (attribution.owner < 0 ? 'negative' : 'neutral'))) + '">' + escapeHtml(formatWalletSignedAmount(attribution.owner, 2, priceUsd)) + '</span></td>',
+                    '<td><span class="wallet-history-delta ' + (attribution.residual === null ? 'neutral' : (attribution.residual > 0 ? 'positive' : (attribution.residual < 0 ? 'negative' : 'neutral'))) + '">' + escapeHtml(formatWalletSignedAmount(attribution.residual, 2, priceUsd)) + '</span></td>',
+                    '</tr>',
+                  ].join(''));
+                }
+                return rows.reverse().join('');
+              })()
+            : '';
+
+          modalElements.walletDetails.hidden = false;
+          const freeText = freePct === null ? 'Available balance' : freePct.toFixed(1) + '% of total';
+          const stakedText = stakedPct === null ? 'Locked in stake' : stakedPct.toFixed(1) + '% of total';
+          const rootText = rootPct === null ? 'Stake at root' : rootPct.toFixed(1) + '% of staked';
+          const alphaText = alphaPct === null ? 'Subnet stake' : alphaPct.toFixed(1) + '% of staked';
+          modalElements.walletDetails.innerHTML = [
+            '<h4 class="wallet-details-title">Wallet breakdown</h4>',
+            '<div class="wallet-breakdown-row">',
+            '  <div class="wallet-breakdown-card">',
+            '    <div class="label">Total</div>',
+            '    <div class="value">' + escapeHtml(formatWalletAmount(total, 2, priceUsd)) + '</div>',
+            '    <div class="subtext">Overall wallet balance</div>',
+            '  </div>',
+            '  <div class="wallet-breakdown-card">',
+            '    <div class="label">Free</div>',
+            '    <div class="value">' + escapeHtml(formatWalletAmount(free, 2, priceUsd)) + '</div>',
+            '    <div class="subtext">' + escapeHtml(freeText) + '</div>',
+            '  </div>',
+            '  <div class="wallet-breakdown-card">',
+            '    <div class="label">Staked</div>',
+            '    <div class="value">' + escapeHtml(formatWalletAmount(staked, 2, priceUsd)) + '</div>',
+            '    <div class="subtext">' + escapeHtml(stakedText) + '</div>',
+            '  </div>',
+            '  <div class="wallet-breakdown-card">',
+            '    <div class="label">Root</div>',
+            '    <div class="value">' + escapeHtml(formatWalletAmount(root, 2, priceUsd)) + '</div>',
+            '    <div class="subtext">' + escapeHtml(rootText) + '</div>',
+            '  </div>',
+            '  <div class="wallet-breakdown-card">',
+            '    <div class="label">Alpha</div>',
+            '    <div class="value">' + escapeHtml(formatWalletAmount(alpha, 2, priceUsd)) + '</div>',
+            '    <div class="subtext">' + escapeHtml(alphaText) + '</div>',
+            '  </div>',
+            '  <div class="wallet-breakdown-card">',
+            '    <div class="label">24h Change</div>',
+            '    <div class="value">' + escapeHtml(formatWalletSignedAmount(change24h, 2, priceUsd)) + '</div>',
+            '    <div class="subtext">Compared with the previous day</div>',
+            '  </div>',
+            '</div>',
+            '<div class="wallet-profile">',
+            '  <h4 class="wallet-details-title">Wallet profile</h4>',
+            '  <div class="wallet-breakdown-grid">' + walletProfileRows + '</div>',
+            '</div>',
+            '<div class="wallet-attribution">',
+            '  <h4 class="wallet-details-title">Income sources</h4>',
+            '  <p class="wallet-history-note">' + escapeHtml(walletAttribution.hasAnySplit
+              ? 'Estimated split of recent wallet growth based on configured hotkey roles. This is a heuristic, not an exact ledger.'
+              : 'Configure HOTKEY_ROLE values in .env to split validator and owner inflows. Until then, this section stays mixed.') + '</p>',
+            '  <div class="wallet-current-stake-row">',
+            '    <div class="wallet-current-stake-card">',
+            '      <div class="label">24h change</div>',
+            '      <div class="value">' + escapeHtml(formatWalletSignedAmount(walletAttribution.totalChange, 2, priceUsd)) + '</div>',
+            '      <div class="subtext">Total wallet balance movement</div>',
+            '    </div>',
+            '    <div class="wallet-current-stake-card">',
+            '      <div class="label">Validator</div>',
+            '      <div class="value">' + escapeHtml(formatWalletSignedAmount(walletAttribution.validator, 2, priceUsd)) + '</div>',
+            '      <div class="subtext">' + escapeHtml(walletAttribution.hasAnySplit ? 'Estimated validator-side inflow' : 'Needs hotkey role metadata') + '</div>',
+            '    </div>',
+            '    <div class="wallet-current-stake-card">',
+            '      <div class="label">Owner</div>',
+            '      <div class="value">' + escapeHtml(formatWalletSignedAmount(walletAttribution.owner, 2, priceUsd)) + '</div>',
+            '      <div class="subtext">' + escapeHtml(walletAttribution.hasAnySplit ? 'Estimated owner-side inflow' : 'Needs hotkey role metadata') + '</div>',
+            '    </div>',
+            '    <div class="wallet-current-stake-card">',
+            '      <div class="label">Residual</div>',
+            '      <div class="value">' + escapeHtml(formatWalletSignedAmount(walletAttribution.residual, 2, priceUsd)) + '</div>',
+            '      <div class="subtext">Unclassified / mixed sources</div>',
+            '    </div>',
+            '  </div>',
+            walletAttributionHistoryRows
+              ? [
+                  '  <details class="wallet-attribution-history">',
+                  '    <summary>Estimated income history</summary>',
+                  '    <p class="wallet-history-note">Daily balance deltas split using the current hotkey role mix. If you change roles later, historical estimates will follow the current labels.</p>',
+                  '    <div class="wallet-positions-scroll wallet-history-scroll">',
+                  '      <table class="wallet-positions-table">',
+                  '        <thead>',
+                  '          <tr>',
+                  '            <th>Snapshot time</th>',
+                  '            <th>Total change</th>',
+                  '            <th>Validator est</th>',
+                  '            <th>Owner est</th>',
+                  '            <th>Residual</th>',
+                  '          </tr>',
+                  '        </thead>',
+                  '        <tbody>' + walletAttributionHistoryRows + '</tbody>',
+                  '      </table>',
+                  '    </div>',
+                  '  </details>',
+                ].join('')
+              : '',
+            '</div>',
+            '<div class="wallet-positions">',
+            '  <div class="wallet-positions-head">',
+            '    <h4 class="wallet-details-title">Current subnet stake</h4>',
+            '    <p class="wallet-history-note">' + escapeHtml(stakeSummary) + '</p>',
+            '  </div>',
+            configuredHotkeyRows
+              ? [
+                  '  <div class="wallet-hotkeys">',
+                  '    <h4 class="wallet-details-title">Configured hotkeys</h4>',
+                  '    <div class="wallet-hotkey-list">' + configuredHotkeyRows + '</div>',
+                  '  </div>',
+                ].join('')
+              : '',
+            stakeCards
+              ? [
+                  '  <div class="wallet-current-stake-row">',
+                  '    ' + stakeCards,
+                  '  </div>',
+                ].join('')
+              : '<p class="wallet-positions-empty">No current subnet stake positions were returned for this wallet.</p>',
+            [
+              '  <details class="wallet-history-details">',
+              '    <summary>Hotkey history</summary>',
+              '    <p class="wallet-history-note">Daily stake snapshots from Taostats, useful for seeing how each hotkey has changed over time.</p>',
+              state.modalStakeHistory === null
+                ? '<p class="wallet-positions-empty">Loading hotkey history…</p>'
+                : walletStakeHistoryRows
+                  ? [
+                      '    <div class="wallet-positions-scroll wallet-history-scroll">',
+                      '      <table class="wallet-positions-table">',
+                      '        <thead>',
+                      '          <tr>',
+                      '            <th>Snapshot time</th>',
+                      '            <th>Hotkey</th>',
+                      '            <th>Netuid</th>',
+                      '            <th>Stake</th>',
+                      '            <th>Rank</th>',
+                      '            <th>Change</th>',
+                      '          </tr>',
+                      '        </thead>',
+                      '        <tbody>' + walletStakeHistoryRows + '</tbody>',
+                      '      </table>',
+                      '    </div>',
+                    ].join('')
+                  : '<p class="wallet-positions-empty">No historical hotkey stake snapshots are stored yet.</p>',
+              '  </details>',
+            ].join(''),
             '</div>',
           ].join('');
-        }).join('');
-        const walletStakeHistoryRows = Array.isArray(state.modalStakeHistory) && state.modalStakeHistory.length
-          ? (() => {
-              const chronological = [...state.modalStakeHistory]
-                .sort((a, b) => new Date(a.captured_at).getTime() - new Date(b.captured_at).getTime())
-                .slice(0, 200);
-              const previousByKey = new Map();
-              const rows = [];
-              for (const position of chronological) {
-                const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
-                const hotkeyKey = String(position.hotkey_address_ss58 || position.hotkey_name || position.netuid || 'unknown');
-                const priorBalance = previousByKey.has(hotkeyKey) ? previousByKey.get(hotkeyKey) : null;
-                const delta = Number.isFinite(Number(balance)) && Number.isFinite(Number(priorBalance))
-                  ? Number(balance) - Number(priorBalance)
-                  : null;
-                previousByKey.set(hotkeyKey, balance);
-                const hotkeyLabel = position.hotkey_name
-                  || (position.hotkey_address_ss58 && configuredHotkeyMap.has(String(position.hotkey_address_ss58))
-                    ? (configuredHotkeyMap.get(String(position.hotkey_address_ss58)).name || shortAddress(position.hotkey_address_ss58))
-                    : shortAddress(position.hotkey_address_ss58 || '—'));
-                const snapshotLabel = position.captured_at
-                  ? new Date(position.captured_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
-                  : '—';
-                const deltaClass = delta === null ? 'neutral' : (delta > 0 ? 'positive' : (delta < 0 ? 'negative' : 'neutral'));
-                rows.push([
-                  '<tr>',
-                  '<td>' + escapeHtml(snapshotLabel) + '</td>',
-                  '<td>' + escapeHtml(hotkeyLabel) + '</td>',
-                  '<td>' + escapeHtml(position.netuid ?? '—') + '</td>',
-                  '<td>' + escapeHtml(formatWalletAmount(balance, 2, priceUsd)) + '</td>',
-                  '<td>' + escapeHtml(position.subnet_rank ?? '—') + '</td>',
-                  '<td><span class="wallet-history-delta ' + deltaClass + '">' + escapeHtml(delta === null ? '—' : formatWalletSignedAmount(delta, 2, priceUsd)) + '</span></td>',
-                  '</tr>',
-                ].join(''));
-              }
-              return rows.reverse().join('');
-            })()
-          : '';
-
-        modalElements.walletDetails.hidden = false;
-        const freeText = freePct === null ? 'Available balance' : freePct.toFixed(1) + '% of total';
-        const stakedText = stakedPct === null ? 'Locked in stake' : stakedPct.toFixed(1) + '% of total';
-        const rootText = rootPct === null ? 'Stake at root' : rootPct.toFixed(1) + '% of staked';
-        const alphaText = alphaPct === null ? 'Subnet stake' : alphaPct.toFixed(1) + '% of staked';
-        modalElements.walletDetails.innerHTML = [
-          '<h4 class="wallet-details-title">Wallet breakdown</h4>',
-          '<div class="wallet-breakdown-row">',
-          '  <div class="wallet-breakdown-card">',
-          '    <div class="label">Total</div>',
-          '    <div class="value">' + escapeHtml(formatWalletAmount(total, 2, priceUsd)) + '</div>',
-          '    <div class="subtext">Overall wallet balance</div>',
-          '  </div>',
-          '  <div class="wallet-breakdown-card">',
-          '    <div class="label">Free</div>',
-          '    <div class="value">' + escapeHtml(formatWalletAmount(free, 2, priceUsd)) + '</div>',
-          '    <div class="subtext">' + escapeHtml(freeText) + '</div>',
-          '  </div>',
-          '  <div class="wallet-breakdown-card">',
-          '    <div class="label">Staked</div>',
-          '    <div class="value">' + escapeHtml(formatWalletAmount(staked, 2, priceUsd)) + '</div>',
-          '    <div class="subtext">' + escapeHtml(stakedText) + '</div>',
-          '  </div>',
-          '  <div class="wallet-breakdown-card">',
-          '    <div class="label">Root</div>',
-          '    <div class="value">' + escapeHtml(formatWalletAmount(root, 2, priceUsd)) + '</div>',
-          '    <div class="subtext">' + escapeHtml(rootText) + '</div>',
-          '  </div>',
-          '  <div class="wallet-breakdown-card">',
-          '    <div class="label">Alpha</div>',
-          '    <div class="value">' + escapeHtml(formatWalletAmount(alpha, 2, priceUsd)) + '</div>',
-          '    <div class="subtext">' + escapeHtml(alphaText) + '</div>',
-          '  </div>',
-          '  <div class="wallet-breakdown-card">',
-          '    <div class="label">24h Change</div>',
-          '    <div class="value">' + escapeHtml(formatWalletSignedAmount(change24h, 2, priceUsd)) + '</div>',
-          '    <div class="subtext">Compared with the previous day</div>',
-          '  </div>',
-          '</div>',
-          '<div class="wallet-profile">',
-          '  <h4 class="wallet-details-title">Wallet profile</h4>',
-          '  <div class="wallet-breakdown-grid">' + walletProfileRows + '</div>',
-          '</div>',
-          '<div class="wallet-positions">',
-          '  <div class="wallet-positions-head">',
-          '    <h4 class="wallet-details-title">Current subnet stake</h4>',
-          '    <p class="wallet-history-note">' + escapeHtml(stakeSummary) + '</p>',
-          '  </div>',
-          configuredHotkeyRows
-            ? [
-                '  <div class="wallet-hotkeys">',
-                '    <h4 class="wallet-details-title">Configured hotkeys</h4>',
-                '    <div class="wallet-hotkey-list">' + configuredHotkeyRows + '</div>',
-                '  </div>',
-              ].join('')
-            : '',
-          stakeCards
-            ? [
-                '  <div class="wallet-current-stake-row">',
-                '    ' + stakeCards,
-                '  </div>',
-              ].join('')
-            : '<p class="wallet-positions-empty">No current subnet stake positions were returned for this wallet.</p>',
-          [
-            '  <details class="wallet-history-details">',
-            '    <summary>Hotkey history</summary>',
-            '    <p class="wallet-history-note">Daily stake snapshots from Taostats, useful for seeing how each hotkey has changed over time.</p>',
-            state.modalStakeHistory === null
-              ? '<p class="wallet-positions-empty">Loading hotkey history…</p>'
-              : walletStakeHistoryRows
-                ? [
-                    '    <div class="wallet-positions-scroll wallet-history-scroll">',
-                    '      <table class="wallet-positions-table">',
-                    '        <thead>',
-                    '          <tr>',
-                    '            <th>Snapshot time</th>',
-                    '            <th>Hotkey</th>',
-                    '            <th>Netuid</th>',
-                    '            <th>Stake</th>',
-                    '            <th>Rank</th>',
-                    '            <th>Change</th>',
-                    '          </tr>',
-                    '        </thead>',
-                    '        <tbody>' + walletStakeHistoryRows + '</tbody>',
-                    '      </table>',
-                    '    </div>',
-                  ].join('')
-                : '<p class="wallet-positions-empty">No historical hotkey stake snapshots are stored yet.</p>',
-            '  </details>',
-          ].join(''),
-          '</div>',
-        ].join('');
+        } catch (error) {
+          console.warn('Unable to render wallet details for', metric.label, error);
+          if (modalElements.walletDetails) {
+            modalElements.walletDetails.hidden = false;
+            const message = error && error.message ? error.message : String(error || 'Unknown error');
+            const stack = error && error.stack ? String(error.stack).split('\\n').slice(0, 3).join('\\n') : '';
+            modalElements.walletDetails.innerHTML = [
+              '<div class="pool-estimator-unavailable">',
+              '  <p>Wallet details could not render.</p>',
+              '  <p><strong>Debug:</strong> ' + escapeHtml(message) + '</p>',
+              stack ? '<pre style="white-space:pre-wrap;margin:0;color:#93a4ba;">' + escapeHtml(stack) + '</pre>' : '',
+              '</div>',
+            ].join('');
+          }
+        }
       }
 
       function refreshMetricElements() {
@@ -3158,7 +3761,15 @@ function renderDashboardClientScript({ netuid, config }) {
           : (metric.rawValue !== null && metric.rawValue !== undefined
             ? ('Raw: ' + metric.rawValue)
             : 'Loading historical field...');
-        renderWalletDetails(metric);
+        try {
+          renderWalletDetails(metric);
+        } catch (error) {
+          console.warn('Unable to render wallet details for', metric.label, error);
+          if (metric.kind === 'wallet' && modalElements.walletDetails) {
+            modalElements.walletDetails.hidden = false;
+            modalElements.walletDetails.innerHTML = '<p class="pool-estimator-unavailable">Wallet details could not render.</p>';
+          }
+        }
         modalElements.samples.textContent = '—';
         if (modalElements.samplesNote) {
           modalElements.samplesNote.textContent = historyRangeSubtitle(state.modalHistoryDays);
@@ -3180,7 +3791,11 @@ function renderDashboardClientScript({ netuid, config }) {
           void loadWalletStakeHistory(metric, days).then((stakeHistory) => {
             if (state.modalMetric === metric && state.modalHistoryDays === days) {
               state.modalStakeHistory = Array.isArray(stakeHistory) ? stakeHistory : [];
-              renderWalletDetails(metric);
+              try {
+                renderWalletDetails(metric);
+              } catch (error) {
+                console.warn('Unable to update wallet details for', metric.label, error);
+              }
             }
           });
         } else {
@@ -3209,7 +3824,11 @@ function renderDashboardClientScript({ netuid, config }) {
             : (metric.rawValue !== null && metric.rawValue !== undefined
               ? ('Raw: ' + metric.rawValue)
               : ('Tracked field: ' + field)));
-        renderWalletDetails(metric);
+        try {
+          renderWalletDetails(metric);
+        } catch (error) {
+          console.warn('Unable to refresh wallet details after history load for', metric.label, error);
+        }
         modalElements.samples.textContent = String(visiblePoints.length);
         if (modalElements.samplesNote) {
           modalElements.samplesNote.textContent = historyRangeSubtitle(days);
@@ -3224,7 +3843,15 @@ function renderDashboardClientScript({ netuid, config }) {
           modalElements.note.textContent = historyNote;
         }
         modalElements.empty.hidden = true;
-        renderHistoryChart(metric, history);
+        try {
+          renderHistoryChart(metric, history);
+        } catch (error) {
+          console.warn('Unable to render historical chart for', metric.label, error);
+          modalElements.subtitle.textContent = 'Historical data loaded, but the chart could not render.';
+          modalElements.empty.hidden = false;
+          modalElements.empty.textContent = 'The history data loaded, but the chart renderer failed.';
+          modalElements.canvas.hidden = true;
+        }
       }
 
       async function openHistoryModal(metricJson) {
@@ -3275,6 +3902,7 @@ function renderDashboardClientScript({ netuid, config }) {
         updateTaoPriceLabel();
         refreshMetricElements();
         renderCharts();
+        initializePoolGrowthEstimator();
         if (state.modalMetric) {
           modalElements.latestValue.textContent = displayMetricText(state.modalMetric);
           renderWalletDetails(state.modalMetric);
@@ -3984,6 +4612,9 @@ function renderPage(model) {
       .wallet-profile {
         margin-top: 16px;
       }
+      .wallet-attribution {
+        margin-top: 16px;
+      }
       .wallet-hotkeys {
         margin: 0 0 14px;
       }
@@ -4136,10 +4767,176 @@ function renderPage(model) {
       .wallet-history-details[open] > summary::before {
         transform: rotate(90deg);
       }
+      .wallet-attribution-history {
+        margin-top: 14px;
+      }
+      .wallet-attribution-history > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .wallet-attribution-history > summary::-webkit-details-marker {
+        display: none;
+      }
+      .wallet-attribution-history > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .wallet-attribution-history[open] > summary::before {
+        transform: rotate(90deg);
+      }
       .wallet-history-note {
         margin: 8px 0 10px;
         color: var(--muted);
         font-size: 13px;
+      }
+      .pool-growth-estimator {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid rgba(143, 163, 184, 0.14);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .pool-growth-estimator > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .pool-growth-estimator > summary::-webkit-details-marker {
+        display: none;
+      }
+      .pool-growth-estimator > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .pool-growth-estimator[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .pool-growth-estimator-body {
+        margin-top: 8px;
+      }
+      .pool-estimator-controls {
+        display: grid;
+        gap: 12px;
+      }
+      .pool-estimator-input-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: flex-end;
+      }
+      .pool-estimator-input-row label {
+        display: grid;
+        gap: 6px;
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 600;
+        min-width: 220px;
+      }
+      .pool-estimator-input-row input {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(143, 163, 184, 0.18);
+        background: rgba(4, 8, 16, 0.65);
+        color: var(--text);
+        font: inherit;
+      }
+      .pool-estimator-input-row input:focus {
+        outline: 2px solid rgba(0, 219, 188, 0.24);
+        outline-offset: 1px;
+      }
+      .pool-estimator-presets {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .pool-estimator-results {
+        margin-top: 12px;
+      }
+      .pool-estimator-summary {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .pool-estimator-chart {
+        margin-top: 12px;
+        display: grid;
+        gap: 10px;
+      }
+      .pool-estimator-chart-row {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .pool-estimator-chart-label {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .pool-estimator-chart-track {
+        position: relative;
+        height: 12px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(143, 163, 184, 0.16);
+      }
+      .pool-estimator-chart-fill {
+        height: 100%;
+        border-radius: inherit;
+        transition: width 0.2s ease;
+      }
+      .pool-estimator-chart-fill.current {
+        background: linear-gradient(90deg, rgba(0, 219, 188, 0.72), rgba(0, 219, 188, 0.34));
+      }
+      .pool-estimator-chart-fill.projected {
+        background: linear-gradient(90deg, rgba(108, 140, 255, 0.76), rgba(108, 140, 255, 0.34));
+      }
+      .pool-estimator-chart-value {
+        color: var(--text);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        white-space: nowrap;
+      }
+      .pool-estimator-chart-caption,
+      .pool-estimator-unavailable {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .pool-estimator-unavailable {
+        margin: 8px 0 0;
       }
       .wallet-history-scroll {
         max-height: 280px;
@@ -4464,7 +5261,9 @@ function renderPage(model) {
 
       ${latestCard}
 
-      ${renderWalletSection(walletEntries)}
+      ${renderWalletSection(walletEntries, latest)}
+
+      ${renderPoolGrowthSection(latest)}
 
       ${renderFinancialPerspectiveSection(signal, insight)}
 

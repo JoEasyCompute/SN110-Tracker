@@ -18,6 +18,10 @@ const {
   createRateLimiter,
 } = require('../src/taostats');
 const {
+  estimatePoolGrowth,
+  buildPoolGrowthEstimatorState,
+} = require('../src/pool-estimator');
+const {
   openDatabase,
   insertSnapshot,
   insertTaoPriceSnapshot,
@@ -349,6 +353,52 @@ test('pickRecord supports array-shaped API payloads', () => {
   assert.equal(record.name, 'Green Compute');
 });
 
+test('pool growth estimator resolves pool state and projects AMM changes', () => {
+  const state = buildPoolGrowthEstimatorState({
+    total_tao_num: 100_000_000_000,
+    price_num: 0.1,
+    alpha_in_pool_text: '1000',
+  });
+  assert.equal(state.available, true);
+  assert.equal(state.currentPool.taoInPool, 100);
+  assert.equal(state.currentPool.alphaInPool, 1000);
+  assert.equal(state.currentPool.currentPrice, 0.1);
+
+  const zero = estimatePoolGrowth({
+    taoInPool: state.currentPool.taoInPool,
+    alphaInPool: state.currentPool.alphaInPool,
+    taoInjected: 0,
+  });
+  assert.equal(zero.available, true);
+  assert.equal(zero.alphaReceived, 0);
+  assert.equal(zero.projectedPrice, 0.1);
+  assert.equal(zero.priceChangePct, 0);
+
+  const small = estimatePoolGrowth({
+    taoInPool: state.currentPool.taoInPool,
+    alphaInPool: state.currentPool.alphaInPool,
+    taoInjected: 10,
+  });
+  assert.equal(small.available, true);
+  assert.ok(Math.abs(small.alphaReceived - 90.9090909091) < 1e-9);
+  assert.ok(Math.abs(small.projectedPrice - 0.121) < 1e-12);
+  assert.ok(Math.abs(small.priceChangePct - 21) < 1e-9);
+
+  const large = estimatePoolGrowth({
+    taoInPool: state.currentPool.taoInPool,
+    alphaInPool: state.currentPool.alphaInPool,
+    taoInjected: 100,
+  });
+  assert.equal(large.available, true);
+  assert.ok(Math.abs(large.alphaReceived - 500) < 1e-9);
+  assert.ok(Math.abs(large.projectedPrice - 0.4) < 1e-12);
+  assert.ok(Math.abs(large.priceChangePct - 300) < 1e-9);
+
+  const missing = buildPoolGrowthEstimatorState({});
+  assert.equal(missing.available, false);
+  assert.equal(missing.reason.includes('missing'), true);
+});
+
 test('rate limiter spaces requests to respect the configured cap', async () => {
   const limiter = createRateLimiter({ maxRequests: 5, intervalMs: 1000 });
   const first = await limiter.waitForSlot();
@@ -425,7 +475,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
       taostatsAuthHeader: '',
       taostatsAdminApiKey: 'admin-secret',
       pollIntervalMinutes: 15,
-      wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney' }] }],
+      wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney', role: 'validator' }, { name: 'Owner Key', ss58: '5HotkeyTwo', netuid: 112, network: 'finney', role: 'owner' }] }],
     },
     netuid: 110,
   });
@@ -438,14 +488,27 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('history-window-label'), true);
   assert.equal(html.includes('14D'), true);
   assert.equal(html.includes('Wallet balances'), true);
+  assert.equal(html.includes('id="pool-growth-estimator"'), true);
+  assert.equal(html.includes('data-pool-growth-root="page"'), true);
   assert.equal(html.includes('Alpha Treasury'), true);
   assert.equal(html.includes('5Walle'), true);
-  assert.equal(html.includes('Hotkey Miner One'), true);
+  assert.equal(html.includes('Miner One'), true);
   assert.equal(html.includes('Current subnet stake'), true);
+  assert.equal(html.includes('Pool growth estimator'), true);
+  assert.equal(html.includes('TAO injected'), true);
+  assert.equal(html.includes('Estimated alpha received'), true);
+  assert.equal(html.includes('Projected alpha price'), true);
+  assert.equal(html.includes('Price change %'), true);
+  assert.equal(html.includes('Projected post-injection reserves'), true);
+  assert.equal(html.includes('data-pool-preset='), true);
   assert.equal(html.includes('Wallet profile'), true);
   assert.equal(html.includes('Created'), true);
   assert.equal(html.includes('Rank'), true);
   assert.equal(html.includes('Configured hotkeys'), true);
+  assert.equal(html.includes('Income sources'), true);
+  assert.equal(html.includes('Validator'), true);
+  assert.equal(html.includes('Owner'), true);
+  assert.equal(html.includes('Residual'), true);
   assert.equal(html.includes('Hotkey history'), true);
   assert.equal(html.includes('Change'), true);
   assert.equal(html.includes('Miner One'), true);
@@ -1038,11 +1101,12 @@ test('loadConfig reads environment values from a local .env file', () => {
     'TAOSTATS_WALLET_1_HOTKEY_1_NAME=SN110 Miner',
     'TAOSTATS_WALLET_1_HOTKEY_1_SS58=5HotkeyAlpha123456789ABCDEFGH',
     'TAOSTATS_WALLET_1_HOTKEY_1_NETUID=110',
+    'TAOSTATS_WALLET_1_HOTKEY_1_ROLE=validator',
     'TAOSTATS_WALLET_2_NAME=Ops',
     'TAOSTATS_WALLET_2_COLDKEY=5WalletBeta123456789ABCDEFGH',
   ].join('\n'));
 
-  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_ADMIN_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_COLDKEY', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_1_HOTKEY_1_NAME', 'TAOSTATS_WALLET_1_HOTKEY_1_SS58', 'TAOSTATS_WALLET_1_HOTKEY_1_NETUID', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_COLDKEY', 'TAOSTATS_WALLET_2_SS58'];
+  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_ADMIN_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_COLDKEY', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_1_HOTKEY_1_NAME', 'TAOSTATS_WALLET_1_HOTKEY_1_SS58', 'TAOSTATS_WALLET_1_HOTKEY_1_NETUID', 'TAOSTATS_WALLET_1_HOTKEY_1_ROLE', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_COLDKEY', 'TAOSTATS_WALLET_2_SS58'];
   const backup = Object.fromEntries(envKeys.map((key) => [key, Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined]));
 
   try {
@@ -1071,6 +1135,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     assert.equal(config.wallets[0].hotkeys[0].name, 'SN110 Miner');
     assert.equal(config.wallets[0].hotkeys[0].ss58, '5HotkeyAlpha123456789ABCDEFGH');
     assert.equal(config.wallets[0].hotkeys[0].netuid, 110);
+    assert.equal(config.wallets[0].hotkeys[0].role, 'validator');
     assert.equal(config.wallets[1].name, 'Ops');
     assert.equal(config.wallets[1].coldkey, '5WalletBeta123456789ABCDEFGH');
   } finally {

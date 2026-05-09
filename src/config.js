@@ -33,8 +33,9 @@ function parseWalletHotkeys(env = process.env, walletPrefix = '', fallbackNetwor
     const name = String(env[`${prefix}NAME`] || '').trim();
     const network = String(env[`${prefix}NETWORK`] || fallbackNetwork || 'finney').trim() || (fallbackNetwork || 'finney');
     const netuid = intOr(null, env[`${prefix}NETUID`]);
+    const role = String(env[`${prefix}ROLE`] || env[`${prefix}SOURCE`] || '').trim().toLowerCase();
 
-    if (!ss58 && !name && netuid === null && !env[`${prefix}NETWORK`]) {
+    if (!ss58 && !name && netuid === null && !role && !env[`${prefix}NETWORK`]) {
       continue;
     }
     if (!ss58) {
@@ -46,6 +47,7 @@ function parseWalletHotkeys(env = process.env, walletPrefix = '', fallbackNetwor
       ss58,
       network,
       netuid,
+      role: role || null,
     });
   }
 

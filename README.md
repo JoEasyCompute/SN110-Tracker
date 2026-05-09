@@ -20,6 +20,7 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Tracks configured wallet balances from Taostats account latest/history endpoints, using wallet coldkeys, optional hotkeys, and human-friendly names from `.env`
 - Shows wallet balances above the financial perspective panel, with the wallet modal presenting the breakdown in a single row and the current subnet stake in a compact horizontal strip
 - Includes a collapsible hotkey history section in the wallet modal with positive/negative deltas so you can see whether each hotkey is moving up or down over time
+- Includes a standalone Pool growth estimator beneath the wallet section so you can simulate TAO injection against the current subnet pool snapshot
 - Keeps operational JSON/debug views inside a collapsible admin panel that only appears when `TAOSTATS_ADMIN_API_KEY` is set, so the main dashboard stays clean
 - Includes a subnet sentiment card that prefers Taostats SSI when available and falls back to the legacy Fear & Greed value on older rows
 - Money In/Out charts use Taostats Tao Flow history so the historical view stays available even when the subnet snapshot history is sparse
@@ -54,9 +55,9 @@ Environment variables:
 - `TAOSTATS_BACKFILL_ON_STARTUP` - set to `true` to run historical backfill on startup
 - `TAOSTATS_BACKFILL_OVERWRITE` - replace overlapping rows in the backfill window, defaults to `true`
 - `TAOSTATS_WALLET_1_NAME`, `TAOSTATS_WALLET_1_COLDKEY` (or the backward-compatible `TAOSTATS_WALLET_1_SS58`), `TAOSTATS_WALLET_1_NETWORK` - first tracked wallet entry
-- `TAOSTATS_WALLET_1_HOTKEY_1_NAME`, `TAOSTATS_WALLET_1_HOTKEY_1_SS58`, `TAOSTATS_WALLET_1_HOTKEY_1_NETUID` - optional first hotkey for wallet 1
+- `TAOSTATS_WALLET_1_HOTKEY_1_NAME`, `TAOSTATS_WALLET_1_HOTKEY_1_SS58`, `TAOSTATS_WALLET_1_HOTKEY_1_NETUID`, `TAOSTATS_WALLET_1_HOTKEY_1_ROLE` - optional first hotkey for wallet 1
 - `TAOSTATS_WALLET_2_NAME`, `TAOSTATS_WALLET_2_COLDKEY`, `TAOSTATS_WALLET_2_NETWORK` - second tracked wallet entry
-- `TAOSTATS_WALLET_2_HOTKEY_1_NAME`, `TAOSTATS_WALLET_2_HOTKEY_1_SS58`, `TAOSTATS_WALLET_2_HOTKEY_1_NETUID` - optional first hotkey for wallet 2
+- `TAOSTATS_WALLET_2_HOTKEY_1_NAME`, `TAOSTATS_WALLET_2_HOTKEY_1_SS58`, `TAOSTATS_WALLET_2_HOTKEY_1_NETUID`, `TAOSTATS_WALLET_2_HOTKEY_1_ROLE` - optional first hotkey for wallet 2
 - Continue incrementing the wallet index and hotkey index for additional tracked wallets and hotkeys
 - `TAOSTATS_BASE_URL` - defaults to `https://api.taostats.io`
 - `TAOSTATS_PUBLIC_BASE_URL` - defaults to `https://taostats.io`
@@ -65,7 +66,7 @@ Environment variables:
 
 The app automatically loads a local `.env` file from the project root if present.
 You can keep your Taostats key there for local development.
-You can also keep one or more wallet coldkeys there as indexed entries with matching names, and attach optional hotkeys per wallet for clearer miner/validator context.
+You can also keep one or more wallet coldkeys there as indexed entries with matching names, and attach optional hotkeys per wallet for clearer miner/validator context. If you want the wallet modal to split the income sources, add `ROLE=validator` or `ROLE=owner` to the relevant hotkeys; otherwise the dashboard will keep the wallet inflow attribution mixed/unclassified.
 The checked-in `.env.example` is intentionally redacted, so copy it locally and replace the placeholder ss58 values with your own wallet and hotkey addresses.
 
 If the Taostats API requires a prefix like `Bearer`, put the full header value in `TAOSTATS_AUTH_HEADER`.
@@ -131,7 +132,35 @@ The same setting is used on startup if it has already been stored locally.
 The top bar also shows the next scheduled poll time.
 The dashboard now starts with a wallet section, followed by a collapsible financial perspective panel, then a beginner-friendly quick read and watchlist that highlight the main price, flow, sentiment, and supply relationships before the underlying charts.
 Configured wallet balances appear in their own section, and clicking a wallet card opens the historical balance modal with wallet profile details such as rank, created-on date, configured hotkeys, current subnet stake positions, and coldkey swap status when available.
+The wallet modal also includes an estimated income-sources section that can split recent wallet growth between validator and owner roles when you tag hotkeys with `ROLE`.
 The wallet modal also includes a hotkey history panel with delta color-coding so you can quickly spot which subnet positions are growing or shrinking.
+
+## Pool growth estimator
+
+The dashboard includes a standalone **Pool growth estimator** section directly beneath the wallet cards.
+
+What it uses:
+- the latest local subnet pool snapshot already stored in SQLite
+- the current TAO reserve
+- the current alpha reserve
+- the current alpha price
+
+What it does:
+- simulates a TAO injection locally using the current pool ratio
+- estimates alpha received
+- projects the post-injection alpha price
+- shows the percent price change and slippage against the no-slippage baseline
+
+What to know:
+- it is a what-if simulator, not a trade executor or transaction tracker
+- results are approximate and assume the current snapshot is the baseline
+- the estimator does not call a new backend route; it runs from the current dashboard data already in memory
+- if the local pool snapshot is missing reserve or price fields, the estimator shows an unavailable state instead of guessing
+
+Implementation notes:
+- the estimator source lives in `src/pool-estimator.js`
+- the UI is rendered in `src/server.js`
+- a longer source-and-behavior guide lives in `docs/pool-growth-estimator.md`
 
 ## Commands
 
