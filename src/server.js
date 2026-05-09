@@ -18,7 +18,7 @@ const {
   countWalletSnapshots,
 } = require('./db');
 const { POLL_INTERVAL_OPTIONS } = require('./config');
-const { buildPoolGrowthEstimatorState, estimatePoolGrowth } = require('./pool-estimator');
+const { buildPoolGrowthEstimatorState, buildPoolGrowthScenarioSeries, estimatePoolGrowth } = require('./pool-estimator');
 
 const TAO_PER_RAO = 1_000_000_000;
 
@@ -1273,6 +1273,108 @@ function renderWalletSection(walletEntries, latestSubnet = null) {
   `;
 }
 
+function renderPoolGrowthScenarioChartMarkup(series, selectedResult, maxInjected) {
+  if (!series?.available || !Array.isArray(series.points) || series.points.length < 2 || !selectedResult?.available) {
+  return `
+      <div class="pool-estimator-scenario pool-estimator-scenario-details pool-estimator-scenario-unavailable" data-pool-scenario-chart="true" data-pool-scenario-open="false" data-pool-scenario-max-tao-injected="${escapeHtml(maxInjected)}">
+        <div class="pool-estimator-scenario-summary">
+          <div class="pool-estimator-scenario-summary-text">
+            <div class="label">Alpha price change curve</div>
+            <div class="pool-estimator-scenario-title">Scenario chart unavailable</div>
+          </div>
+          <button class="pool-estimator-scenario-summary-hint" type="button" onmousedown="window.togglePoolGrowthScenario(this); return false;" onkeydown="if(event.key==='Enter'||event.key===' '){window.togglePoolGrowthScenario(this); return false;}">
+            Show chart
+          </button>
+        </div>
+        <div class="pool-estimator-scenario-caption">The current snapshot does not contain enough pool data to draw the scenario curve.</div>
+      </div>
+    `;
+  }
+
+  const width = 500;
+  const height = 170;
+  const padding = { top: 14, right: 14, bottom: 28, left: 54 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const points = series.points;
+  const values = points.map((point) => Number(point.priceChangePct)).filter((value) => Number.isFinite(value));
+  const minValue = Math.min(0, ...values);
+  const maxValue = Math.max(0, ...values);
+  const valueSpan = Math.max(1e-6, maxValue - minValue);
+  const gridValues = [minValue, minValue + (valueSpan / 2), maxValue];
+  const xForIndex = (index) => padding.left + (index / (points.length - 1)) * innerWidth;
+  const yForValue = (value) => padding.top + (1 - ((Number(value) - minValue) / valueSpan)) * innerHeight;
+  const coords = points.map((point, index) => ({
+    x: xForIndex(index),
+    y: yForValue(point.priceChangePct),
+    point,
+    index,
+  }));
+  const linePath = coords.map(({ x, y }, index) => `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`).join(' ');
+  const areaPath = [
+    `M ${padding.left.toFixed(2)} ${(padding.top + innerHeight).toFixed(2)}`,
+    ...coords.map(({ x, y }) => `L ${x.toFixed(2)} ${y.toFixed(2)}`),
+    `L ${(padding.left + innerWidth).toFixed(2)} ${(padding.top + innerHeight).toFixed(2)}`,
+    'Z',
+  ].join(' ');
+  const xAxisLabelLeft = '0 TAO';
+  const selectedInjected = Number(selectedResult.taoInjected);
+  const selectedX = Number.isFinite(selectedInjected) ? padding.left + Math.max(0, Math.min(selectedInjected, maxInjected)) / maxInjected * innerWidth : padding.left;
+  const selectedY = padding.top + (1 - ((Number(selectedResult.priceChangePct) - minValue) / valueSpan)) * innerHeight;
+
+  return `
+      <div class="pool-estimator-scenario pool-estimator-scenario-details" data-pool-scenario-chart="true" data-pool-scenario-open="false" data-pool-scenario-max-tao-injected="${escapeHtml(maxInjected)}" data-pool-scenario-min-change="${escapeHtml(minValue)}" data-pool-scenario-max-change="${escapeHtml(maxValue)}">
+        <div class="pool-estimator-scenario-summary">
+          <div class="pool-estimator-scenario-summary-text">
+            <div class="label">Alpha price change curve</div>
+            <div class="pool-estimator-scenario-title">Projected alpha price change vs TAO injected</div>
+          </div>
+          <button class="pool-estimator-scenario-summary-hint" type="button" onmousedown="window.togglePoolGrowthScenario(this); return false;" onkeydown="if(event.key==='Enter'||event.key===' '){window.togglePoolGrowthScenario(this); return false;}">Show chart</button>
+        </div>
+      <div class="pool-estimator-scenario-body">
+        <div class="pool-estimator-scenario-meta-row">
+          <div class="pool-estimator-scenario-meta" id="pool-growth-scenario-meta">
+            ${escapeHtml(tao(selectedResult.taoInjected, 2))} injected → ${escapeHtml(signedPercent(selectedResult.priceChangePct, 2))} • ${escapeHtml(tao(selectedResult.projectedPrice, 6))} / α
+          </div>
+        </div>
+        <div class="pool-estimator-scenario-plot">
+          <svg class="pool-estimator-scenario-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Alpha price change versus TAO injected scenario curve">
+            <defs>
+              <linearGradient id="pool-growth-scenario-fill" x1="0%" x2="0%" y1="0%" y2="100%">
+                <stop offset="0%" stop-color="#00dbbc" stop-opacity="0.32"/>
+                <stop offset="100%" stop-color="#00dbbc" stop-opacity="0.04"/>
+              </linearGradient>
+            </defs>
+            ${gridValues.map((value) => {
+              const y = yForValue(value);
+              return `
+                <line x1="${padding.left}" y1="${y.toFixed(2)}" x2="${padding.left + innerWidth}" y2="${y.toFixed(2)}" class="pool-estimator-scenario-grid-line" />
+                <text x="${padding.left - 10}" y="${(y + 3).toFixed(2)}" text-anchor="end" class="pool-estimator-scenario-grid-label">${escapeHtml(signedPercent(value, 0))}</text>
+              `;
+            }).join('')}
+            <line x1="${padding.left}" y1="${padding.top + innerHeight}" x2="${padding.left + innerWidth}" y2="${padding.top + innerHeight}" class="pool-estimator-scenario-axis-line" />
+            <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${padding.top + innerHeight}" class="pool-estimator-scenario-axis-line" />
+            <path d="${areaPath}" class="pool-estimator-scenario-area"></path>
+            <path d="${linePath}" class="pool-estimator-scenario-line"></path>
+            <line class="pool-estimator-scenario-crosshair vertical" x1="${selectedX.toFixed(2)}" x2="${selectedX.toFixed(2)}" y1="${padding.top}" y2="${padding.top + innerHeight}" />
+            <line class="pool-estimator-scenario-crosshair horizontal" x1="${padding.left}" x2="${padding.left + innerWidth}" y1="${selectedY.toFixed(2)}" y2="${selectedY.toFixed(2)}" />
+            <rect class="pool-estimator-scenario-hit-area" x="${padding.left}" y="${padding.top}" width="${innerWidth}" height="${innerHeight}" />
+            <text x="${padding.left}" y="${height - 16}" font-size="8" font-weight="600" class="pool-estimator-scenario-axis-label">${escapeHtml(xAxisLabelLeft)}</text>
+            <text x="${padding.left + innerWidth / 2}" y="${height - 16}" text-anchor="middle" font-size="8" font-weight="600" class="pool-estimator-scenario-axis-label">TAO 1,250</text>
+            <text x="${padding.left + innerWidth}" y="${height - 16}" text-anchor="end" font-size="8" font-weight="600" class="pool-estimator-scenario-axis-label">TAO 2,500</text>
+          </svg>
+          <div class="pool-estimator-scenario-tooltip" hidden>
+            <div class="pool-estimator-scenario-tooltip-title" id="pool-growth-scenario-tooltip-title">TAO injected</div>
+            <div class="pool-estimator-scenario-tooltip-value" id="pool-growth-scenario-tooltip-value"></div>
+            <div class="pool-estimator-scenario-tooltip-subtext" id="pool-growth-scenario-tooltip-subtext"></div>
+          </div>
+        </div>
+        <div class="pool-estimator-scenario-caption" id="pool-growth-scenario-caption">At ${escapeHtml(tao(selectedResult.taoInjected, 2))} injected, the projected alpha price change is ${escapeHtml(signedPercent(selectedResult.priceChangePct, 2))}.</div>
+      </div>
+    </div>
+  `;
+}
+
 function renderPoolGrowthSection(latestSubnet = null) {
   const poolEstimator = buildPoolGrowthEstimatorState(latestSubnet);
   const rootAttrs = [
@@ -1281,9 +1383,12 @@ function renderPoolGrowthSection(latestSubnet = null) {
     'open',
     'data-pool-growth-root="page"',
     'data-pool-available="' + (poolEstimator.available ? 'true' : 'false') + '"',
+    'data-pool-scenario-open="false"',
     'data-pool-tao-in-pool="' + escapeHtml(poolEstimator.currentPool?.taoInPool ?? '') + '"',
     'data-pool-alpha-in-pool="' + escapeHtml(poolEstimator.currentPool?.alphaInPool ?? '') + '"',
     'data-pool-current-price="' + escapeHtml(poolEstimator.currentPool?.currentPrice ?? '') + '"',
+    'data-pool-market-cap="' + escapeHtml(poolEstimator.currentPool?.marketCap ?? '') + '"',
+    'data-pool-scenario-max-tao-injected="' + escapeHtml(Math.max(poolEstimator.defaultTaoInjected ?? 10, ...(Array.isArray(poolEstimator.presets) ? poolEstimator.presets : [1, 10, 50]), 50)) + '"',
     'data-pool-reason="' + escapeHtml(poolEstimator.reason ?? '') + '"',
     'data-pool-default-tao-injected="' + escapeHtml(poolEstimator.defaultTaoInjected ?? 10) + '"',
     'data-pool-presets="' + escapeHtml((Array.isArray(poolEstimator.presets) ? poolEstimator.presets : [1, 10, 50]).join(',')) + '"',
@@ -1308,15 +1413,26 @@ function renderPoolGrowthSection(latestSubnet = null) {
   }
 
   const currentPool = poolEstimator.currentPool;
+  const scenarioMaxInjected = 2500;
   const initialResult = estimatePoolGrowth({
     taoInPool: currentPool.taoInPool,
     alphaInPool: currentPool.alphaInPool,
     taoInjected: poolEstimator.defaultTaoInjected,
+    marketCap: currentPool.marketCap,
   });
+  const scenarioSeries = buildPoolGrowthScenarioSeries({
+    taoInPool: currentPool.taoInPool,
+    alphaInPool: currentPool.alphaInPool,
+    marketCap: currentPool.marketCap,
+  }, { maxInjected: scenarioMaxInjected, pointCount: 81 });
   const presets = Array.isArray(poolEstimator.presets) && poolEstimator.presets.length ? poolEstimator.presets : [1, 10, 50];
   const chartScale = Math.max(initialResult.currentPrice, initialResult.projectedPrice, initialResult.currentPrice * 1.25, 1e-12);
   const currentWidth = Math.max(4, Math.min(100, (initialResult.currentPrice / chartScale) * 100));
   const projectedWidth = Math.max(4, Math.min(100, (initialResult.projectedPrice / chartScale) * 100));
+  const marketCapChangeText = initialResult.currentMarketCap === null || initialResult.projectedMarketCap === null
+    ? 'Market cap unavailable from snapshot.'
+    : `Change: ${signedPercent(initialResult.marketCapChangePct, 2)} • current ${tao(initialResult.currentMarketCap, 2)}`;
+  const scenarioChartMarkup = renderPoolGrowthScenarioChartMarkup(scenarioSeries, initialResult, scenarioMaxInjected);
 
   return `
     <section class="section pool-growth-section">
@@ -1328,47 +1444,64 @@ function renderPoolGrowthSection(latestSubnet = null) {
         <summary>Pool growth estimator</summary>
         <div class="pool-growth-estimator-body" data-pool-estimator="true">
           <p class="wallet-history-note">Estimate only — this uses the current constant-product AMM reserve ratio. Fees, future emissions, and other live activity can move the outcome.</p>
-          <div class="pool-estimator-controls">
-            <div class="pool-estimator-input-row">
-              <label for="pool-growth-tao-injected">
-                TAO injected
-                <input id="pool-growth-tao-injected" type="number" min="0" step="0.1" inputmode="decimal" value="${escapeHtml(String(poolEstimator.defaultTaoInjected ?? 10))}">
-              </label>
-              <div class="pool-estimator-presets" role="group" aria-label="Quick TAO presets">
-                ${presets.map((preset) => `<button type="button" class="button" data-pool-preset="${escapeHtml(String(preset))}">${escapeHtml(tao(preset, 0))}</button>`).join('')}
+          <div class="pool-estimator-layout">
+            <div class="pool-estimator-main-column">
+              <div class="pool-estimator-controls">
+                <div class="pool-estimator-input-row">
+                  <label for="pool-growth-tao-injected">
+                    TAO injected
+                    <input id="pool-growth-tao-injected" type="number" min="0" step="0.1" inputmode="decimal" value="${escapeHtml(String(poolEstimator.defaultTaoInjected ?? 10))}">
+                  </label>
+                  <div class="pool-estimator-presets" role="group" aria-label="Quick TAO presets">
+                    ${presets.map((preset) => `<button type="button" class="button" data-pool-preset="${escapeHtml(String(preset))}">${escapeHtml(tao(preset, 0))}</button>`).join('')}
+                  </div>
+                </div>
+                <div class="pool-estimator-summary" id="pool-growth-summary">Current pool: ${escapeHtml(tao(currentPool.taoInPool, 2))} • ${escapeHtml(alpha(currentPool.alphaInPool, 2))} • price ${escapeHtml(tao(currentPool.currentPrice, 6))} / α</div>
+              </div>
+              <div class="wallet-breakdown-grid pool-estimator-results">
+                <div class="wallet-breakdown-card">
+                  <div class="label">Estimated alpha received</div>
+                  <div class="value" id="pool-growth-alpha-received">${escapeHtml(alpha(initialResult.alphaReceived, 4))}</div>
+                  <div class="subtext" id="pool-growth-alpha-ideal">No-slippage baseline: ${escapeHtml(alpha(initialResult.idealAlphaReceived, 4))}</div>
+                </div>
+                <div class="wallet-breakdown-card">
+                  <div class="label">Projected alpha price</div>
+                  <div class="value" id="pool-growth-projected-price">${escapeHtml(tao(initialResult.projectedPrice, 6))} / α</div>
+                  <div class="subtext" id="pool-growth-post-pool">Projected alpha reserve: ${escapeHtml(alpha(initialResult.projectedAlphaInPool, 2))}</div>
+                </div>
+                <div class="wallet-breakdown-card">
+                  <div class="label">Price change %</div>
+                  <div class="value" id="pool-growth-price-change">${escapeHtml(signedPercent(initialResult.priceChangePct, 2))}</div>
+                  <div class="subtext" id="pool-growth-slippage">Slippage: ${escapeHtml(alpha(initialResult.alphaShortfall, 4))} • ${escapeHtml(signedPercent(initialResult.slippagePct, 2))} of ideal</div>
+                </div>
+                <div class="wallet-breakdown-card">
+                  <div class="label">Implied subnet market cap</div>
+                  <div class="value" id="pool-growth-projected-market-cap">${escapeHtml(tao(initialResult.projectedMarketCap, 2))}</div>
+                  <div class="subtext" id="pool-growth-market-cap-change">${escapeHtml(marketCapChangeText)}</div>
+                </div>
+                <div class="wallet-breakdown-card">
+                  <div class="label">Projected TAO in pool</div>
+                  <div class="value" id="pool-growth-projected-tao-reserve">${escapeHtml(tao(initialResult.projectedTaoInPool, 2))}</div>
+                  <div class="subtext" id="pool-growth-tao-reserve-change">Pool change: ${escapeHtml(signedTao(initialResult.taoReserveChangeAbsolute, 2))} • ${escapeHtml(signedPercent(initialResult.taoReserveChangePct, 2))}</div>
+                </div>
+              </div>
+              <div class="pool-estimator-chart" aria-label="Current versus projected alpha price">
+                <div class="pool-estimator-chart-row">
+                  <div class="pool-estimator-chart-label">Current</div>
+                  <div class="pool-estimator-chart-track"><div class="pool-estimator-chart-fill current" style="width: ${currentWidth.toFixed(2)}%"></div></div>
+                  <div class="pool-estimator-chart-value" id="pool-growth-chart-current-value">${escapeHtml(tao(initialResult.currentPrice, 6))} / α</div>
+                </div>
+                <div class="pool-estimator-chart-row">
+                  <div class="pool-estimator-chart-label">Projected</div>
+                  <div class="pool-estimator-chart-track"><div class="pool-estimator-chart-fill projected" style="width: ${projectedWidth.toFixed(2)}%"></div></div>
+                  <div class="pool-estimator-chart-value" id="pool-growth-chart-projected-value">${escapeHtml(tao(initialResult.projectedPrice, 6))} / α</div>
+                </div>
+                <div class="pool-estimator-chart-caption" id="pool-growth-chart-caption">Current: ${escapeHtml(tao(initialResult.currentPrice, 6))} / α • projected: ${escapeHtml(tao(initialResult.projectedPrice, 6))} / α • TAO injected: ${escapeHtml(tao(initialResult.taoInjected, 2))}</div>
               </div>
             </div>
-            <div class="pool-estimator-summary" id="pool-growth-summary">Current pool: ${escapeHtml(tao(currentPool.taoInPool, 2))} • ${escapeHtml(alpha(currentPool.alphaInPool, 2))} • price ${escapeHtml(tao(currentPool.currentPrice, 6))} / α</div>
-          </div>
-          <div class="wallet-breakdown-grid pool-estimator-results">
-            <div class="wallet-breakdown-card">
-              <div class="label">Estimated alpha received</div>
-              <div class="value" id="pool-growth-alpha-received">${escapeHtml(alpha(initialResult.alphaReceived, 4))}</div>
-              <div class="subtext" id="pool-growth-alpha-ideal">No-slippage baseline: ${escapeHtml(alpha(initialResult.idealAlphaReceived, 4))}</div>
+            <div class="pool-estimator-scenario-column">
+              ${scenarioChartMarkup}
             </div>
-            <div class="wallet-breakdown-card">
-              <div class="label">Projected alpha price</div>
-              <div class="value" id="pool-growth-projected-price">${escapeHtml(tao(initialResult.projectedPrice, 6))} / α</div>
-              <div class="subtext" id="pool-growth-post-pool">Projected post-injection reserves: ${escapeHtml(tao(initialResult.projectedTaoInPool, 2))} • ${escapeHtml(alpha(initialResult.projectedAlphaInPool, 2))}</div>
-            </div>
-            <div class="wallet-breakdown-card">
-              <div class="label">Price change %</div>
-              <div class="value" id="pool-growth-price-change">${escapeHtml(signedPercent(initialResult.priceChangePct, 2))}</div>
-              <div class="subtext" id="pool-growth-slippage">Slippage: ${escapeHtml(alpha(initialResult.alphaShortfall, 4))} • ${escapeHtml(signedPercent(initialResult.slippagePct, 2))} of ideal</div>
-            </div>
-          </div>
-          <div class="pool-estimator-chart" aria-label="Current versus projected alpha price">
-            <div class="pool-estimator-chart-row">
-              <div class="pool-estimator-chart-label">Current</div>
-              <div class="pool-estimator-chart-track"><div class="pool-estimator-chart-fill current" style="width: ${currentWidth.toFixed(2)}%"></div></div>
-              <div class="pool-estimator-chart-value" id="pool-growth-chart-current-value">${escapeHtml(tao(initialResult.currentPrice, 6))} / α</div>
-            </div>
-            <div class="pool-estimator-chart-row">
-              <div class="pool-estimator-chart-label">Projected</div>
-              <div class="pool-estimator-chart-track"><div class="pool-estimator-chart-fill projected" style="width: ${projectedWidth.toFixed(2)}%"></div></div>
-              <div class="pool-estimator-chart-value" id="pool-growth-chart-projected-value">${escapeHtml(tao(initialResult.projectedPrice, 6))} / α</div>
-            </div>
-            <div class="pool-estimator-chart-caption" id="pool-growth-chart-caption">Current: ${escapeHtml(tao(initialResult.currentPrice, 6))} / α • projected: ${escapeHtml(tao(initialResult.projectedPrice, 6))} / α • TAO injected: ${escapeHtml(tao(initialResult.taoInjected, 2))}</div>
           </div>
         </div>
       </details>
@@ -1744,7 +1877,7 @@ function renderDashboardClientScript({ netuid, config }) {
         modalMetric: null,
         modalHistory: null,
         modalStakeHistory: null,
-        modalHistoryDays: 30,
+        modalHistoryDays: 7,
         modalHistoryRequestId: 0,
         modalHistoryWindowEndMs: null,
         modalHistoryAutoFollow: true,
@@ -2058,12 +2191,14 @@ function renderDashboardClientScript({ netuid, config }) {
       function estimatePoolGrowthClient(pool, taoInjected) {
         const taoInPool = Number(pool?.taoInPool);
         const alphaInPool = Number(pool?.alphaInPool);
+        const marketCap = Number(pool?.marketCap);
         const injected = Number(taoInjected);
         if (!Number.isFinite(taoInPool) || !Number.isFinite(alphaInPool) || taoInPool <= 0 || alphaInPool <= 0 || !Number.isFinite(injected) || injected < 0) {
           return { available: false };
         }
         const currentPrice = Number(pool?.currentPrice);
         const resolvedCurrentPrice = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : taoInPool / alphaInPool;
+        const resolvedMarketCap = Number.isFinite(marketCap) && marketCap > 0 ? marketCap : null;
         const taoInjectedSafe = Math.max(0, injected);
         const projectedTaoInPool = taoInPool + taoInjectedSafe;
         const alphaReceived = taoInjectedSafe === 0 ? 0 : (alphaInPool * taoInjectedSafe) / projectedTaoInPool;
@@ -2073,21 +2208,425 @@ function renderDashboardClientScript({ netuid, config }) {
         const alphaShortfall = idealAlphaReceived - alphaReceived;
         const slippagePct = idealAlphaReceived > 0 ? (alphaShortfall / idealAlphaReceived) * 100 : 0;
         const priceChangePct = resolvedCurrentPrice > 0 ? ((projectedPrice - resolvedCurrentPrice) / resolvedCurrentPrice) * 100 : null;
+        const taoReserveChangeAbsolute = projectedTaoInPool - taoInPool;
+        const taoReserveChangePct = taoInPool > 0 ? (taoReserveChangeAbsolute / taoInPool) * 100 : null;
+        const projectedMarketCap = resolvedMarketCap === null ? null : resolvedMarketCap * (projectedPrice / resolvedCurrentPrice);
+        const marketCapChangePct = resolvedMarketCap === null || projectedMarketCap === null
+          ? null
+          : ((projectedMarketCap - resolvedMarketCap) / resolvedMarketCap) * 100;
         return {
           available: true,
           taoInPool,
           alphaInPool,
+          marketCap: resolvedMarketCap,
           taoInjected: taoInjectedSafe,
           currentPrice: resolvedCurrentPrice,
           projectedTaoInPool,
           projectedAlphaInPool,
           projectedPrice,
+          projectedMarketCap,
           alphaReceived,
           idealAlphaReceived,
           alphaShortfall,
           slippagePct,
           priceChangePct,
+          taoReserveChangeAbsolute,
+          taoReserveChangePct,
+          marketCapChangePct,
         };
+      }
+
+      function buildPoolGrowthScenarioSeriesClient(pool, maxInjected, pointCount = 9) {
+        const taoInPool = Number(pool?.taoInPool);
+        const alphaInPool = Number(pool?.alphaInPool);
+        const marketCap = Number(pool?.marketCap);
+        const maxInjectedNum = Number(maxInjected);
+        const maxInjectedSafe = Math.max(0, Number.isFinite(maxInjectedNum) ? maxInjectedNum : 0);
+        const sampleCount = Math.max(2, Math.floor(Number(pointCount) || 9));
+        if (!Number.isFinite(taoInPool) || !Number.isFinite(alphaInPool) || taoInPool <= 0 || alphaInPool <= 0) {
+          return { available: false, points: [] };
+        }
+        const points = [];
+        for (let index = 0; index < sampleCount; index += 1) {
+          const taoInjected = sampleCount === 1 ? maxInjectedSafe : (maxInjectedSafe * index) / (sampleCount - 1);
+          const result = estimatePoolGrowthClient(pool, taoInjected);
+          if (!result.available) return { available: false, points: [] };
+          points.push({
+            taoInjected: result.taoInjected,
+            priceChangePct: result.priceChangePct,
+            projectedPrice: result.projectedPrice,
+            projectedMarketCap: Number.isFinite(marketCap) ? result.projectedMarketCap : null,
+          });
+        }
+        return {
+          available: true,
+          points,
+          maxInjected: maxInjectedSafe,
+        };
+      }
+
+      function renderPoolGrowthScenarioChartClient(series, selectedResult, maxInjected) {
+        if (!series?.available || !Array.isArray(series.points) || series.points.length < 2 || !selectedResult?.available) {
+          return [
+            '<div class="pool-estimator-scenario pool-estimator-scenario-details pool-estimator-scenario-unavailable" data-pool-scenario-chart="true" data-pool-scenario-open="false" data-pool-scenario-max-tao-injected="' + maxInjected + '">',
+            '  <div class="pool-estimator-scenario-summary">',
+            '    <div class="pool-estimator-scenario-summary-text">',
+            '      <div class="label">Alpha price change curve</div>',
+            '      <div class="pool-estimator-scenario-title">Scenario chart unavailable</div>',
+            '    </div>',
+            '    <button class="pool-estimator-scenario-summary-hint" type="button" onmousedown="window.togglePoolGrowthScenario(this); return false;" onkeydown="if(event.key===\\'Enter\\'||event.key===\\' \\'){window.togglePoolGrowthScenario(this); return false;}">Show chart</button>',
+            '  </div>',
+            '  <div class="pool-estimator-scenario-caption">The current snapshot does not contain enough pool data to draw the scenario curve.</div>',
+            '</div>',
+          ].join('');
+        }
+
+        const points = series.points;
+        const values = points.map((point) => Number(point.priceChangePct)).filter((value) => Number.isFinite(value));
+        const width = 500;
+        const height = 170;
+        const padding = { top: 14, right: 14, bottom: 28, left: 54 };
+        const innerWidth = width - padding.left - padding.right;
+        const innerHeight = height - padding.top - padding.bottom;
+        const minValue = Math.min(0, ...values);
+        const maxValue = Math.max(0, ...values);
+        const valueSpan = Math.max(1e-6, maxValue - minValue);
+        const gridValues = [minValue, minValue + (valueSpan / 2), maxValue];
+        const xForIndex = (index) => padding.left + (index / (points.length - 1)) * innerWidth;
+        const yForValue = (value) => padding.top + (1 - ((Number(value) - minValue) / valueSpan)) * innerHeight;
+        const coords = points.map((point, index) => ({
+          x: xForIndex(index),
+          y: yForValue(point.priceChangePct),
+          point,
+          index,
+        }));
+        const linePath = coords.map(({ x, y }, index) => (index === 0 ? 'M ' : 'L ') + x.toFixed(2) + ' ' + y.toFixed(2)).join(' ');
+        const areaPath = [
+          'M ' + padding.left.toFixed(2) + ' ' + (padding.top + innerHeight).toFixed(2),
+          ...coords.map(({ x, y }) => 'L ' + x.toFixed(2) + ' ' + y.toFixed(2)),
+          'L ' + (padding.left + innerWidth).toFixed(2) + ' ' + (padding.top + innerHeight).toFixed(2),
+          'Z',
+        ].join(' ');
+        const xAxisLabelLeft = '0 TAO';
+        const xAxisLabelMiddle = formatTao(maxInjected / 2, 2) + ' injected';
+        const xAxisLabelRight = formatTao(maxInjected, 2) + ' injected';
+
+        return [
+          '<div class="pool-estimator-scenario pool-estimator-scenario-details" data-pool-scenario-chart="true" data-pool-scenario-open="false" data-pool-scenario-max-tao-injected="' + maxInjected + '" data-pool-scenario-min-change="' + minValue + '" data-pool-scenario-max-change="' + maxValue + '">',
+          '  <div class="pool-estimator-scenario-summary">',
+          '    <div class="pool-estimator-scenario-summary-text">',
+          '      <div class="label">Alpha price change curve</div>',
+          '      <div class="pool-estimator-scenario-title">Projected alpha price change vs TAO injected</div>',
+          '    </div>',
+          '    <button class="pool-estimator-scenario-summary-hint" type="button" onmousedown="window.togglePoolGrowthScenario(this); return false;" onkeydown="if(event.key===\\'Enter\\'||event.key===\\' \\'){window.togglePoolGrowthScenario(this); return false;}">Show chart</button>',
+          '  </div>',
+          '  <div class="pool-estimator-scenario-body">',
+          '    <div class="pool-estimator-scenario-meta-row">',
+          '      <div class="pool-estimator-scenario-meta" id="pool-growth-scenario-meta">',
+          '        ' + formatTao(selectedResult.taoInjected, 2) + ' injected → ' + formatSignedPercent(selectedResult.priceChangePct, 2) + ' • ' + formatTao(selectedResult.projectedPrice, 6) + ' / α',
+          '      </div>',
+          '    </div>',
+          '    <div class="pool-estimator-scenario-plot">',
+          '      <svg class="pool-estimator-scenario-svg" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Alpha price change versus TAO injected scenario curve">',
+          '        <defs>',
+          '          <linearGradient id="pool-growth-scenario-fill" x1="0%" x2="0%" y1="0%" y2="100%">',
+          '            <stop offset="0%" stop-color="#00dbbc" stop-opacity="0.32"/>',
+          '            <stop offset="100%" stop-color="#00dbbc" stop-opacity="0.04"/>',
+          '          </linearGradient>',
+          '        </defs>',
+          ...gridValues.map((value) => {
+            const y = yForValue(value);
+            return [
+              '        <line x1="' + padding.left + '" y1="' + y.toFixed(2) + '" x2="' + (padding.left + innerWidth) + '" y2="' + y.toFixed(2) + '" class="pool-estimator-scenario-grid-line" />',
+              '        <text x="' + (padding.left - 10) + '" y="' + (y + 3).toFixed(2) + '" text-anchor="end" class="pool-estimator-scenario-grid-label">' + formatSignedPercent(value, 0) + '</text>',
+            ].join('');
+          }),
+          '        <line x1="' + padding.left + '" y1="' + (padding.top + innerHeight) + '" x2="' + (padding.left + innerWidth) + '" y2="' + (padding.top + innerHeight) + '" class="pool-estimator-scenario-axis-line" />',
+          '        <line x1="' + padding.left + '" y1="' + padding.top + '" x2="' + padding.left + '" y2="' + (padding.top + innerHeight) + '" class="pool-estimator-scenario-axis-line" />',
+          '        <path d="' + areaPath + '" class="pool-estimator-scenario-area"></path>',
+          '        <path d="' + linePath + '" class="pool-estimator-scenario-line"></path>',
+          '        <line class="pool-estimator-scenario-crosshair vertical" x1="' + selectedX.toFixed(2) + '" x2="' + selectedX.toFixed(2) + '" y1="' + padding.top + '" y2="' + (padding.top + innerHeight) + '" />',
+          '        <line class="pool-estimator-scenario-crosshair horizontal" x1="' + padding.left + '" x2="' + (padding.left + innerWidth) + '" y1="' + selectedY.toFixed(2) + '" y2="' + selectedY.toFixed(2) + '" />',
+          '        <rect class="pool-estimator-scenario-hit-area" x="' + padding.left + '" y="' + padding.top + '" width="' + innerWidth + '" height="' + innerHeight + '" />',
+          '        <text x="' + padding.left + '" y="' + (height - 16) + '" font-size="8" font-weight="600" class="pool-estimator-scenario-axis-label">' + xAxisLabelLeft + '</text>',
+          '        <text x="' + (padding.left + innerWidth / 2) + '" y="' + (height - 16) + '" text-anchor="middle" font-size="8" font-weight="600" class="pool-estimator-scenario-axis-label">' + xAxisLabelMiddle + '</text>',
+          '        <text x="' + (padding.left + innerWidth) + '" y="' + (height - 16) + '" text-anchor="end" font-size="8" font-weight="600" class="pool-estimator-scenario-axis-label">' + xAxisLabelRight + '</text>',
+          '      </svg>',
+          '      <div class="pool-estimator-scenario-tooltip" hidden>',
+          '        <div class="pool-estimator-scenario-tooltip-title" id="pool-growth-scenario-tooltip-title">TAO injected</div>',
+          '        <div class="pool-estimator-scenario-tooltip-value" id="pool-growth-scenario-tooltip-value"></div>',
+          '        <div class="pool-estimator-scenario-tooltip-subtext" id="pool-growth-scenario-tooltip-subtext"></div>',
+          '      </div>',
+          '    </div>',
+          '    <div class="pool-estimator-scenario-caption" id="pool-growth-scenario-caption">At ' + formatTao(selectedResult.taoInjected, 2) + ' injected, the projected alpha price change is ' + formatSignedPercent(selectedResult.priceChangePct, 2) + '.</div>',
+          '  </div>',
+          '</div>',
+        ].join('');
+      }
+
+      function getPoolGrowthScenarioChart(root = getPoolGrowthEstimatorRoot()) {
+        return root ? root.querySelector('[data-pool-scenario-chart="true"]') : null;
+      }
+
+      function syncPoolGrowthEstimatorLayout(root = getPoolGrowthEstimatorRoot()) {
+        if (!root) return;
+        const scenario = getPoolGrowthScenarioChart(root);
+        root.dataset.poolScenarioOpen = scenario && scenario.dataset.poolScenarioOpen === 'true' ? 'true' : 'false';
+        updatePoolGrowthScenarioToggleLabel(root);
+      }
+
+      function updatePoolGrowthScenarioToggleLabel(root = getPoolGrowthEstimatorRoot()) {
+        const scenario = getPoolGrowthScenarioChart(root);
+        if (!scenario) return;
+        const toggle = scenario.querySelector('.pool-estimator-scenario-summary-hint');
+        if (!toggle) return;
+        toggle.textContent = scenario.dataset.poolScenarioOpen === 'true' ? 'Hide chart' : 'Show chart';
+      }
+
+      window.togglePoolGrowthScenario = function togglePoolGrowthScenario(button) {
+        const scenario = button?.closest?.('.pool-estimator-scenario');
+        if (!scenario) return false;
+        scenario.dataset.poolScenarioOpen = scenario.dataset.poolScenarioOpen === 'true' ? 'false' : 'true';
+        syncPoolGrowthEstimatorLayout(scenario.closest('#pool-growth-estimator') || getPoolGrowthEstimatorRoot());
+        return false;
+      };
+
+      function clampScenarioInjected(value, maxInjected) {
+        const injected = Number(value);
+        const max = Number(maxInjected);
+        if (!Number.isFinite(injected)) return 0;
+        if (!Number.isFinite(max) || max <= 0) return Math.max(0, injected);
+        return Math.max(0, Math.min(injected, max));
+      }
+
+      function getPoolGrowthScenarioSnap(root = getPoolGrowthEstimatorRoot(), injected = 0, maxInjected = 2500) {
+        const pool = getPoolGrowthEstimatorState(root);
+        const series = buildPoolGrowthScenarioSeriesClient(pool, maxInjected, 81);
+        if (!series.available || !Array.isArray(series.points) || !series.points.length) return null;
+        let nearest = series.points[0];
+        let nearestDistance = Math.abs(Number(nearest.taoInjected) - Number(injected));
+        for (const point of series.points) {
+          const distance = Math.abs(Number(point.taoInjected) - Number(injected));
+          if (distance < nearestDistance) {
+            nearest = point;
+            nearestDistance = distance;
+          }
+        }
+        return { series, point: nearest };
+      }
+
+      function updatePoolGrowthScenarioSelection(root = getPoolGrowthEstimatorRoot(), result = null, hoveredInjected = null) {
+        const scenario = getPoolGrowthScenarioChart(root);
+        if (!scenario) return;
+        const tooltip = scenario.querySelector('.pool-estimator-scenario-tooltip');
+        const tooltipValue = scenario.querySelector('#pool-growth-scenario-tooltip-value');
+        const tooltipSubtext = scenario.querySelector('#pool-growth-scenario-tooltip-subtext');
+        const crosshairX = scenario.querySelector('.pool-estimator-scenario-crosshair.vertical');
+        const crosshairY = scenario.querySelector('.pool-estimator-scenario-crosshair.horizontal');
+        const meta = scenario.querySelector('#pool-growth-scenario-meta');
+        const caption = scenario.querySelector('#pool-growth-scenario-caption');
+        const pool = getPoolGrowthEstimatorState(root);
+        const maxInjected = Number(scenario.dataset.poolScenarioMaxTaoInjected) || 2500;
+        const minChange = Number(scenario.dataset.poolScenarioMinChange);
+        const maxChange = Number(scenario.dataset.poolScenarioMaxChange);
+        const currentResult = result && result.available ? result : estimatePoolGrowthClient(pool, Number(root.querySelector('#pool-growth-tao-injected')?.value) || 0);
+        if (!currentResult.available) {
+          if (tooltip) tooltip.hidden = true;
+          if (crosshairX) crosshairX.style.display = 'none';
+          if (crosshairY) crosshairY.style.display = 'none';
+          if (caption) caption.textContent = 'The current snapshot does not contain enough pool data to draw the scenario curve.';
+          if (meta) meta.textContent = 'Scenario unavailable.';
+          return;
+        }
+
+        const injected = clampScenarioInjected(hoveredInjected === null || hoveredInjected === undefined ? currentResult.taoInjected : hoveredInjected, maxInjected);
+        const activeResult = hoveredInjected === null || hoveredInjected === undefined
+          ? currentResult
+          : estimatePoolGrowthClient(pool, injected);
+        if (!activeResult.available) return;
+
+        const width = 500;
+        const height = 170;
+        const padding = { top: 14, right: 14, bottom: 28, left: 54 };
+        const innerWidth = width - padding.left - padding.right;
+        const innerHeight = height - padding.top - padding.bottom;
+        const lower = Number.isFinite(minChange) ? minChange : 0;
+        const upper = Number.isFinite(maxChange) ? maxChange : activeResult.priceChangePct;
+        const changeSpan = Math.max(1e-6, upper - lower);
+        const x = padding.left + (injected / Math.max(1, maxInjected)) * innerWidth;
+        const y = padding.top + (1 - ((activeResult.priceChangePct - lower) / changeSpan)) * innerHeight;
+        const plot = scenario.querySelector('.pool-estimator-scenario-plot');
+        const plotRect = plot ? plot.getBoundingClientRect() : null;
+        const renderedWidth = plotRect && Number.isFinite(plotRect.width) && plotRect.width > 0 ? plotRect.width : width;
+        const renderedHeight = plotRect && Number.isFinite(plotRect.height) && plotRect.height > 0 ? plotRect.height : height;
+        const tooltipLeft = Math.min(renderedWidth - 170, Math.max(0, (x / width) * renderedWidth + 12));
+        const tooltipTop = Math.max(0, Math.min(renderedHeight - 40, (y / height) * renderedHeight - 16));
+
+        if (crosshairX) {
+          crosshairX.setAttribute('x1', x.toFixed(2));
+          crosshairX.setAttribute('x2', x.toFixed(2));
+          crosshairX.setAttribute('y1', padding.top.toFixed(2));
+          crosshairX.setAttribute('y2', (padding.top + innerHeight).toFixed(2));
+          crosshairX.style.display = '';
+        }
+        if (crosshairY) {
+          crosshairY.setAttribute('x1', padding.left.toFixed(2));
+          crosshairY.setAttribute('x2', (padding.left + innerWidth).toFixed(2));
+          crosshairY.setAttribute('y1', y.toFixed(2));
+          crosshairY.setAttribute('y2', y.toFixed(2));
+          crosshairY.style.display = '';
+        }
+        if (tooltip) {
+          tooltip.hidden = false;
+          tooltip.style.left = String(tooltipLeft) + 'px';
+          tooltip.style.top = String(tooltipTop) + 'px';
+        }
+        if (tooltipValue) {
+          tooltipValue.textContent = [
+            formatTao(activeResult.taoInjected, 2),
+            ' → ',
+            formatSignedPercent(activeResult.priceChangePct, 2),
+          ].join('');
+        }
+        if (tooltipSubtext) {
+          tooltipSubtext.textContent = [
+            'Projected price ',
+            formatTao(activeResult.projectedPrice, 6),
+            ' / α • implied market cap ',
+            formatTao(activeResult.projectedMarketCap, 2),
+          ].join('');
+        }
+        if (meta) {
+          meta.textContent = [
+            formatTao(activeResult.taoInjected, 2),
+            ' injected → ',
+            formatSignedPercent(activeResult.priceChangePct, 2),
+            ' • ',
+            formatTao(activeResult.projectedPrice, 6),
+            ' / α',
+          ].join('');
+        }
+        if (caption) {
+          caption.textContent = [
+            'At ',
+            formatTao(activeResult.taoInjected, 2),
+            ' injected, the projected alpha price change is ',
+            formatSignedPercent(activeResult.priceChangePct, 2),
+            '.',
+          ].join('');
+        }
+        scenario.dataset.poolScenarioActiveInjected = String(activeResult.taoInjected);
+        syncPoolGrowthEstimatorLayout(root);
+      }
+
+      function initializePoolGrowthScenarioInteractions(root = getPoolGrowthEstimatorRoot()) {
+        const scenario = getPoolGrowthScenarioChart(root);
+        if (!scenario || scenario.dataset.poolScenarioInteractionsInitialized === 'true') return;
+        scenario.dataset.poolScenarioInteractionsInitialized = 'true';
+        const hitArea = scenario.querySelector('.pool-estimator-scenario-hit-area');
+        const plot = scenario.querySelector('.pool-estimator-scenario-plot');
+        const svg = scenario.querySelector('.pool-estimator-scenario-svg');
+        const toggle = scenario.querySelector('.pool-estimator-scenario-summary-hint');
+        const maxInjected = Number(scenario.dataset.poolScenarioMaxTaoInjected) || 2500;
+        let hovering = false;
+        let dragging = false;
+        const getActiveRect = () => {
+          const rect = plot ? plot.getBoundingClientRect() : null;
+          if (rect && rect.width && rect.height) return rect;
+          const svgRect = svg ? svg.getBoundingClientRect() : null;
+          return svgRect && svgRect.width && svgRect.height ? svgRect : null;
+        };
+        const commitInjectedValue = (injected) => {
+          const input = root.querySelector('#pool-growth-tao-injected');
+          if (input) {
+            input.value = String(clampScenarioInjected(injected, maxInjected));
+          }
+          updatePoolGrowthEstimator(root);
+        };
+        const updateFromEvent = (event) => {
+          const activeRect = getActiveRect();
+          if (!activeRect) return;
+          const clientX = Number(event?.clientX);
+          const clientY = Number(event?.clientY);
+          if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+          const within = clientX >= activeRect.left && clientX <= activeRect.right && clientY >= activeRect.top && clientY <= activeRect.bottom;
+          if (!within) {
+            if (hovering && !dragging) {
+              hovering = false;
+              updatePoolGrowthEstimator(root);
+            }
+            return;
+          }
+          hovering = true;
+          const ratio = (clientX - activeRect.left) / activeRect.width;
+          const injected = clampScenarioInjected(ratio * maxInjected, maxInjected);
+          commitInjectedValue(injected);
+        };
+        const clearHover = () => {
+          updatePoolGrowthEstimator(root);
+        };
+        const startDragging = (event) => {
+          dragging = true;
+          updateFromEvent(event);
+          const target = event?.currentTarget || event?.target;
+          if (target && typeof target.setPointerCapture === 'function' && Number.isFinite(event?.pointerId)) {
+            try {
+              target.setPointerCapture(event.pointerId);
+            } catch (error) {
+              // ignore pointer-capture failures in non-interactive test environments
+            }
+          }
+        };
+        const stopDragging = () => {
+          dragging = false;
+          clearHover();
+        };
+        const hoverTargets = [hitArea, svg, plot, scenario].filter(Boolean);
+        const globalTargets = [document, window].filter(Boolean);
+        for (const target of hoverTargets) {
+          target.addEventListener('mousemove', updateFromEvent);
+          target.addEventListener('pointermove', updateFromEvent);
+          target.addEventListener('pointerdown', startDragging);
+          target.addEventListener('mousedown', startDragging);
+          target.addEventListener('pointerup', stopDragging);
+          target.addEventListener('pointercancel', stopDragging);
+          target.addEventListener('mouseup', stopDragging);
+        }
+        for (const target of globalTargets) {
+          target.addEventListener('mousemove', updateFromEvent);
+          target.addEventListener('pointermove', updateFromEvent);
+          target.addEventListener('pointerup', stopDragging);
+          target.addEventListener('pointercancel', stopDragging);
+          target.addEventListener('mouseup', stopDragging);
+        }
+        if (plot) {
+          plot.addEventListener('pointerleave', () => {
+            if (!dragging) {
+              hovering = false;
+              clearHover();
+            }
+          });
+          plot.addEventListener('mouseleave', () => {
+            if (!dragging) {
+              hovering = false;
+              clearHover();
+            }
+          });
+        } else if (hitArea) {
+          hitArea.addEventListener('pointerleave', () => {
+            if (!dragging) {
+              hovering = false;
+              clearHover();
+            }
+          });
+          hitArea.addEventListener('mouseleave', () => {
+            if (!dragging) {
+              hovering = false;
+              clearHover();
+            }
+          });
+        }
+        clearHover();
       }
 
       function getPoolGrowthEstimatorRoot() {
@@ -2102,6 +2641,8 @@ function renderDashboardClientScript({ netuid, config }) {
           taoInPool: Number(root.dataset.poolTaoInPool),
           alphaInPool: Number(root.dataset.poolAlphaInPool),
           currentPrice: Number(root.dataset.poolCurrentPrice),
+          marketCap: Number(root.dataset.poolMarketCap),
+          scenarioMaxInjected: Number(root.dataset.poolScenarioMaxTaoInjected),
         };
       }
 
@@ -2124,6 +2665,10 @@ function renderDashboardClientScript({ netuid, config }) {
         const postPool = root.querySelector('#pool-growth-post-pool');
         const priceChange = root.querySelector('#pool-growth-price-change');
         const slippage = root.querySelector('#pool-growth-slippage');
+        const projectedMarketCap = root.querySelector('#pool-growth-projected-market-cap');
+        const marketCapChange = root.querySelector('#pool-growth-market-cap-change');
+        const projectedTaoReserve = root.querySelector('#pool-growth-projected-tao-reserve');
+        const taoReserveChange = root.querySelector('#pool-growth-tao-reserve-change');
         const chartCaption = root.querySelector('#pool-growth-chart-caption');
         const chartCurrentValue = root.querySelector('#pool-growth-chart-current-value');
         const chartProjectedValue = root.querySelector('#pool-growth-chart-projected-value');
@@ -2139,9 +2684,14 @@ function renderDashboardClientScript({ netuid, config }) {
           if (postPool) postPool.textContent = 'Projected post-injection reserves';
           if (priceChange) priceChange.textContent = '—';
           if (slippage) slippage.textContent = 'Compared with current price';
+          if (projectedMarketCap) projectedMarketCap.textContent = '—';
+          if (marketCapChange) marketCapChange.textContent = 'Market cap unavailable';
+          if (projectedTaoReserve) projectedTaoReserve.textContent = '—';
+          if (taoReserveChange) taoReserveChange.textContent = 'Reserve change unavailable';
           if (chartCaption) chartCaption.textContent = 'Pool data unavailable.';
           if (currentBar) currentBar.style.width = '0%';
           if (projectedBar) projectedBar.style.width = '0%';
+          updatePoolGrowthScenarioSelection(root, result, null);
           return;
         }
 
@@ -2185,6 +2735,32 @@ function renderDashboardClientScript({ netuid, config }) {
             ' of ideal',
           ].join('');
         }
+        if (projectedMarketCap) {
+          projectedMarketCap.textContent = Number.isFinite(result.projectedMarketCap)
+            ? formatTao(result.projectedMarketCap, 2)
+            : '—';
+        }
+        if (marketCapChange) {
+          marketCapChange.textContent = Number.isFinite(result.marketCapChangePct)
+            ? [
+              'Change: ',
+              formatSignedPercent(result.marketCapChangePct, 2),
+              ' • current ',
+              formatTao(result.marketCap, 2),
+            ].join('')
+            : 'Market cap unavailable from snapshot.';
+        }
+        if (projectedTaoReserve) {
+          projectedTaoReserve.textContent = formatTao(result.projectedTaoInPool, 2);
+        }
+        if (taoReserveChange) {
+          taoReserveChange.textContent = [
+            'Reserve change: ',
+            formatSignedTao(result.taoReserveChangeAbsolute, 2),
+            ' • ',
+            formatSignedPercent(result.taoReserveChangePct, 2),
+          ].join('');
+        }
         if (chartCaption) {
           chartCaption.textContent = [
             'Current: ',
@@ -2199,11 +2775,13 @@ function renderDashboardClientScript({ netuid, config }) {
         if (chartProjectedValue) chartProjectedValue.textContent = projectedLabel;
         if (currentBar) currentBar.style.width = currentWidth.toFixed(2) + '%';
         if (projectedBar) projectedBar.style.width = projectedWidth.toFixed(2) + '%';
+        updatePoolGrowthScenarioSelection(root, result, null);
       }
 
       function initializePoolGrowthEstimator(root = getPoolGrowthEstimatorRoot()) {
         if (!root || root.dataset.poolGrowthInitialized === 'true') return;
         root.dataset.poolGrowthInitialized = 'true';
+        syncPoolGrowthEstimatorLayout(root);
         const input = root.querySelector('#pool-growth-tao-injected');
         if (input) {
           input.addEventListener('input', () => updatePoolGrowthEstimator(root));
@@ -2217,6 +2795,7 @@ function renderDashboardClientScript({ netuid, config }) {
           });
         });
         updatePoolGrowthEstimator(root);
+        initializePoolGrowthScenarioInteractions(root);
       }
 
       function formatBaseMetric(value, format) {
@@ -3356,7 +3935,7 @@ function renderDashboardClientScript({ netuid, config }) {
 
       ${formatChartDate.toString()}
 
-      function chartRangeDays(history, fallbackDays = 30) {
+      function chartRangeDays(history, fallbackDays = 7) {
         if (!Array.isArray(history) || history.length < 2) return fallbackDays;
         const start = new Date(history[0].captured_at).getTime();
         const end = new Date(history[history.length - 1].captured_at).getTime();
@@ -3383,7 +3962,7 @@ function renderDashboardClientScript({ netuid, config }) {
       }
 
       function modalWindowDurationMs() {
-        return Math.max(1, Number(state.modalHistoryDays || 30)) * 86400000;
+        return Math.max(1, Number(state.modalHistoryDays || 7)) * 86400000;
       }
 
       function getModalWindowBounds(metric, history) {
@@ -3559,7 +4138,7 @@ function renderDashboardClientScript({ netuid, config }) {
         const canvas = document.getElementById(canvasId);
         if (!canvas || !window.Chart) return;
         const points = historySeriesForMetric(config, history);
-        const days = chartRangeDays(history, 30);
+        const days = chartRangeDays(history, 7);
         const values = points.map((point) => point.y);
         const pointTimes = points.map((point) => point.x);
         const xMin = pointTimes.length ? Math.min(...pointTimes) : null;
@@ -3643,7 +4222,7 @@ function renderDashboardClientScript({ netuid, config }) {
         const sourceHistory = Array.isArray(history) ? history : state.modalHistory;
         if (!canvas || !window.Chart || !sourceHistory || !metric) return;
 
-        const days = state.modalHistoryDays || chartRangeDays(sourceHistory, 30);
+        const days = state.modalHistoryDays || chartRangeDays(sourceHistory, 7);
         const bounds = getModalWindowBounds(metric, sourceHistory);
         const rangeStart = bounds ? bounds.start : null;
         const rangeEnd = bounds ? bounds.end : null;
@@ -3857,7 +4436,7 @@ function renderDashboardClientScript({ netuid, config }) {
       async function openHistoryModal(metricJson) {
         const metric = typeof metricJson === 'string' ? JSON.parse(metricJson) : metricJson;
         state.modalMetric = metric;
-        state.modalHistoryDays = 30;
+        state.modalHistoryDays = 7;
         state.modalHistory = null;
         state.modalStakeHistory = null;
         state.modalHistoryWindowEndMs = null;
@@ -4293,7 +4872,7 @@ function renderPage(model) {
         color: var(--muted);
         font-size: 11px;
         font-weight: 700;
-        pointer-events: none;
+        pointer-events: auto;
       }
       .positive .card-value { color: var(--positive); }
       .negative .card-value { color: var(--negative); }
@@ -4843,6 +5422,40 @@ function renderPage(model) {
       .pool-growth-estimator-body {
         margin-top: 8px;
       }
+      .pool-estimator-layout {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+        align-items: stretch;
+        transition: grid-template-columns 0.28s ease, gap 0.28s ease;
+      }
+      .pool-growth-estimator[data-pool-scenario-open="true"] .pool-estimator-layout {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 4fr);
+      }
+      .pool-estimator-main-column {
+        min-width: 0;
+        display: grid;
+        gap: 12px;
+        transition: opacity 0.28s ease, transform 0.28s ease;
+      }
+      .pool-estimator-scenario-column {
+        min-width: 0;
+        display: block;
+        width: 100%;
+        opacity: 1;
+        transform: none;
+        overflow: visible;
+        pointer-events: auto;
+        transition: opacity 0.28s ease, transform 0.28s ease;
+      }
+      .pool-growth-estimator[data-pool-scenario-open="true"] .pool-estimator-main-column {
+        opacity: 1;
+        transform: none;
+      }
+      .pool-growth-estimator[data-pool-scenario-open="true"] .pool-estimator-scenario-column {
+        opacity: 1;
+        transform: none;
+      }
       .pool-estimator-controls {
         display: grid;
         gap: 12px;
@@ -4880,7 +5493,12 @@ function renderPage(model) {
         gap: 8px;
       }
       .pool-estimator-results {
-        margin-top: 12px;
+        margin-top: 0;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        transition: grid-template-columns 0.28s ease, gap 0.28s ease;
+      }
+      .pool-growth-estimator[data-pool-scenario-open="true"] .pool-estimator-results {
+        grid-template-columns: 1fr;
       }
       .pool-estimator-summary {
         margin-top: 2px;
@@ -4888,7 +5506,7 @@ function renderPage(model) {
         font-size: 13px;
       }
       .pool-estimator-chart {
-        margin-top: 12px;
+        margin-top: 0;
         display: grid;
         gap: 10px;
       }
@@ -4935,8 +5553,265 @@ function renderPage(model) {
         color: var(--muted);
         font-size: 13px;
       }
+      .pool-estimator-scenario {
+        margin-top: 0;
+        padding: 12px;
+        border: 1px solid rgba(143, 163, 184, 0.18);
+        border-radius: 16px;
+        background: rgba(7, 12, 26, 0.32);
+        display: block;
+        height: 100%;
+        width: 100%;
+      }
+      .pool-estimator-scenario > .pool-estimator-scenario-summary {
+        list-style: none;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: start;
+        gap: 10px;
+        min-height: 58px;
+        padding: 10px 12px;
+        border: 1px solid rgba(143, 163, 184, 0.14);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.025);
+        transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+        pointer-events: auto;
+      }
+      .pool-estimator-scenario-summary-button-column {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+      }
+      .pool-estimator-scenario > .pool-estimator-scenario-summary:hover {
+        border-color: rgba(0, 219, 188, 0.32);
+        background: rgba(255, 255, 255, 0.04);
+        box-shadow: 0 0 0 1px rgba(0, 219, 188, 0.08) inset;
+        transform: translateY(-1px);
+      }
+      .pool-estimator-scenario > .pool-estimator-scenario-summary::after {
+        content: '▸';
+        color: var(--accent);
+        font-size: 16px;
+        line-height: 1;
+        margin-top: 0;
+        flex: 0 0 auto;
+        transition: transform 0.18s ease;
+      }
+      .pool-estimator-scenario-summary-text {
+        min-width: 0;
+        display: grid;
+        gap: 4px;
+        position: relative;
+        z-index: 3;
+        pointer-events: auto;
+      }
+      .pool-estimator-scenario-summary-text .pool-estimator-scenario-title {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .pool-estimator-scenario[data-pool-scenario-open="true"] > .pool-estimator-scenario-summary::after {
+        transform: rotate(90deg);
+      }
+      .pool-estimator-scenario-summary-hint {
+        position: relative;
+        z-index: 4;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(0, 219, 188, 0.22);
+        background: rgba(0, 219, 188, 0.08);
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: none;
+        white-space: nowrap;
+        width: fit-content;
+        cursor: pointer;
+        appearance: none;
+        font: inherit;
+        pointer-events: auto;
+        justify-self: end;
+        align-self: start;
+      }
+      .pool-estimator-scenario-summary-hint:focus-visible {
+        outline: 2px solid rgba(0, 219, 188, 0.45);
+        outline-offset: 2px;
+      }
+      .pool-estimator-scenario[data-pool-scenario-open="true"] .pool-estimator-scenario-summary-hint {
+        color: var(--text);
+      }
+      .pool-estimator-scenario-body {
+        display: grid;
+        gap: 10px;
+        padding-top: 10px;
+        overflow: hidden;
+        max-height: 0;
+        opacity: 0;
+        transform: translateY(-6px);
+        transition: max-height 0.28s ease, opacity 0.24s ease, transform 0.28s ease, padding-top 0.28s ease;
+        pointer-events: none;
+      }
+      .pool-estimator-scenario[data-pool-scenario-open="true"] .pool-estimator-scenario-body {
+        max-height: 1200px;
+        opacity: 1;
+        transform: translateY(0);
+        pointer-events: auto;
+      }
+      .pool-estimator-scenario-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .pool-estimator-scenario-meta-row {
+        display: flex;
+        justify-content: flex-start;
+      }
+      .pool-estimator-scenario-meta {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(143, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .pool-estimator-scenario-plot {
+        margin-top: auto;
+        width: 100%;
+      }
+      .pool-estimator-scenario .label {
+        font-size: 10px;
+        letter-spacing: 0.06em;
+      }
+      .pool-estimator-scenario-title {
+        margin-top: 4px;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .pool-estimator-scenario-meta {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        text-align: left;
+      }
+      .pool-estimator-scenario-svg {
+        width: 100%;
+        height: auto;
+        overflow: visible;
+      }
+      .pool-estimator-scenario-plot {
+        position: relative;
+      }
+      .pool-estimator-scenario-axis-line {
+        stroke: rgba(143, 163, 184, 0.24);
+        stroke-width: 0.45;
+      }
+      .pool-estimator-scenario-grid-line {
+        stroke: rgba(143, 163, 184, 0.1);
+        stroke-width: 0.55;
+        stroke-dasharray: 2 4;
+      }
+      .pool-estimator-scenario-grid-label {
+        fill: rgba(143, 163, 184, 0.75);
+        font-size: 7px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+      }
+      .pool-estimator-scenario-axis-line.dotted,
+      .pool-estimator-scenario-crosshair {
+        stroke-dasharray: 4 4;
+      }
+      .pool-estimator-scenario-area {
+        fill: url(#pool-growth-scenario-fill);
+        stroke: none;
+      }
+      .pool-estimator-scenario-line {
+        fill: none;
+        stroke: rgba(0, 219, 188, 0.95);
+        stroke-width: 0.9;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .pool-estimator-scenario-crosshair {
+        stroke: rgba(255, 255, 255, 0.78);
+        stroke-width: 0.95;
+        pointer-events: none;
+      }
+      .pool-estimator-scenario-hit-area {
+        fill: transparent;
+        pointer-events: all;
+        cursor: crosshair;
+      }
+      .pool-estimator-scenario-axis-label {
+        fill: var(--muted);
+        font-size: 8px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+      }
+      .pool-estimator-scenario-tooltip {
+        position: absolute;
+        min-width: 140px;
+        max-width: 190px;
+        padding: 8px 10px;
+        border-radius: 14px;
+        border: 1px solid rgba(143, 163, 184, 0.22);
+        background: rgba(5, 10, 25, 0.96);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);
+        pointer-events: none;
+        transform: translate(0, -100%);
+      }
+      .pool-estimator-scenario-tooltip-title {
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .pool-estimator-scenario-tooltip-value {
+        margin-top: 4px;
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .pool-estimator-scenario-tooltip-subtext {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 9px;
+        font-variant-numeric: tabular-nums;
+      }
+      .pool-estimator-scenario-caption {
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .pool-estimator-scenario-unavailable {
+        margin-top: 16px;
+      }
       .pool-estimator-unavailable {
         margin: 8px 0 0;
+      }
+      @media (max-width: 1120px) {
+        .pool-estimator-layout {
+          display: grid;
+          grid-template-columns: 1fr;
+        }
+        .pool-estimator-results {
+          grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        }
+        .pool-estimator-main-column,
+        .pool-estimator-scenario-column {
+          opacity: 1;
+          transform: none;
+          pointer-events: auto;
+          width: 100%;
+        }
       }
       .wallet-history-scroll {
         max-height: 280px;
@@ -5330,9 +6205,9 @@ function renderPage(model) {
           <div class="window-shift-center">
             <div class="range-switcher" role="tablist" aria-label="Historical range">
               <button class="button range-button" type="button" data-history-range="1" aria-pressed="false">24H</button>
-              <button class="button range-button" type="button" data-history-range="7" aria-pressed="false">7D</button>
+              <button class="button range-button active" type="button" data-history-range="7" aria-pressed="true">7D</button>
               <button class="button range-button" type="button" data-history-range="14" aria-pressed="false">14D</button>
-              <button class="button range-button active" type="button" data-history-range="30" aria-pressed="true">30D</button>
+              <button class="button range-button" type="button" data-history-range="30" aria-pressed="false">30D</button>
               <button class="button range-button" type="button" data-history-range="60" aria-pressed="false">60D</button>
             </div>
             <div class="window-shift-label" id="history-window-label">Use ← / → to move the visible window by 24 hours.</div>

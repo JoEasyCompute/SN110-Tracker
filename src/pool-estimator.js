@@ -33,6 +33,10 @@ function resolvePoolSnapshot(snapshot = null) {
     snapshot?.total_tao_text,
     snapshot?.liquidity_text,
   ));
+  const marketCap = taoFromRao(firstPositiveNumber(
+    snapshot?.market_cap_num,
+    snapshot?.market_cap_text,
+  ));
   const alphaInPoolRaw = firstPositiveNumber(
     snapshot?.alpha_in_pool_num,
     snapshot?.total_alpha_num,
@@ -42,6 +46,7 @@ function resolvePoolSnapshot(snapshot = null) {
   const currentPrice = firstPositiveNumber(snapshot?.price_num);
 
   const resolvedTaoInPool = Number.isFinite(taoInPool) ? taoInPool : null;
+  const resolvedMarketCap = Number.isFinite(marketCap) ? marketCap : null;
   const resolvedAlphaInPool = Number.isFinite(alphaInPoolRaw) ? alphaInPoolRaw : null;
   const resolvedPrice = Number.isFinite(currentPrice) ? currentPrice : null;
 
@@ -87,6 +92,7 @@ function resolvePoolSnapshot(snapshot = null) {
     alphaInPool: available ? finalAlphaInPool : null,
     currentPrice: available ? finalCurrentPrice : null,
     taoSource: available ? taoSource : null,
+    marketCap: resolvedMarketCap,
     alphaSource: available ? alphaSource : null,
     priceSource: available ? priceSource : null,
     derivedTaoInPool,
@@ -95,10 +101,11 @@ function resolvePoolSnapshot(snapshot = null) {
   };
 }
 
-function estimatePoolGrowth({ taoInPool, alphaInPool, taoInjected }) {
+function estimatePoolGrowth({ taoInPool, alphaInPool, taoInjected, marketCap }) {
   const poolTao = asPositiveNumber(taoInPool);
   const poolAlpha = asPositiveNumber(alphaInPool);
   const injectedTao = asNumber(taoInjected);
+  const currentMarketCap = asPositiveNumber(marketCap);
 
   if (poolTao === null || poolAlpha === null || injectedTao === null || injectedTao < 0) {
     return {
@@ -119,21 +126,81 @@ function estimatePoolGrowth({ taoInPool, alphaInPool, taoInjected }) {
   const alphaShortfall = idealAlphaReceived - alphaReceived;
   const slippagePct = idealAlphaReceived > 0 ? (alphaShortfall / idealAlphaReceived) * 100 : 0;
   const priceChangePct = currentPrice > 0 ? ((projectedPrice - currentPrice) / currentPrice) * 100 : null;
+  const taoReserveChangeAbsolute = projectedTaoInPool - poolTao;
+  const taoReserveChangePct = poolTao > 0 ? (taoReserveChangeAbsolute / poolTao) * 100 : null;
+  const projectedMarketCap = currentMarketCap === null || priceChangePct === null
+    ? null
+    : currentMarketCap * (projectedPrice / currentPrice);
+  const marketCapChangePct = currentMarketCap === null || projectedMarketCap === null
+    ? null
+    : ((projectedMarketCap - currentMarketCap) / currentMarketCap) * 100;
 
   return {
     available: true,
     taoInPool: poolTao,
     alphaInPool: poolAlpha,
     taoInjected: taoInjectedSafe,
+    currentMarketCap,
     currentPrice,
     projectedTaoInPool,
     projectedAlphaInPool,
     projectedPrice,
+    projectedMarketCap,
     alphaReceived,
     idealAlphaReceived,
     alphaShortfall,
     slippagePct,
     priceChangePct,
+    taoReserveChangeAbsolute,
+    taoReserveChangePct,
+    marketCapChangePct,
+  };
+}
+
+function buildPoolGrowthScenarioSeries({ taoInPool, alphaInPool, marketCap = null }, { maxInjected = 50, pointCount = 9 } = {}) {
+  const poolTao = asPositiveNumber(taoInPool);
+  const poolAlpha = asPositiveNumber(alphaInPool);
+  const currentMarketCap = asPositiveNumber(marketCap);
+  const maxInjectedSafe = Math.max(0, asNumber(maxInjected) ?? 0);
+  const sampleCount = Math.max(2, Math.floor(asPositiveNumber(pointCount) ?? 9));
+
+  if (poolTao === null || poolAlpha === null) {
+    return {
+      available: false,
+      reason: 'TAO injection and pool reserves must be finite, non-negative numbers.',
+      points: [],
+    };
+  }
+
+  const points = [];
+  for (let index = 0; index < sampleCount; index += 1) {
+    const taoInjected = sampleCount === 1 ? maxInjectedSafe : (maxInjectedSafe * index) / (sampleCount - 1);
+    const result = estimatePoolGrowth({
+      taoInPool: poolTao,
+      alphaInPool: poolAlpha,
+      taoInjected,
+      marketCap: currentMarketCap,
+    });
+    if (!result.available) {
+      return {
+        available: false,
+        reason: result.reason,
+        points: [],
+      };
+    }
+    points.push({
+      taoInjected: result.taoInjected,
+      priceChangePct: result.priceChangePct,
+      projectedPrice: result.projectedPrice,
+      projectedMarketCap: result.projectedMarketCap,
+    });
+  }
+
+  return {
+    available: true,
+    reason: null,
+    maxInjected: maxInjectedSafe,
+    points,
   };
 }
 
@@ -150,6 +217,7 @@ function buildPoolGrowthEstimatorState(snapshot = null, { defaultTaoInjected = 1
 
 module.exports = {
   TAO_PER_RAO,
+  buildPoolGrowthScenarioSeries,
   buildPoolGrowthEstimatorState,
   estimatePoolGrowth,
   resolvePoolSnapshot,

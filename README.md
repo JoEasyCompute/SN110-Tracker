@@ -14,7 +14,7 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Lets you switch the live poller between 1h / 2h / 4h from the admin drawer, with the choice saved in SQLite
 - Lets you click the TAO price badge to open a historical TAO/USD chart
 - Shows the next scheduled poll time in the top bar as a local timestamp
-- Lets you switch historical metric charts between 24H / 7D / 14D / 30D / 60D in the modal
+- Lets you switch historical metric charts between 24H / 7D / 14D / 30D / 60D in the modal, with 7D selected by default
 - Lets you slide the modal chart window by 24 hours with left/right buttons or keyboard arrows
 - Lets you click any latest snapshot card to open a historical modal with metric help text
 - Tracks configured wallet balances from Taostats account latest/history endpoints, using wallet coldkeys, optional hotkeys, and human-friendly names from `.env`
@@ -118,7 +118,7 @@ Sentiment history will use SSI when Taostats provides it, with legacy Fear & Gre
 
 Every historical metric modal includes:
 
-- range buttons for `24H`, `7D`, `14D`, `30D`, and `60D`
+- range buttons for `24H`, `7D`, `14D`, `30D`, and `60D` with `7D` selected by default
 - a 24-hour sliding window control with left/right buttons
 - matching keyboard shortcuts: left arrow for an earlier window, right arrow for a later window
 
@@ -150,11 +150,17 @@ What it does:
 - estimates alpha received
 - projects the post-injection alpha price
 - shows the percent price change and slippage against the no-slippage baseline
+- projects the implied subnet market cap from the current market-cap snapshot and price move
+- shows the projected TAO in pool after injection
+- shows the market-cap and pool impact as change percentages
+- includes a collapsible compact scenario curve for projected alpha price change vs TAO injected, spanning 0 to 2,500 TAO, with hover crosshair and tooltip readout; when collapsed, the estimator cards reflow to fill the panel, and when expanded the curve returns beside the stacked estimator cards with a smooth layout transition
+- exposes the scenario chart through a mixed-case `Show chart` / `Hide chart` pill so the toggle reads like the rest of the panel text instead of shouting in uppercase
 
 What to know:
 - it is a what-if simulator, not a trade executor or transaction tracker
 - results are approximate and assume the current snapshot is the baseline
 - the estimator does not call a new backend route; it runs from the current dashboard data already in memory
+- the market-cap output is implied from the current market-cap snapshot, so it should be read as an estimate rather than a protocol value
 - if the local pool snapshot is missing reserve or price fields, the estimator shows an unavailable state instead of guessing
 
 Implementation notes:

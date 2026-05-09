@@ -6,6 +6,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { JSDOM } = require('jsdom');
 
 const {
   extractEscapedJsonObject,
@@ -20,6 +21,7 @@ const {
 const {
   estimatePoolGrowth,
   buildPoolGrowthEstimatorState,
+  buildPoolGrowthScenarioSeries,
 } = require('../src/pool-estimator');
 const {
   openDatabase,
@@ -357,46 +359,85 @@ test('pool growth estimator resolves pool state and projects AMM changes', () =>
   const state = buildPoolGrowthEstimatorState({
     total_tao_num: 100_000_000_000,
     price_num: 0.1,
+    market_cap_num: 2_000_000_000,
     alpha_in_pool_text: '1000',
   });
   assert.equal(state.available, true);
   assert.equal(state.currentPool.taoInPool, 100);
   assert.equal(state.currentPool.alphaInPool, 1000);
   assert.equal(state.currentPool.currentPrice, 0.1);
+  assert.equal(state.currentPool.marketCap, 2);
 
   const zero = estimatePoolGrowth({
     taoInPool: state.currentPool.taoInPool,
     alphaInPool: state.currentPool.alphaInPool,
+    marketCap: state.currentPool.marketCap,
     taoInjected: 0,
   });
   assert.equal(zero.available, true);
   assert.equal(zero.alphaReceived, 0);
   assert.equal(zero.projectedPrice, 0.1);
   assert.equal(zero.priceChangePct, 0);
+  assert.equal(zero.projectedMarketCap, 2);
+  assert.equal(zero.marketCapChangePct, 0);
+  assert.equal(zero.taoReserveChangeAbsolute, 0);
+  assert.equal(zero.taoReserveChangePct, 0);
 
   const small = estimatePoolGrowth({
     taoInPool: state.currentPool.taoInPool,
     alphaInPool: state.currentPool.alphaInPool,
+    marketCap: state.currentPool.marketCap,
     taoInjected: 10,
   });
   assert.equal(small.available, true);
   assert.ok(Math.abs(small.alphaReceived - 90.9090909091) < 1e-9);
   assert.ok(Math.abs(small.projectedPrice - 0.121) < 1e-12);
   assert.ok(Math.abs(small.priceChangePct - 21) < 1e-9);
+  assert.ok(Math.abs(small.projectedMarketCap - 2.42) < 1e-12);
+  assert.ok(Math.abs(small.marketCapChangePct - 21) < 1e-9);
+  assert.ok(Math.abs(small.taoReserveChangeAbsolute - 10) < 1e-12);
+  assert.ok(Math.abs(small.taoReserveChangePct - 10) < 1e-12);
 
   const large = estimatePoolGrowth({
     taoInPool: state.currentPool.taoInPool,
     alphaInPool: state.currentPool.alphaInPool,
+    marketCap: state.currentPool.marketCap,
     taoInjected: 100,
   });
   assert.equal(large.available, true);
   assert.ok(Math.abs(large.alphaReceived - 500) < 1e-9);
   assert.ok(Math.abs(large.projectedPrice - 0.4) < 1e-12);
   assert.ok(Math.abs(large.priceChangePct - 300) < 1e-9);
+  assert.ok(Math.abs(large.projectedMarketCap - 8) < 1e-12);
+  assert.ok(Math.abs(large.marketCapChangePct - 300) < 1e-9);
+  assert.ok(Math.abs(large.taoReserveChangeAbsolute - 100) < 1e-12);
+  assert.ok(Math.abs(large.taoReserveChangePct - 100) < 1e-12);
 
   const missing = buildPoolGrowthEstimatorState({});
   assert.equal(missing.available, false);
   assert.equal(missing.reason.includes('missing'), true);
+  const optionalMarketCapMissing = estimatePoolGrowth({
+    taoInPool: state.currentPool.taoInPool,
+    alphaInPool: state.currentPool.alphaInPool,
+    taoInjected: 10,
+  });
+  assert.equal(optionalMarketCapMissing.available, true);
+  assert.equal(optionalMarketCapMissing.projectedMarketCap, null);
+  assert.equal(optionalMarketCapMissing.marketCapChangePct, null);
+});
+
+test('pool growth scenario series builds a monotonic projected price curve', () => {
+  const series = buildPoolGrowthScenarioSeries({
+    taoInPool: 100,
+    alphaInPool: 1000,
+    marketCap: 2,
+  }, { maxInjected: 50, pointCount: 5 });
+  assert.equal(series.available, true);
+  assert.equal(series.points.length, 5);
+  assert.equal(series.points[0].taoInjected, 0);
+  assert.equal(series.points[0].priceChangePct, 0);
+  assert.ok(series.points[4].priceChangePct > series.points[1].priceChangePct);
+  assert.ok(series.points[4].projectedPrice > series.points[1].projectedPrice);
 });
 
 test('rate limiter spaces requests to respect the configured cap', async () => {
@@ -487,6 +528,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('history-window-next'), true);
   assert.equal(html.includes('history-window-label'), true);
   assert.equal(html.includes('14D'), true);
+  assert.equal(html.includes('data-history-range="30"'), true);
+  assert.equal(html.includes('data-history-range="7"'), true);
   assert.equal(html.includes('Wallet balances'), true);
   assert.equal(html.includes('id="pool-growth-estimator"'), true);
   assert.equal(html.includes('data-pool-growth-root="page"'), true);
@@ -495,11 +538,30 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Miner One'), true);
   assert.equal(html.includes('Current subnet stake'), true);
   assert.equal(html.includes('Pool growth estimator'), true);
+  assert.equal(html.includes('pool-estimator-layout'), true);
+  assert.equal(html.includes('data-pool-scenario-open="false"'), true);
+  assert.equal(html.includes('transition: grid-template-columns 0.28s ease'), true);
   assert.equal(html.includes('TAO injected'), true);
   assert.equal(html.includes('Estimated alpha received'), true);
   assert.equal(html.includes('Projected alpha price'), true);
   assert.equal(html.includes('Price change %'), true);
-  assert.equal(html.includes('Projected post-injection reserves'), true);
+  assert.equal(html.includes('Implied subnet market cap'), true);
+  assert.equal(html.includes('Projected TAO in pool'), true);
+  assert.equal(html.includes('id="pool-growth-projected-market-cap"'), true);
+  assert.equal(html.includes('id="pool-growth-market-cap-change"'), true);
+  assert.equal(html.includes('id="pool-growth-projected-tao-reserve"'), true);
+  assert.equal(html.includes('id="pool-growth-tao-reserve-change"'), true);
+  assert.equal(html.includes('data-pool-scenario-chart="true"'), true);
+  assert.equal(html.includes('pool-estimator-scenario-details'), true);
+  assert.equal(html.includes('Alpha price change curve'), true);
+  assert.equal(html.includes('Projected alpha price change vs TAO injected'), true);
+  assert.equal(html.includes('pool-estimator-scenario-meta-row'), true);
+  assert.equal(html.includes('pool-estimator-scenario-grid-line'), true);
+  assert.equal(html.includes('data-pool-scenario-max-tao-injected="2500"'), true);
+  assert.equal(html.includes('TAO 1,250'), true);
+  assert.equal(html.includes('TAO 2,500'), true);
+  assert.equal(html.includes('pool-estimator-scenario-tooltip'), true);
+  assert.equal(html.includes('Show chart'), true);
   assert.equal(html.includes('data-pool-preset='), true);
   assert.equal(html.includes('Wallet profile'), true);
   assert.equal(html.includes('Created'), true);
@@ -536,9 +598,14 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="backfill-btn"'), true);
   assert.equal(html.includes('history-modal-wallet-details'), true);
   assert.equal(html.includes('data-history-range="1"'), true);
-  assert.equal(html.includes('data-history-range="7"'), true);
+  assert.equal(html.includes('data-history-range="7" aria-pressed="true"'), true);
+  assert.equal(html.includes('7D</button>'), true);
   assert.equal(html.includes('data-history-range="30"'), true);
   assert.equal(html.includes('data-history-range="60"'), true);
+  assert.ok(html.indexOf('data-history-range="1"') < html.indexOf('data-history-range="7"'));
+  assert.ok(html.indexOf('data-history-range="7"') < html.indexOf('data-history-range="14"'));
+  assert.ok(html.indexOf('data-history-range="14"') < html.indexOf('data-history-range="30"'));
+  assert.ok(html.indexOf('data-history-range="30"') < html.indexOf('data-history-range="60"'));
   assert.equal(html.includes('history-modal-samples-note'), true);
   assert.equal(html.includes('id="currency-toggle"'), true);
   assert.equal(html.includes('id="tao-price-label"'), true);
@@ -590,6 +657,109 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('/api/subnets/' + model.netuid + '/latest'), true);
   assert.equal(html.includes('syncLiveSnapshotState()'), true);
   assert.equal(model.latest.tao_price_usd, 100);
+  db.close();
+});
+
+test('pool growth estimator updates projected values and scenario hover tooltip in the browser', async () => {
+  const db = openDatabase(':memory:');
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 110,
+    block_number: 1,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '0.1',
+    market_cap: '2000000000',
+    liquidity: '100000000000',
+    total_tao: '100000000000',
+    alpha_in_pool: '1000',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 }));
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [],
+    },
+    netuid: 110,
+  });
+
+  const html = renderPage(model);
+  const errors = [];
+  const dom = new JSDOM(html, {
+    url: 'http://localhost:3003/',
+    runScripts: 'dangerously',
+    resources: 'usable',
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.fetch = async () => ({ ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' });
+      window.console.error = (...args) => errors.push(args.join(' '));
+      window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+      window.SVGElement.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 500, height: 160, right: 500, bottom: 160 });
+      window.HTMLCanvasElement.prototype.getContext = () => ({ clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, rect() {}, arc() {}, closePath() {}, save() {}, restore() {}, setLineDash() {}, fillText() {}, measureText() { return { width: 10 }; } });
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
+  const input = dom.window.document.querySelector('#pool-growth-tao-injected');
+  const projectedPrice = dom.window.document.getElementById('pool-growth-projected-price');
+  const projectedMarketCap = dom.window.document.getElementById('pool-growth-projected-market-cap');
+  const tooltip = dom.window.document.querySelector('.pool-estimator-scenario-tooltip');
+  const points = dom.window.document.querySelectorAll('.pool-estimator-scenario-point');
+  const selection = dom.window.document.querySelectorAll('.pool-estimator-scenario-selection');
+  const estimatorRoot = dom.window.document.getElementById('pool-growth-estimator');
+  const scenarioDetails = dom.window.document.querySelector('.pool-estimator-scenario-details');
+  const scenarioToggle = dom.window.document.querySelector('.pool-estimator-scenario-summary-hint');
+  assert.ok(input);
+  assert.ok(projectedPrice);
+  assert.ok(projectedMarketCap);
+  assert.ok(tooltip);
+  assert.ok(estimatorRoot);
+  assert.ok(scenarioDetails);
+  assert.ok(scenarioToggle);
+  assert.equal(points.length, 0);
+  assert.equal(selection.length, 0);
+  assert.equal(estimatorRoot.dataset.poolScenarioOpen, 'false');
+
+  assert.equal(projectedPrice.textContent.includes('0.121'), true);
+  assert.equal(projectedMarketCap.textContent.includes('2.42'), true);
+
+  scenarioToggle.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(estimatorRoot.dataset.poolScenarioOpen, 'true');
+  assert.equal(scenarioToggle.textContent.includes('Hide chart'), true);
+
+  input.value = '50';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(projectedPrice.textContent.includes('0.225'), true);
+  assert.equal(projectedMarketCap.textContent.includes('4.5'), true);
+  assert.equal(tooltip.hidden, false);
+  assert.equal(tooltip.textContent.includes('TAO injected'), true);
+  assert.equal(tooltip.textContent.includes('+125.00%'), true);
+
+  const hitArea = dom.window.document.querySelector('.pool-estimator-scenario-hit-area');
+  assert.ok(hitArea);
+  hitArea.dispatchEvent(new dom.window.MouseEvent('pointerenter', { bubbles: true, clientX: 100, clientY: 120 }));
+  hitArea.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true, clientX: 100, clientY: 120, buttons: 1 }));
+  hitArea.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: 120, buttons: 1 }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const injectedBefore = input.value;
+  const projectedBefore = projectedPrice.textContent;
+  const leftBefore = tooltip.style.left;
+  hitArea.dispatchEvent(new dom.window.MouseEvent('pointermove', { bubbles: true, clientX: 320, clientY: 120, buttons: 1 }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(tooltip.hidden, false);
+  assert.equal(tooltip.textContent.includes('TAO injected'), true);
+  assert.notEqual(input.value, injectedBefore);
+  assert.notEqual(projectedPrice.textContent, projectedBefore);
+  assert.notEqual(tooltip.style.left, leftBefore);
+
+  dom.window.close();
   db.close();
 });
 
