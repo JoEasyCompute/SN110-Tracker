@@ -248,6 +248,46 @@ function openDatabase(filePath) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_stake_positions_address_netuid_hotkey
       ON wallet_stake_positions(wallet_address_ss58, netuid, hotkey_address_ss58, captured_at);
 
+    CREATE TABLE IF NOT EXISTS wallet_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wallet_name TEXT NOT NULL,
+      wallet_address_ss58 TEXT NOT NULL,
+      wallet_address_hex TEXT,
+      network TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      action TEXT NOT NULL,
+      action_key TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL UNIQUE,
+      captured_at TEXT NOT NULL,
+      event_timestamp TEXT NOT NULL,
+      remote_timestamp TEXT,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      block_number INTEGER,
+      extrinsic_id TEXT,
+      transaction_hash TEXT,
+      hotkey_name TEXT,
+      hotkey_address_ss58 TEXT,
+      hotkey_address_hex TEXT,
+      netuid INTEGER,
+      amount_tao REAL,
+      amount_alpha REAL,
+      from_ss58 TEXT,
+      to_ss58 TEXT,
+      status TEXT,
+      note TEXT,
+      raw_json TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_transactions_dedupe_key
+      ON wallet_transactions(dedupe_key);
+
+    CREATE INDEX IF NOT EXISTS idx_wallet_transactions_address_timestamp
+      ON wallet_transactions(wallet_address_ss58, event_timestamp DESC, id DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_wallet_transactions_address_captured_at
+      ON wallet_transactions(wallet_address_ss58, captured_at DESC, id DESC);
+
     CREATE TABLE IF NOT EXISTS ingest_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       netuid INTEGER NOT NULL,
@@ -276,6 +316,7 @@ function openDatabase(filePath) {
   ensureSnapshotColumns(db);
   ensureTaoPriceColumns(db);
   ensureTaoFlowColumns(db);
+  ensureWalletTransactionColumns(db);
   return db;
 }
 
@@ -445,6 +486,52 @@ function ensureTaoFlowColumns(db) {
   for (const [name, type] of additions) {
     if (!columns.has(name)) {
       db.exec(`ALTER TABLE tao_flow_history ADD COLUMN ${name} ${type}`);
+    }
+  }
+}
+
+function ensureWalletTransactionColumns(db) {
+  const columns = new Set(
+    db.prepare(`PRAGMA table_info(wallet_transactions)`).all().map((row) => row.name)
+  );
+
+  if (columns.size === 0) {
+    return;
+  }
+
+  const additions = [
+    ['wallet_name', 'TEXT'],
+    ['wallet_address_ss58', 'TEXT'],
+    ['wallet_address_hex', 'TEXT'],
+    ['network', 'TEXT'],
+    ['source_type', 'TEXT'],
+    ['action', 'TEXT'],
+    ['action_key', 'TEXT'],
+    ['dedupe_key', 'TEXT'],
+    ['captured_at', 'TEXT'],
+    ['event_timestamp', 'TEXT'],
+    ['remote_timestamp', 'TEXT'],
+    ['source', 'TEXT'],
+    ['source_url', 'TEXT'],
+    ['block_number', 'INTEGER'],
+    ['extrinsic_id', 'TEXT'],
+    ['transaction_hash', 'TEXT'],
+    ['hotkey_name', 'TEXT'],
+    ['hotkey_address_ss58', 'TEXT'],
+    ['hotkey_address_hex', 'TEXT'],
+    ['netuid', 'INTEGER'],
+    ['amount_tao', 'REAL'],
+    ['amount_alpha', 'REAL'],
+    ['from_ss58', 'TEXT'],
+    ['to_ss58', 'TEXT'],
+    ['status', 'TEXT'],
+    ['note', 'TEXT'],
+    ['raw_json', 'TEXT'],
+  ];
+
+  for (const [name, type] of additions) {
+    if (!columns.has(name)) {
+      db.exec(`ALTER TABLE wallet_transactions ADD COLUMN ${name} ${type}`);
     }
   }
 }
@@ -899,6 +986,83 @@ function insertWalletStakePosition(db, snapshot) {
   return Number(info.lastInsertRowid);
 }
 
+function insertWalletTransaction(db, transaction) {
+  const stmt = db.prepare(`
+    INSERT INTO wallet_transactions (
+      wallet_name, wallet_address_ss58, wallet_address_hex, network,
+      source_type, action, action_key, dedupe_key, captured_at, event_timestamp,
+      remote_timestamp, source, source_url, block_number, extrinsic_id, transaction_hash,
+      hotkey_name, hotkey_address_ss58, hotkey_address_hex, netuid,
+      amount_tao, amount_alpha, from_ss58, to_ss58, status, note, raw_json
+    ) VALUES (
+      @wallet_name, @wallet_address_ss58, @wallet_address_hex, @network,
+      @source_type, @action, @action_key, @dedupe_key, @captured_at, @event_timestamp,
+      @remote_timestamp, @source, @source_url, @block_number, @extrinsic_id, @transaction_hash,
+      @hotkey_name, @hotkey_address_ss58, @hotkey_address_hex, @netuid,
+      @amount_tao, @amount_alpha, @from_ss58, @to_ss58, @status, @note, @raw_json
+    )
+    ON CONFLICT(dedupe_key) DO UPDATE SET
+      wallet_name = excluded.wallet_name,
+      wallet_address_ss58 = excluded.wallet_address_ss58,
+      wallet_address_hex = excluded.wallet_address_hex,
+      network = excluded.network,
+      source_type = excluded.source_type,
+      action = excluded.action,
+      action_key = excluded.action_key,
+      captured_at = excluded.captured_at,
+      event_timestamp = excluded.event_timestamp,
+      remote_timestamp = excluded.remote_timestamp,
+      source = excluded.source,
+      source_url = excluded.source_url,
+      block_number = excluded.block_number,
+      extrinsic_id = excluded.extrinsic_id,
+      transaction_hash = excluded.transaction_hash,
+      hotkey_name = excluded.hotkey_name,
+      hotkey_address_ss58 = excluded.hotkey_address_ss58,
+      hotkey_address_hex = excluded.hotkey_address_hex,
+      netuid = excluded.netuid,
+      amount_tao = excluded.amount_tao,
+      amount_alpha = excluded.amount_alpha,
+      from_ss58 = excluded.from_ss58,
+      to_ss58 = excluded.to_ss58,
+      status = excluded.status,
+      note = excluded.note,
+      raw_json = excluded.raw_json
+  `);
+
+  const info = stmt.run({
+    wallet_name: transaction.wallet_name,
+    wallet_address_ss58: transaction.wallet_address_ss58,
+    wallet_address_hex: toDbValue(transaction.wallet_address_hex),
+    network: transaction.network,
+    source_type: transaction.source_type,
+    action: transaction.action,
+    action_key: transaction.action_key,
+    dedupe_key: transaction.dedupe_key,
+    captured_at: transaction.captured_at,
+    event_timestamp: transaction.event_timestamp,
+    remote_timestamp: toDbValue(transaction.remote_timestamp),
+    source: transaction.source,
+    source_url: toDbValue(transaction.source_url),
+    block_number: toDbValue(transaction.block_number),
+    extrinsic_id: toDbValue(transaction.extrinsic_id),
+    transaction_hash: toDbValue(transaction.transaction_hash),
+    hotkey_name: toDbValue(transaction.hotkey_name),
+    hotkey_address_ss58: toDbValue(transaction.hotkey_address_ss58),
+    hotkey_address_hex: toDbValue(transaction.hotkey_address_hex),
+    netuid: toDbValue(transaction.netuid),
+    amount_tao: toDbValue(transaction.amount_tao),
+    amount_alpha: toDbValue(transaction.amount_alpha),
+    from_ss58: toDbValue(transaction.from_ss58),
+    to_ss58: toDbValue(transaction.to_ss58),
+    status: toDbValue(transaction.status),
+    note: toDbValue(transaction.note),
+    raw_json: transaction.raw_json,
+  });
+
+  return Number(info.lastInsertRowid);
+}
+
 function insertIngestRun(db, run) {
   const stmt = db.prepare(`
     INSERT INTO ingest_runs (
@@ -1025,6 +1189,40 @@ function getWalletStakePositionsHistory(db, address, sinceIso) {
   return stmt.all(address, sinceIso);
 }
 
+function getWalletTransactions(db, address, sinceIso = null) {
+  if (sinceIso) {
+    const stmt = db.prepare(`
+      SELECT *
+      FROM wallet_transactions
+      WHERE wallet_address_ss58 = ? AND event_timestamp >= ?
+      ORDER BY event_timestamp DESC, id DESC
+    `);
+    return stmt.all(address, sinceIso);
+  }
+
+  const stmt = db.prepare(`
+    SELECT *
+    FROM wallet_transactions
+    WHERE wallet_address_ss58 = ?
+    ORDER BY event_timestamp DESC, id DESC
+  `);
+  return stmt.all(address);
+}
+
+function countWalletTransactions(db, address = null) {
+  const stmt = address
+    ? db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM wallet_transactions
+      WHERE wallet_address_ss58 = ?
+    `)
+    : db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM wallet_transactions
+    `);
+  return address ? stmt.get(address).count : stmt.get().count;
+}
+
 function getWalletHistory(db, address, sinceIso) {
   const stmt = db.prepare(`
     SELECT *
@@ -1106,6 +1304,17 @@ function getLatestIngestRun(db, netuid) {
     LIMIT 1
   `);
   return stmt.get(netuid) || null;
+}
+
+function getLatestIngestRunBySource(db, source) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM ingest_runs
+    WHERE source = ?
+    ORDER BY started_at DESC, id DESC
+    LIMIT 1
+  `);
+  return stmt.get(source) || null;
 }
 
 function countSnapshots(db, netuid) {
@@ -1281,6 +1490,7 @@ module.exports = {
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
   insertWalletStakePosition,
+  insertWalletTransaction,
   insertIngestRun,
   getLatestSnapshot,
   getRecentSnapshots,
@@ -1291,10 +1501,13 @@ module.exports = {
   getLatestWalletSnapshot,
   getLatestWalletStakePositions,
   getWalletStakePositionsHistory,
+  getWalletTransactions,
   getWalletHistory,
   getLatestIngestRun,
+  getLatestIngestRunBySource,
   countSnapshots,
   countWalletSnapshots,
+  countWalletTransactions,
   snapshotExists,
   taoFlowSnapshotExists,
   walletSnapshotExists,

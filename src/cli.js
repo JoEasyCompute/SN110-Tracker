@@ -39,10 +39,16 @@ async function run() {
   const db = openDatabase(config.dbPath);
   const ingestService = createIngestService({ db, config });
   const backfill = process.argv.includes('--backfill');
+  const walletBackfill = process.argv.includes('--wallet-backfill') || process.argv.includes('--wallet-activity-backfill');
   const once = process.argv.includes('--once');
 
   let result;
-  if (backfill) {
+  if (walletBackfill) {
+    result = await ingestService.backfillWalletActivity({
+      days: intArg(readArg('days', config.taostatsWalletActivityBackfillDays || 60), config.taostatsWalletActivityBackfillDays || 60),
+      limit: intArg(readArg('limit', 200), 200),
+    });
+  } else if (backfill) {
     const backfillResult = await ingestService.backfillHistoricalSnapshots({
       netuid: intArg(readArg('netuid', config.netuid), config.netuid),
       days: intArg(readArg('days', config.taostatsBackfillDays || 30), config.taostatsBackfillDays || 30),

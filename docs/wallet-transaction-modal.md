@@ -1,18 +1,18 @@
 # Wallet Transaction Modal
 
-This document describes the planned drill-down modal for wallet activity.
+This document describes the wallet transaction drill-down modal for wallet activity.
 It is intended as a reference for implementation and future maintenance.
 
 ## Current implementation
 
-The modal is now available behind a **Ctrl-click / Cmd-click** on any configured wallet card.
+The modal is available behind a **Ctrl-click / Cmd-click** on any configured wallet card.
 It opens a timeline that combines:
 
 - Taostats extrinsics
 - Taostats transfers
 - hotkey stake snapshot deltas
 
-The design below is still the reference for future iteration, but the core path is now wired into the app.
+The modal reads from the local SQLite wallet-activity cache first, shows a clear **“Fetching wallet activity…”** loading state while the cache or fallback sync is in progress, and only falls back to Taostats for cache misses or a manual refresh.
 
 ## Goal
 
@@ -143,6 +143,7 @@ Implementation notes:
 - keep helper output normalized before rendering
 - avoid mixing API payload shape with UI shape
 - keep the modal able to render even if one source fails
+- prefer the SQLite cache on open, with live Taostats used only as a fallback path
 
 ## Proposed row model
 
@@ -218,6 +219,7 @@ Do not infer owner earnings from validator-only evidence.
 ### Filters
 
 - Date range: `24H / 7D / 30D / 60D / All`
+- Refresh button for manual cache re-sync when the user wants the latest live data
 - Type filter: `All / Stake / Unstake / Transfer / Validator / Owner / Other`
 - Optional hotkey filter
 

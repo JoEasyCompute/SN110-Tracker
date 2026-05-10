@@ -1,22 +1,18 @@
 'use strict';
 
+const defaultTaostats = require('./taostats');
 const {
-  fetchLatestSnapshot,
-  fetchHistoricalSnapshots,
-  fetchTaoPriceLatest,
-  fetchTaoPriceHistory,
-  fetchTaoFlowHistory,
-  fetchAccountLatest,
-  fetchAccountHistory,
-  fetchStakeBalanceLatest,
-  fetchHistoricalStakeBalance,
-} = require('./taostats');
+  buildWalletTransactionTimeline,
+  buildWalletTransactionDbRecord,
+  buildWalletTransactionTimelineFromRows,
+} = require('./wallet-activity');
 const {
   insertSnapshot,
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
   insertWalletStakePosition,
+  insertWalletTransaction,
   insertIngestRun,
   snapshotExists,
   taoFlowSnapshotExists,
@@ -26,10 +22,260 @@ const {
   deleteTaoFlowHistoryInRange,
   deleteWalletSnapshotsInRange,
   deleteWalletStakePositionsInRange,
+  getWalletTransactions,
 } = require('./db');
 
-function createIngestService({ db, config }) {
+function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
+  const {
+    fetchLatestSnapshot,
+    fetchHistoricalSnapshots,
+    fetchTaoPriceLatest,
+    fetchTaoPriceHistory,
+    fetchTaoFlowHistory,
+    fetchAccountLatest,
+    fetchAccountHistory,
+    fetchStakeBalanceLatest,
+    fetchHistoricalStakeBalance,
+  } = taostats;
+
   let active = false;
+
+  function resolveWalletConfig(address) {
+    return (config.wallets || []).find((wallet) => String(wallet.ss58 || wallet.coldkey || '') === String(address || ''))
+      || {
+        name: String(address || 'Wallet'),
+        ss58: String(address || ''),
+        coldkey: String(address || ''),
+        network: 'finney',
+        hotkeys: [],
+      };
+  }
+
+  function normalizeWalletDays(days, fallback) {
+    const parsed = Number.parseInt(String(days ?? ''), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  async function storeWalletTimelineRows({ walletConfig, rows, sourceUrl = null, source = 'api-history' }) {
+    let inserted = 0;
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const record = buildWalletTransactionDbRecord({
+        walletConfig,
+        row,
+        sourceUrl,
+        source,
+      });
+      insertWalletTransaction(db, record);
+      inserted += 1;
+    }
+    return inserted;
+  }
+
+  async function runWalletActivityForWallet({
+    walletConfig = null,
+    address = null,
+    days = config.walletActivitySyncDays ?? 7,
+    limit = 200,
+    stakePositions = null,
+    forceRefresh = false,
+  } = {}) {
+    const wallet = walletConfig || resolveWalletConfig(address);
+    const effectiveDays = normalizeWalletDays(days, config.walletActivitySyncDays ?? 7);
+    if (!config.taostatsAuthHeader) {
+      return {
+        ok: false,
+        wallet: wallet.name,
+        address: wallet.ss58,
+        days: effectiveDays,
+        rowsFetched: 0,
+        rowsInserted: 0,
+        source: 'wallet-activity',
+        partial: false,
+        reason: 'Taostats API access is required to sync wallet activity.',
+        warning: null,
+        skipped: true,
+      };
+    }
+    const summary = {
+      ok: false,
+      wallet: wallet.name,
+      address: wallet.ss58,
+      days: effectiveDays,
+      rowsFetched: 0,
+      rowsInserted: 0,
+      source: 'wallet-activity',
+      partial: false,
+      reason: null,
+      warning: null,
+      skipped: false,
+    };
+
+    try {
+      const resolvedStakePositions = Array.isArray(stakePositions)
+        ? stakePositions
+        : [];
+      const timeline = await buildWalletTransactionTimeline({
+        address: wallet.ss58,
+        walletConfig: wallet,
+        stakePositions: resolvedStakePositions,
+        taostatsBaseUrl: config.taostatsBaseUrl,
+        taostatsAuthHeader: config.taostatsAuthHeader,
+        rateLimiter: config.taostatsRateLimiter || null,
+        days: effectiveDays,
+        limit,
+        fetchers: taostats,
+      });
+      summary.partial = timeline.partial;
+      summary.reason = timeline.reason;
+      summary.warning = timeline.warning;
+      summary.rowsFetched = Array.isArray(timeline.rows) ? timeline.rows.length : 0;
+      if (timeline.available || forceRefresh || summary.rowsFetched > 0 || timeline.reason) {
+        summary.rowsInserted = await storeWalletTimelineRows({
+          walletConfig: wallet,
+          rows: timeline.rows,
+          sourceUrl: 'wallet-activity-sync',
+          source: 'api-history',
+        });
+      }
+      summary.ok = true;
+      return {
+        ...summary,
+        rows: timeline.rows,
+      };
+    } catch (error) {
+      return {
+        ...summary,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async function syncWalletActivityForWallet({
+    walletConfig = null,
+    address = null,
+    days = config.walletActivitySyncDays ?? 7,
+    limit = 200,
+    stakePositions = null,
+    forceRefresh = false,
+  } = {}) {
+    if (active) {
+      return { skipped: true, reason: 'ingest already running' };
+    }
+
+    active = true;
+    const startedAt = new Date();
+    const startedIso = startedAt.toISOString();
+    let result;
+    try {
+      result = await runWalletActivityForWallet({
+        walletConfig,
+        address,
+        days,
+        limit,
+        stakePositions,
+        forceRefresh,
+      });
+      return result;
+    } finally {
+      const finishedAt = new Date();
+      const logDetail = result ? { ...result } : {};
+      delete logDetail.rows;
+      insertIngestRun(db, {
+        netuid: config.netuid,
+        started_at: startedIso,
+        finished_at: finishedAt.toISOString(),
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+        source: 'wallet-activity',
+        fallback_used: false,
+        ok: Boolean(result?.ok),
+        snapshot_id: null,
+        message: result?.ok ? `Wallet activity synced for ${result.wallet}` : 'Wallet activity sync failed',
+        error: result?.error || null,
+        detail_json: JSON.stringify(logDetail),
+      });
+      active = false;
+    }
+  }
+
+  async function syncWalletActivity({
+    wallets = config.wallets || [],
+    days = config.walletActivitySyncDays ?? 7,
+    limit = 200,
+    forceRefresh = false,
+  } = {}) {
+    if (active) {
+      return { skipped: true, reason: 'ingest already running' };
+    }
+
+    active = true;
+    const startedAt = new Date();
+    const startedIso = startedAt.toISOString();
+    const results = [];
+    const detail = {
+      days,
+      limit,
+      wallets: Array.isArray(wallets) ? wallets.length : 0,
+    };
+
+    try {
+      for (const wallet of Array.isArray(wallets) ? wallets : []) {
+        const result = await runWalletActivityForWallet({
+          walletConfig: wallet,
+          days,
+          limit,
+          forceRefresh,
+        });
+        results.push(result);
+      }
+      const ok = results.every((result) => result.ok !== false && !result.error);
+      detail.results = results.map((result) => ({
+        wallet: result.wallet,
+        address: result.address,
+        rowsFetched: result.rowsFetched,
+        rowsInserted: result.rowsInserted,
+        partial: result.partial,
+        warning: result.warning,
+        reason: result.reason,
+      }));
+      return {
+        ok,
+        days,
+        limit,
+        results,
+        detail,
+      };
+    } finally {
+      const finishedAt = new Date();
+      insertIngestRun(db, {
+        netuid: config.netuid,
+        started_at: startedIso,
+        finished_at: finishedAt.toISOString(),
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+        source: 'wallet-activity',
+        fallback_used: false,
+        ok: results.every((result) => result.ok !== false && !result.error),
+        snapshot_id: null,
+        message: 'Wallet activity sync batch completed',
+        error: null,
+        detail_json: JSON.stringify(detail),
+      });
+      active = false;
+    }
+  }
+
+  async function backfillWalletActivity({
+    wallets = config.wallets || [],
+    days = config.walletActivityBackfillDays ?? 60,
+    limit = 200,
+  } = {}) {
+    return syncWalletActivity({
+      wallets,
+      days,
+      limit,
+      forceRefresh: true,
+    });
+  }
 
   async function ingestOnce({ netuid = config.netuid } = {}) {
     if (active) {
@@ -507,6 +753,9 @@ function createIngestService({ db, config }) {
   return {
     ingestOnce,
     backfillHistoricalSnapshots,
+    syncWalletActivity,
+    syncWalletActivityForWallet,
+    backfillWalletActivity,
     isActive: () => active,
   };
 }

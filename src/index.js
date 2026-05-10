@@ -22,6 +22,7 @@ async function main() {
   setSetting(db, 'poll_interval_minutes', storedPollIntervalMinutes);
   const ingestService = createIngestService({ db, config });
   let timer = null;
+  let walletActivityTimer = null;
 
   const schedulePolling = (minutes) => {
     const normalizedMinutes = normalizePollIntervalMinutes(minutes, config.pollIntervalMinutes);
@@ -44,6 +45,33 @@ async function main() {
     };
   };
 
+  const scheduleWalletActivitySync = (minutes) => {
+    if (!config.taostatsAuthHeader || !Array.isArray(config.wallets) || config.wallets.length === 0) {
+      return null;
+    }
+    const normalizedMinutes = Number.isFinite(Number(minutes)) && Number(minutes) > 0
+      ? Number(minutes)
+      : config.taostatsWalletActivitySyncIntervalMinutes || 60;
+    config.walletActivitySyncIntervalMinutes = normalizedMinutes;
+    config.nextWalletActivitySyncAtIso = new Date(Date.now() + normalizedMinutes * 60 * 1000).toISOString();
+    if (walletActivityTimer) {
+      clearInterval(walletActivityTimer);
+    }
+    walletActivityTimer = setInterval(() => {
+      config.nextWalletActivitySyncAtIso = new Date(Date.now() + normalizedMinutes * 60 * 1000).toISOString();
+      void ingestService.syncWalletActivity({
+        days: config.taostatsWalletActivitySyncDays,
+      }).catch((error) => {
+        console.error('Scheduled wallet activity sync failed:', error);
+      });
+    }, normalizedMinutes * 60 * 1000);
+    walletActivityTimer.unref();
+    return {
+      walletActivitySyncIntervalMinutes: normalizedMinutes,
+      nextWalletActivitySyncAtIso: config.nextWalletActivitySyncAtIso,
+    };
+  };
+
   const app = createDashboardServer({
     db,
     ingestService,
@@ -56,6 +84,7 @@ async function main() {
   });
 
   schedulePolling(config.pollIntervalMinutes);
+  scheduleWalletActivitySync(config.taostatsWalletActivitySyncIntervalMinutes);
   await app.start(config.port);
   console.log(`SN${config.netuid} dashboard running on http://localhost:${config.port}`);
   console.log(`SQLite database: ${config.dbPath}`);
@@ -64,6 +93,9 @@ async function main() {
   }
   if (Array.isArray(config.wallets) && config.wallets.length > 0) {
     console.log(`Wallet tracking: ${config.wallets.length} wallet${config.wallets.length === 1 ? '' : 's'} configured`);
+  }
+  if (config.taostatsAuthHeader && Array.isArray(config.wallets) && config.wallets.length > 0) {
+    console.log(`Wallet activity sync: every ${config.taostatsWalletActivitySyncIntervalMinutes} minute${config.taostatsWalletActivitySyncIntervalMinutes === 1 ? '' : 's'} (recent ${config.taostatsWalletActivitySyncDays} days)`);
   }
   if (config.taostatsBackfillOnStartup && config.taostatsBackfillDays > 0) {
     console.log(`Historical backfill: enabled (${config.taostatsBackfillDays} days, ${config.taostatsBackfillFrequency})`);
@@ -77,13 +109,27 @@ async function main() {
       }).then(() => ingestService.ingestOnce({ netuid: config.netuid }))
     : ingestService.ingestOnce({ netuid: config.netuid });
 
-  void startupTask.catch((error) => {
-    console.error('Initial ingest failed:', error);
-  });
+  void startupTask
+    .catch((error) => {
+      console.error('Initial ingest failed:', error);
+    })
+    .finally(() => {
+      if (!config.taostatsAuthHeader || !Array.isArray(config.wallets) || config.wallets.length === 0) {
+        return;
+      }
+      void ingestService.syncWalletActivity({
+        days: config.taostatsWalletActivitySyncDays,
+      }).catch((error) => {
+        console.error('Initial wallet activity sync failed:', error);
+      });
+    });
 
   const shutdown = async () => {
     if (timer) {
       clearInterval(timer);
+    }
+    if (walletActivityTimer) {
+      clearInterval(walletActivityTimer);
     }
     await app.close();
     db.close();

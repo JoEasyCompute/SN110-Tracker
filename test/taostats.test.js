@@ -30,6 +30,7 @@ const {
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
   insertWalletStakePosition,
+  insertWalletTransaction,
   getLatestSnapshot,
   getRecentSnapshots,
   getHistory,
@@ -39,11 +40,18 @@ const {
   getLatestWalletSnapshot,
   getLatestWalletStakePositions,
   getWalletHistory,
+  getWalletTransactions,
+  countWalletTransactions,
   deleteSnapshotsInRange,
   deleteWalletStakePositions,
   getSetting,
   setSetting,
 } = require('../src/db');
+const {
+  buildWalletTransactionDbRecord,
+  buildWalletTransactionTimelineFromRows,
+} = require('../src/wallet-activity');
+const { createIngestService } = require('../src/ingest');
 const {
   buildPageModel,
   buildWalletAttributionSummary,
@@ -345,6 +353,123 @@ test('sqlite persistence stores and retrieves wallet stake positions', () => {
   db.close();
 });
 
+test('sqlite persistence stores and retrieves wallet transactions', () => {
+  const db = openDatabase(':memory:');
+  const walletConfig = { name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [] };
+  insertWalletTransaction(db, buildWalletTransactionDbRecord({
+    walletConfig,
+    source: 'api-history',
+    sourceUrl: 'https://example.invalid',
+    row: {
+      source_type: 'transfer',
+      timestamp: '2026-04-30T00:00:00Z',
+      block_number: 123,
+      extrinsic_id: '0xaaa',
+      transaction_hash: '0xbbb',
+      action: 'Transfer',
+      action_key: 'transfer',
+      amount_tao: 1.25,
+      from_ss58: '5WalletAlpha123456789ABCDEFGH',
+      to_ss58: '5OtherWallet',
+      status: 'success',
+      note: 'Coldkey transfer',
+      raw: { transfer: true },
+    },
+  }));
+
+  const rows = getWalletTransactions(db, '5WalletAlpha123456789ABCDEFGH');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].action, 'Transfer');
+  assert.equal(rows[0].dedupe_key.includes('transfer:'), true);
+  assert.equal(rows[0].raw_json.includes('transfer'), true);
+
+  const timeline = buildWalletTransactionTimelineFromRows({
+    address: '5WalletAlpha123456789ABCDEFGH',
+    walletConfig,
+    rows,
+    days: 7,
+  });
+  assert.equal(timeline.available, true);
+  assert.equal(timeline.rows[0].timestamp, '2026-04-30T00:00:00Z');
+  assert.equal(timeline.rows[0].raw.transfer, true);
+
+  db.close();
+});
+
+test('wallet activity sync deduplicates overlapping backfill windows', async () => {
+  const db = openDatabase(':memory:');
+  const taostats = {
+    fetchExtrinsicsHistory: async () => ([
+      {
+        id: 'extrinsic-1',
+        block_number: 100,
+        timestamp: '2026-04-30T00:00:00Z',
+        full_name: 'transfer_stake',
+        call_args: {
+          netuid: 110,
+          hotkey: { ss58: '5HotkeyOne' },
+          amount: '1000000000',
+        },
+        hash: '0xabc',
+        success: true,
+      },
+    ]),
+    fetchTransferHistory: async () => ([
+      {
+        transaction_hash: '0xdef',
+        timestamp: '2026-04-30T01:00:00Z',
+        block_number: 101,
+        from: { ss58: '5WalletAlpha123456789ABCDEFGH' },
+        to: { ss58: '5OtherWallet' },
+        amount: '2000000000',
+      },
+    ]),
+    fetchHistoricalStakeBalance: async ({ hotkey }) => ([
+      {
+        captured_at: '2026-04-29T00:00:00Z',
+        balance_as_tao_num: 10,
+        hotkey_address_ss58: hotkey,
+      },
+      {
+        captured_at: '2026-04-30T00:00:00Z',
+        balance_as_tao_num: 12,
+        hotkey_address_ss58: hotkey,
+      },
+    ]),
+  };
+
+  const config = {
+    netuid: 110,
+    taostatsBaseUrl: 'https://example.invalid',
+    taostatsAuthHeader: 'secret',
+    taostatsRateLimiter: null,
+    wallets: [{
+      name: 'Alpha Treasury',
+      ss58: '5WalletAlpha123456789ABCDEFGH',
+      coldkey: '5WalletAlpha123456789ABCDEFGH',
+      network: 'finney',
+      hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 110, network: 'finney', role: 'validator' }],
+    }],
+    walletActivitySyncDays: 7,
+    walletActivityBackfillDays: 60,
+  };
+  const service = createIngestService({ db, config, taostats });
+
+  const backfill = await service.backfillWalletActivity({ days: 60 });
+  assert.equal(backfill.ok, true);
+  assert.equal(countWalletTransactions(db, '5WalletAlpha123456789ABCDEFGH'), 3);
+
+  const sync = await service.syncWalletActivity({ days: 7 });
+  assert.equal(sync.ok, true);
+  assert.equal(countWalletTransactions(db, '5WalletAlpha123456789ABCDEFGH'), 3);
+
+  const rows = getWalletTransactions(db, '5WalletAlpha123456789ABCDEFGH');
+  assert.equal(rows.length, 3);
+  assert.equal(new Set(rows.map((row) => row.dedupe_key)).size, 3);
+
+  db.close();
+});
+
 test('sqlite app settings persist key/value pairs', () => {
   const db = openDatabase(':memory:');
   assert.equal(getSetting(db, 'poll_interval_minutes'), null);
@@ -559,6 +684,14 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('data-history-range="30"'), true);
   assert.equal(html.includes('data-history-range="7"'), true);
   assert.equal(html.includes('Wallet balances'), true);
+  assert.equal(html.includes('Wallet activity cache'), true);
+  assert.equal(html.includes('last synced never'), true);
+  assert.equal(html.includes('id="wallet-activity-topbar-status"'), true);
+  assert.equal(html.includes('id="wallet-activity-admin-status"'), true);
+  assert.equal(html.includes('id="wallet-activity-topbar-badge"'), true);
+  assert.equal(html.includes('id="wallet-activity-admin-badge"'), true);
+  assert.equal(html.includes('status-badge status-badge-neutral'), true);
+  assert.equal(html.includes('Wallet activity idle'), true);
   assert.equal(html.includes('id="pool-growth-estimator"'), true);
   assert.equal(html.includes('data-pool-growth-root="page"'), true);
   assert.equal(html.includes('Alpha Treasury'), true);
@@ -591,6 +724,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('pool-estimator-scenario-tooltip'), true);
   assert.equal(html.includes('Show chart'), true);
   assert.equal(html.includes('wallet-transactions-modal'), true);
+  assert.equal(html.includes('wallet-transactions-refresh'), true);
   assert.equal(html.includes('wallet-transactions-table-body'), true);
   assert.equal(html.includes('data-wallet-tx-range="7"'), true);
   assert.equal(html.includes('data-wallet-tx-filter="stake"'), true);
@@ -628,6 +762,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="backfill-frequency"'), true);
   assert.equal(html.includes('id="backfill-overwrite"'), true);
   assert.equal(html.includes('id="backfill-btn"'), true);
+  assert.equal(html.includes('id="wallet-backfill-btn"'), true);
   assert.equal(html.includes('history-modal-wallet-details'), true);
   assert.equal(html.includes('data-history-range="1"'), true);
   assert.equal(html.includes('data-history-range="7" aria-pressed="true"'), true);
@@ -682,6 +817,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Source: Fear &amp; Greed'), true);
   assert.equal(html.includes('Emission Rate'), true);
   assert.equal(html.includes('TAO price used:'), true);
+  assert.equal(html.includes('Fetching wallet activity…'), true);
+  assert.equal(html.includes('Wallet activity'), true);
   assert.equal(html.includes('Gaps in this chart mean no historical sample was stored for that time.'), true);
   assert.equal(html.includes('displayMetricText(metric)'), true);
   assert.equal(html.includes('Click a latest snapshot card'), true);

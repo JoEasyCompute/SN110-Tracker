@@ -137,6 +137,9 @@ function loadConfig() {
   const taostatsBackfillFrequency = process.env.TAOSTATS_BACKFILL_FREQUENCY || 'by_hour';
   const taostatsBackfillOnStartup = boolOr(false, process.env.TAOSTATS_BACKFILL_ON_STARTUP);
   const taostatsBackfillOverwrite = boolOr(true, process.env.TAOSTATS_BACKFILL_OVERWRITE);
+  const taostatsWalletActivityBackfillDays = intOr(60, process.env.TAOSTATS_WALLET_ACTIVITY_BACKFILL_DAYS);
+  const taostatsWalletActivitySyncDays = intOr(7, process.env.TAOSTATS_WALLET_ACTIVITY_SYNC_DAYS);
+  const taostatsWalletActivitySyncIntervalMinutes = intOr(60, process.env.TAOSTATS_WALLET_ACTIVITY_SYNC_INTERVAL_MINUTES);
   const wallets = parseWalletConfigs(process.env);
 
   return {
@@ -155,6 +158,9 @@ function loadConfig() {
     taostatsBackfillFrequency,
     taostatsBackfillOnStartup,
     taostatsBackfillOverwrite,
+    taostatsWalletActivityBackfillDays,
+    taostatsWalletActivitySyncDays,
+    taostatsWalletActivitySyncIntervalMinutes,
     wallets,
     userAgent: 'sn110-tracker/1.0 (+local dashboard)',
   };

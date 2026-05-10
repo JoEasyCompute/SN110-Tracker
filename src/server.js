@@ -13,10 +13,14 @@ const {
   getLatestWalletStakePositions,
   getWalletHistory,
   getWalletStakePositionsHistory,
+  getWalletTransactions,
   getLatestIngestRun,
+  getLatestIngestRunBySource,
   countSnapshots,
   countWalletSnapshots,
+  countWalletTransactions,
 } = require('./db');
+const { buildWalletTransactionTimelineFromRows } = require('./wallet-activity');
 const { POLL_INTERVAL_OPTIONS } = require('./config');
 const {
   buildPoolGrowthEstimatorState,
@@ -1495,7 +1499,7 @@ async function buildWalletTransactionTimeline({
   return result;
 }
 
-function renderWalletSection(walletEntries, latestSubnet = null) {
+function renderWalletSection(walletEntries, latestSubnet = null, walletActivityStatus = null) {
   if (!Array.isArray(walletEntries) || !walletEntries.length) return '';
   const poolEstimator = buildPoolGrowthEstimatorState(latestSubnet);
   const cards = walletEntries.map(({ wallet, latest, stakePositions = [], hotkeys = [] }) => {
@@ -1578,16 +1582,53 @@ function renderWalletSection(walletEntries, latestSubnet = null) {
       metricData,
     });
   }).join('');
+  const activityText = formatWalletActivityStatusText(walletActivityStatus);
+  const activityLine = activityText
+    ? `<p class="muted wallet-activity-status">${escapeHtml(activityText)}</p>`
+    : '';
 
   return `
     <section class="section wallet-section">
       <div class="section-copy">
         <h2>Wallet balances</h2>
         <p class="muted">Configured ss58 addresses from the .env file. Click a wallet card to inspect its historical balance chart.</p>
+        ${activityLine}
       </div>
       <div class="grid compact">${cards}</div>
     </section>
   `;
+}
+
+function formatWalletActivityStatusText(walletActivityStatus = null) {
+  if (!walletActivityStatus) return '';
+  const parts = [];
+  if (Number.isFinite(Number(walletActivityStatus.transactionCount))) {
+    parts.push(`${compact(walletActivityStatus.transactionCount, 0)} wallet activity rows cached`);
+  }
+  if (walletActivityStatus.lastRunAtIso) {
+    parts.push(`last synced ${formatRelativeIso(walletActivityStatus.lastRunAtIso)}`);
+  } else {
+    parts.push('last synced never');
+  }
+  if (walletActivityStatus.nextSyncAtIso) {
+    parts.push(`next sync ${formatRelativeIso(walletActivityStatus.nextSyncAtIso)}`);
+  } else if (Number.isFinite(Number(walletActivityStatus.syncIntervalMinutes))) {
+    parts.push(`syncs every ${formatPollInterval(walletActivityStatus.syncIntervalMinutes)}`);
+  }
+  return parts.length ? `Wallet activity cache: ${parts.join(' • ')}` : '';
+}
+
+function renderWalletActivityStatusBadge(walletActivityStatus = null, { id = 'wallet-activity-badge' } = {}) {
+  const text = formatWalletActivityStatusText(walletActivityStatus);
+  if (!text) return '';
+  const hasRows = Number.isFinite(Number(walletActivityStatus?.transactionCount)) && Number(walletActivityStatus.transactionCount) > 0;
+  const tone = walletActivityStatus?.lastRunAtIso
+    ? (hasRows ? 'positive' : 'accent')
+    : 'neutral';
+  const label = walletActivityStatus?.lastRunAtIso
+    ? (hasRows ? 'Wallet activity cached' : 'Wallet activity synced')
+    : 'Wallet activity idle';
+  return `<span class="wallet-activity-badge status-badge status-badge-${tone}" id="${escapeHtml(id)}" title="${escapeHtml(text)}">${escapeHtml(label)}</span>`;
 }
 
 function renderPoolGrowthScenarioChartMarkup(series, selectedResult, maxInjected) {
@@ -1930,6 +1971,7 @@ function buildPageModel({ db, config, netuid }) {
     stakePositions: getLatestWalletStakePositions(db, wallet.ss58),
     hotkeys: Array.isArray(wallet.hotkeys) ? wallet.hotkeys : [],
   }));
+  const latestWalletActivityRun = getLatestIngestRunBySource(db, 'wallet-activity');
   const comparisons = latestWithPrice ? buildComparisons(history, latestWithPrice) : [];
 
   return {
@@ -1944,6 +1986,12 @@ function buildPageModel({ db, config, netuid }) {
     latestTaoPrice,
     latestTaoPriceUsd: latestWithPrice?.tao_price_usd ?? latestTaoPrice?.price_usd ?? null,
     walletEntries,
+    walletActivityStatus: {
+      transactionCount: countWalletTransactions(db),
+      lastRunAtIso: latestWalletActivityRun?.started_at ?? null,
+      nextSyncAtIso: config.nextWalletActivitySyncAtIso ?? null,
+      syncIntervalMinutes: config.walletActivitySyncIntervalMinutes ?? config.taostatsWalletActivitySyncIntervalMinutes ?? null,
+    },
     totalWalletSnapshots,
     nextPollAtIso: config.nextPollAtIso ?? null,
     hasApiKey: Boolean(config.taostatsAuthHeader),
@@ -2103,16 +2151,19 @@ function renderHistoryTable(rows) {
   `;
 }
 
-function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons }) {
+function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null }) {
   if (!config.taostatsAdminApiKey) {
     return '';
   }
+  const walletActivityText = formatWalletActivityStatusText(walletActivityStatus);
+  const walletActivityBadge = renderWalletActivityStatusBadge(walletActivityStatus, { id: 'wallet-activity-admin-badge' });
   return `
       <details class="admin-panel">
         <summary>Admin panel</summary>
         <div class="admin-panel-body">
           <div class="panel admin-controls">
             <h3>Live controls</h3>
+            ${walletActivityBadge ? `<div class="wallet-activity-status admin-wallet-activity-status" id="wallet-activity-admin-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
             <div class="admin-actions">
               <button class="button primary" type="button" id="refresh-btn">Refresh now</button>
               <div class="poll-switcher" role="tablist" aria-label="Polling interval">
@@ -2149,6 +2200,22 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
                 <button class="button primary" type="button" id="backfill-btn">Run backfill</button>
               </div>
               <p class="empty" id="backfill-status" hidden></p>
+            </div>
+          </div>
+          <div class="panel">
+            <h3>Wallet activity</h3>
+            <div class="admin-form">
+              <div class="admin-form-row">
+                <label>
+                  Days
+                  <input type="number" id="wallet-backfill-days" min="1" max="3650" step="1" value="${escapeHtml(String(config.taostatsWalletActivityBackfillDays || 60))}">
+                </label>
+                <p class="admin-helper">Backfills extrinsics, transfers, and derived stake deltas for every configured wallet.</p>
+              </div>
+              <div class="admin-actions">
+                <button class="button primary" type="button" id="wallet-backfill-btn">Backfill wallet activity</button>
+              </div>
+              <p class="empty" id="wallet-backfill-status" hidden></p>
             </div>
           </div>
           <div class="admin-grid">
@@ -2381,6 +2448,7 @@ function renderDashboardClientScript({ netuid, config }) {
         title: document.getElementById('wallet-transactions-modal-title'),
         subtitle: document.getElementById('wallet-transactions-modal-subtitle'),
         explanation: document.getElementById('wallet-transactions-modal-explanation'),
+        refresh: document.getElementById('wallet-transactions-refresh'),
         close: document.getElementById('wallet-transactions-modal-close'),
         count: document.getElementById('wallet-transactions-count'),
         stakeCount: document.getElementById('wallet-transactions-stake-count'),
@@ -2409,6 +2477,9 @@ function renderDashboardClientScript({ netuid, config }) {
       const backfillOverwriteInput = document.getElementById('backfill-overwrite');
       const backfillButton = document.getElementById('backfill-btn');
       const backfillStatus = document.getElementById('backfill-status');
+      const walletBackfillDaysInput = document.getElementById('wallet-backfill-days');
+      const walletBackfillButton = document.getElementById('wallet-backfill-btn');
+      const walletBackfillStatus = document.getElementById('wallet-backfill-status');
 
       const chartConfigs = ${JSON.stringify(getChartMetricConfigs())};
 
@@ -3619,7 +3690,7 @@ function renderDashboardClientScript({ netuid, config }) {
       }
 
       function walletTransactionRangeSubtitle(days) {
-        if (days === 0) return 'Showing every matched row available from the API and local snapshot history.';
+        if (days === 0) return 'Showing every matched row available in the local SQLite cache.';
         if (days === 1) return 'Showing the last 24 hours of wallet activity.';
         return 'Showing the last ' + days + ' day' + (days === 1 ? '' : 's') + ' of wallet activity.';
       }
@@ -3679,6 +3750,7 @@ function renderDashboardClientScript({ netuid, config }) {
       function renderWalletTransactions(metric, payload = null) {
         if (!txModalElements.backdrop || !txModalElements.tableBody) return;
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const loading = Boolean(payload?.loading);
         const filteredRows = rows.filter((row) => walletTransactionFilterMatches(row, state.modalTransactionsFilter));
         const summary = payload?.summary || {};
         const stakeRows = rows.filter((row) => walletTransactionGroup(row) === 'stake').length;
@@ -3698,24 +3770,28 @@ function renderDashboardClientScript({ netuid, config }) {
         const walletLabel = metric?.label || metric?.sourceText || 'Wallet';
         txModalElements.title.textContent = walletLabel + ' transactions';
         txModalElements.subtitle.textContent = walletTransactionRangeLabel(state.modalTransactionsDays) + ' • ' + walletTransactionRangeSubtitle(state.modalTransactionsDays);
-        const payloadIssue = payload && payload.reason && payload.available === false;
+        const payloadIssue = !loading && payload && payload.reason && payload.available === false;
         const payloadWarning = payload && payload.warning ? String(payload.warning) : '';
         if (txModalElements.explanation) {
           txModalElements.explanation.hidden = !payloadIssue;
           txModalElements.explanation.textContent = payload?.reason || '';
         }
-        if (txModalElements.count) txModalElements.count.textContent = Number.isFinite(Number(summary.total)) ? formatInteger(summary.total) : String(rows.length || 0);
-        if (txModalElements.stakeCount) txModalElements.stakeCount.textContent = formatInteger(stakeRows);
-        if (txModalElements.transferCount) txModalElements.transferCount.textContent = formatInteger(transferRows);
+        if (txModalElements.count) txModalElements.count.textContent = loading ? '—' : (Number.isFinite(Number(summary.total)) ? formatInteger(summary.total) : String(rows.length || 0));
+        if (txModalElements.stakeCount) txModalElements.stakeCount.textContent = loading ? '—' : formatInteger(stakeRows);
+        if (txModalElements.transferCount) txModalElements.transferCount.textContent = loading ? '—' : formatInteger(transferRows);
         if (txModalElements.countNote) {
-          txModalElements.countNote.textContent = payloadIssue
-            ? payload.reason
-            : (payloadWarning || 'Matched rows from extrinsics, transfers, and hotkey stake snapshots.');
+          txModalElements.countNote.textContent = loading
+            ? 'Fetching wallet activity from the local SQLite cache…'
+            : (payloadIssue
+              ? payload.reason
+              : (payloadWarning || 'Matched rows from extrinsics, transfers, and hotkey stake snapshots.'));
         }
         if (txModalElements.note) {
-          txModalElements.note.textContent = payloadIssue
-            ? payload.reason
-            : (payloadWarning || 'Click a row to inspect the raw payload and inference notes.');
+          txModalElements.note.textContent = loading
+            ? 'Fetching wallet activity…'
+            : (payloadIssue
+              ? payload.reason
+              : (payloadWarning || 'Click a row to inspect the raw payload and inference notes.'));
         }
         if (payloadWarning && txModalElements.explanation) {
           txModalElements.explanation.hidden = true;
@@ -3726,6 +3802,16 @@ function renderDashboardClientScript({ netuid, config }) {
         }
         if (payloadWarning && txModalElements.countNote && !payloadIssue) {
           txModalElements.countNote.textContent = payloadWarning;
+        }
+
+        if (loading) {
+          txModalElements.tableBody.innerHTML = '<tr><td colspan="9" class="empty">Fetching wallet activity…</td></tr>';
+          if (txModalElements.detailEmpty) txModalElements.detailEmpty.hidden = false;
+          if (txModalElements.detail) {
+            txModalElements.detail.hidden = true;
+            txModalElements.detail.textContent = '';
+          }
+          return;
         }
 
         if (!filteredRows.length) {
@@ -3805,15 +3891,15 @@ function renderDashboardClientScript({ netuid, config }) {
         }
       }
 
-      async function loadWalletTransactions(metric, days = 7) {
+      async function loadWalletTransactions(metric, days = 7, options = {}) {
         if (!metric || metric.kind !== 'wallet') return null;
         const address = metric.historyId || metric.walletAddress || metric.rawValue || metric.sourceText || '';
         if (!address) return null;
         const key = address + ':' + String(days);
-        if (state.modalTransactionsCache.has(key)) {
+        if (!options.refresh && state.modalTransactionsCache.has(key)) {
           return state.modalTransactionsCache.get(key);
         }
-        const payload = await fetch('/api/wallets/' + encodeURIComponent(address) + '/transactions?days=' + encodeURIComponent(days))
+        const payload = await fetch('/api/wallets/' + encodeURIComponent(address) + '/transactions?days=' + encodeURIComponent(days) + (options.refresh ? '&refresh=1' : ''))
           .then(async (response) => {
             const json = await response.json();
             if (!response.ok) {
@@ -3827,7 +3913,11 @@ function renderDashboardClientScript({ netuid, config }) {
             return json;
           })
           .catch((error) => ({ available: false, reason: error?.message || 'Unable to load wallet transactions', rows: [], summary: {} }));
-        state.modalTransactionsCache.set(key, payload);
+        if (Array.isArray(payload?.rows) && payload.rows.length > 0 && payload.available !== false) {
+          state.modalTransactionsCache.set(key, payload);
+        } else {
+          state.modalTransactionsCache.delete(key);
+        }
         return payload;
       }
 
@@ -3840,7 +3930,10 @@ function renderDashboardClientScript({ netuid, config }) {
           closeModal();
         }
         openModalTransactions();
-        renderWalletTransactions(metric, { available: true, rows: [], summary: {} });
+        if (txModalElements.refresh) {
+          txModalElements.refresh.hidden = false;
+        }
+        renderWalletTransactions(metric, { loading: true, available: true, rows: [], summary: {} });
         void loadWalletTransactions(metric, state.modalTransactionsDays).then((payload) => {
           if (state.modalTransactions !== metric) return;
           renderWalletTransactions(metric, payload || { available: false, rows: [], summary: {} });
@@ -3866,6 +3959,9 @@ function renderDashboardClientScript({ netuid, config }) {
         }
         if (txModalElements.detailEmpty) {
           txModalElements.detailEmpty.hidden = false;
+        }
+        if (txModalElements.refresh) {
+          txModalElements.refresh.hidden = true;
         }
       }
 
@@ -3988,6 +4084,12 @@ function renderDashboardClientScript({ netuid, config }) {
         };
       }
 
+      function readWalletBackfillOptions() {
+        return {
+          days: Number.parseInt(String(walletBackfillDaysInput?.value || ''), 10),
+        };
+      }
+
       async function runAdminBackfill() {
         if (!backfillButton) return;
         const options = readBackfillOptions();
@@ -4022,6 +4124,60 @@ function renderDashboardClientScript({ netuid, config }) {
           console.error(error);
         } finally {
           backfillButton.disabled = false;
+        }
+      }
+
+      async function runWalletBackfill() {
+        if (!walletBackfillButton) return;
+        const options = readWalletBackfillOptions();
+        if (!Number.isFinite(options.days) || options.days <= 0) {
+          if (walletBackfillStatus) {
+            walletBackfillStatus.hidden = false;
+            walletBackfillStatus.dataset.status = 'error';
+            walletBackfillStatus.textContent = 'Wallet backfill days must be a positive integer.';
+          }
+          return;
+        }
+        walletBackfillButton.disabled = true;
+        if (walletBackfillStatus) {
+          walletBackfillStatus.hidden = false;
+          walletBackfillStatus.dataset.status = 'info';
+          walletBackfillStatus.textContent = 'Wallet activity backfill is running… this may take a while.';
+        }
+        try {
+          const response = await fetch('/api/subnets/' + netuid + '/wallet-backfill', {
+            method: 'POST',
+            headers: adminFetchHeaders(),
+            body: JSON.stringify(options),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload.error || payload.message || 'Wallet activity backfill failed');
+          }
+          const results = Array.isArray(payload.walletBackfill?.results) ? payload.walletBackfill.results : [];
+          const rowCount = Number(payload.summary?.totalInserted ?? results.reduce((total, result) => total + Number(result?.rowsInserted ?? 0), 0));
+          const warningList = results
+            .flatMap((result) => [result?.warning, result?.reason])
+            .filter(Boolean);
+          if (walletBackfillStatus) {
+            if (warningList.length) {
+              walletBackfillStatus.textContent = 'Wallet activity backfill complete with warnings: ' + warningList.join(' | ');
+              walletBackfillStatus.dataset.status = 'warning';
+            } else {
+              walletBackfillStatus.textContent = 'Wallet activity backfill complete: ' + rowCount + ' wallet activity rows imported.';
+              walletBackfillStatus.dataset.status = 'success';
+            }
+          }
+          window.setTimeout(() => window.location.reload(), 1200);
+        } catch (error) {
+          if (walletBackfillStatus) {
+            walletBackfillStatus.hidden = false;
+            walletBackfillStatus.dataset.status = 'error';
+            walletBackfillStatus.textContent = error?.message || 'Wallet activity backfill failed';
+          }
+          console.error(error);
+        } finally {
+          walletBackfillButton.disabled = false;
         }
       }
 
@@ -5159,6 +5315,10 @@ function renderDashboardClientScript({ netuid, config }) {
         void runAdminBackfill();
       });
 
+      walletBackfillButton?.addEventListener('click', () => {
+        void runWalletBackfill();
+      });
+
       taoPriceLabel?.addEventListener('click', () => {
         openTaoPriceHistoryModal();
       });
@@ -5240,6 +5400,15 @@ function renderDashboardClientScript({ netuid, config }) {
 
       modalElements.close.addEventListener('click', closeModal);
       txModalElements.close?.addEventListener('click', closeWalletTransactionsModal);
+      txModalElements.refresh?.addEventListener('click', () => {
+        if (!state.modalTransactions) return;
+        renderWalletTransactions(state.modalTransactions, { loading: true, available: true, rows: [], summary: {} });
+        void loadWalletTransactions(state.modalTransactions, state.modalTransactionsDays, { refresh: true }).then((payload) => {
+          if (state.modalTransactions) {
+            renderWalletTransactions(state.modalTransactions, payload || { available: false, rows: [], summary: {} });
+          }
+        });
+      });
       modalElements.info.addEventListener('click', () => {
         if (!modalElements.explanation.textContent) return;
         state.explanationOpen = !state.explanationOpen;
@@ -5304,7 +5473,7 @@ function renderDashboardClientScript({ netuid, config }) {
 }
 
 function renderPage(model) {
-  const { latest, recent, ingestRun, totalSnapshots, totalWalletSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso, walletEntries } = model;
+  const { latest, recent, ingestRun, totalSnapshots, totalWalletSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso, walletEntries, walletActivityStatus } = model;
   const latestMetricDefs = getLatestMetricDefs();
   const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
   const insight = buildInsightSummary(latest, comparisons, signal);
@@ -5312,6 +5481,7 @@ function renderPage(model) {
   const subtitle = latest
     ? `Latest snapshot captured ${formatRelativeIso(latest.captured_at)}`
     : 'No snapshots captured yet';
+  const walletActivityText = formatWalletActivityStatusText(walletActivityStatus);
 
   const cards = latest ? renderLatestSnapshotCards(latest, latestMetricDefs) : '';
   const pollIntervalButtons = POLL_INTERVAL_OPTIONS.map((minutes) => {
@@ -5323,6 +5493,7 @@ function renderPage(model) {
     : 'TAO price used: unavailable';
   const nextPollText = nextPollAtIso ? `Next poll: ${formatPollTime(nextPollAtIso)}` : 'Next poll: —';
   const nextPollTitle = nextPollAtIso ? `Scheduled for ${formatIso(nextPollAtIso)}` : 'Poll schedule unavailable';
+  const walletActivityBadge = renderWalletActivityStatusBadge(walletActivityStatus, { id: 'wallet-activity-topbar-badge' });
 
   const latestRunCard = ingestRun
     ? metricCard({
@@ -5393,10 +5564,56 @@ function renderPage(model) {
       a { color: var(--accent); }
       .shell { max-width: 1480px; margin: 0 auto; padding: 28px; }
       .topbar {
-        display: flex; justify-content: space-between; gap: 16px; align-items: center;
+        display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap;
         margin-bottom: 24px;
       }
       .topbar .actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .topbar-wallet-status {
+        flex-basis: 100%;
+        margin-top: -8px;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .wallet-activity-status {
+        line-height: 1.4;
+      }
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: .04em;
+        line-height: 1;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .status-badge-positive {
+        color: #d8ffe7;
+        background: rgba(29, 185, 84, 0.16);
+        border-color: rgba(29, 185, 84, 0.45);
+      }
+      .status-badge-accent {
+        color: #c8fff7;
+        background: rgba(0, 219, 188, 0.14);
+        border-color: rgba(0, 219, 188, 0.45);
+      }
+      .status-badge-neutral {
+        color: #d2dae5;
+        background: rgba(143, 163, 184, 0.13);
+        border-color: rgba(143, 163, 184, 0.34);
+      }
+      .admin-wallet-activity-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
       .poll-switcher {
         display: inline-flex;
         gap: 6px;
@@ -6856,11 +7073,12 @@ function renderPage(model) {
           <div class="price-badge next-poll-badge" id="next-poll-label" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" title="${escapeHtml(nextPollTitle)}">${escapeHtml(nextPollText)}</div>
           <button class="button" id="currency-toggle" type="button" disabled>Show USD</button>
         </div>
+        ${walletActivityBadge ? `<div class="topbar-wallet-status" id="wallet-activity-topbar-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
       </div>
 
       ${latestCard}
 
-      ${renderWalletSection(walletEntries, latest)}
+      ${renderWalletSection(walletEntries, latest, walletActivityStatus)}
 
       ${renderPoolGrowthSection(latest)}
 
@@ -6899,7 +7117,7 @@ function renderPage(model) {
         </div>
       </section>
 
-      ${renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons })}
+      ${renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus })}
 
       <div class="footer">
         <div>Database snapshots: ${totalSnapshots}</div>
@@ -6971,6 +7189,7 @@ function renderPage(model) {
             <div class="eyebrow">Wallet transactions</div>
             <div class="modal-title-row">
               <h3 id="wallet-transactions-modal-title">Select a wallet</h3>
+              <button class="info-button" type="button" id="wallet-transactions-refresh" aria-label="Refresh wallet activity" title="Refresh wallet activity" hidden>↻</button>
             </div>
             <p id="wallet-transactions-modal-subtitle">Ctrl/Cmd-click a wallet card to inspect its on-chain activity.</p>
           </div>
@@ -7067,11 +7286,19 @@ function parseBackfillOptions(payload, config) {
   return { days, frequency, overwrite };
 }
 
+function parseWalletBackfillOptions(payload, config) {
+  const rawDays = Number.parseInt(String(payload?.days ?? config.taostatsWalletActivityBackfillDays ?? 60), 10);
+  const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 3650) : (config.taostatsWalletActivityBackfillDays ?? 60);
+  const rawLimit = Number.parseInt(String(payload?.limit ?? 200), 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 1000) : 200;
+  return { days, limit };
+}
+
 function createDashboardServer({ db, ingestService, config, onPollIntervalChange = null }) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
-      const match = url.pathname.match(/^\/subnets\/(\d+)$/) || url.pathname.match(/^\/api\/subnets\/(\d+)\/(latest|history|ingest|backfill)$/);
+      const match = url.pathname.match(/^\/subnets\/(\d+)$/) || url.pathname.match(/^\/api\/subnets\/(\d+)\/(latest|history|ingest|backfill|wallet-backfill)$/);
       const netuid = match ? Number(match[1]) : config.netuid;
 
       if (req.method === 'GET' && url.pathname === '/') {
@@ -7148,7 +7375,9 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
       const walletTxMatch = url.pathname.match(/^\/api\/wallets\/([^/]+)\/transactions$/);
       if (req.method === 'GET' && walletTxMatch) {
         const address = decodeURIComponent(walletTxMatch[1]);
-        const days = Math.max(1, parseDays(url.searchParams));
+        const rawDays = Number.parseInt(url.searchParams.get('days') || '7', 10);
+        const days = Number.isFinite(rawDays) && rawDays >= 0 ? Math.min(rawDays, 3650) : 7;
+        const refresh = String(url.searchParams.get('refresh') || '').trim() === '1' || String(url.searchParams.get('refresh') || '').trim().toLowerCase() === 'true';
         const walletConfig = (config.wallets || []).find((wallet) => String(wallet.ss58 || wallet.coldkey || '') === address)
           || {
             name: address,
@@ -7158,16 +7387,67 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
             hotkeys: [],
           };
         const stakePositions = getLatestWalletStakePositions(db, address);
-        const transactionTimeline = await buildWalletTransactionTimeline({
+        const sinceIso = days === 0 ? null : new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        let rows = getWalletTransactions(db, address, sinceIso);
+        let transactionTimeline = buildWalletTransactionTimelineFromRows({
           address,
           walletConfig,
           stakePositions,
-          taostatsBaseUrl: config.taostatsBaseUrl,
-          taostatsAuthHeader: config.taostatsAuthHeader,
-          rateLimiter: config.taostatsRateLimiter || null,
+          rows,
           days,
-          limit: 200,
         });
+
+        if ((refresh || !rows.length) && config.taostatsAuthHeader) {
+          const syncDays = days === 0 ? config.taostatsWalletActivitySyncDays : days;
+          const syncResult = typeof ingestService.syncWalletActivityForWallet === 'function'
+            ? await ingestService.syncWalletActivityForWallet({
+                walletConfig,
+                address,
+                days: syncDays,
+                stakePositions,
+                forceRefresh: refresh,
+              })
+              : (typeof ingestService.syncWalletActivity === 'function'
+                ? await ingestService.syncWalletActivity({
+                    wallets: [walletConfig],
+                    days: syncDays,
+                    forceRefresh: refresh,
+                  })
+                : { ok: false, reason: 'Wallet activity sync is unavailable.' });
+          rows = getWalletTransactions(db, address, sinceIso);
+          if (rows.length) {
+            transactionTimeline = buildWalletTransactionTimelineFromRows({
+              address,
+              walletConfig,
+              stakePositions,
+              rows,
+              days,
+              partial: Boolean(syncResult?.partial),
+              reason: syncResult?.error || syncResult?.reason || null,
+              warning: syncResult?.warning || null,
+            });
+          } else {
+            transactionTimeline = await buildWalletTransactionTimeline({
+              address,
+              walletConfig,
+              stakePositions,
+              taostatsBaseUrl: config.taostatsBaseUrl,
+              taostatsAuthHeader: config.taostatsAuthHeader,
+              rateLimiter: config.taostatsRateLimiter || null,
+              days: syncDays,
+              limit: 200,
+            });
+          }
+        } else if (!rows.length && !config.taostatsAuthHeader) {
+          transactionTimeline = buildWalletTransactionTimelineFromRows({
+            address,
+            walletConfig,
+            stakePositions,
+            rows: [],
+            days,
+            reason: 'Taostats API access is required to load wallet transactions.',
+          });
+        }
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(transactionTimeline, null, 2));
         return;
@@ -7215,6 +7495,40 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           backfill,
           live,
           ...(error ? { error } : {}),
+          ...(warnings.length ? { warnings } : {}),
+        }, null, 2));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === `/api/subnets/${netuid}/wallet-backfill`) {
+        const authError = requireAdminApiKey(req, config);
+        if (authError) {
+          res.writeHead(authError.status, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: authError.error }, null, 2));
+          return;
+        }
+        const payload = await readJsonBody(req);
+        const options = parseWalletBackfillOptions(payload, config);
+        const walletBackfill = await ingestService.backfillWalletActivity({
+          wallets: config.wallets || [],
+          days: options.days,
+          limit: options.limit,
+        });
+        const totalInserted = Array.isArray(walletBackfill?.results)
+          ? walletBackfill.results.reduce((total, result) => total + Number(result?.rowsInserted ?? 0), 0)
+          : 0;
+        const warnings = Array.isArray(walletBackfill?.results)
+          ? walletBackfill.results.flatMap((result) => [result?.warning, result?.reason]).filter(Boolean)
+          : [];
+        const status = walletBackfill?.ok === false ? 500 : 200;
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          netuid,
+          walletBackfill,
+          summary: {
+            totalInserted,
+            walletCount: Array.isArray(walletBackfill?.results) ? walletBackfill.results.length : 0,
+          },
           ...(warnings.length ? { warnings } : {}),
         }, null, 2));
         return;

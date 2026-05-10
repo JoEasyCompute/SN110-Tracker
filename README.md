@@ -20,6 +20,8 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Tracks configured wallet balances from Taostats account latest/history endpoints, using wallet coldkeys, optional hotkeys, and human-friendly names from `.env`
 - Shows wallet balances above the financial perspective panel, with the wallet modal presenting the breakdown in a single row and the current subnet stake in a compact horizontal strip
 - Includes a collapsible hotkey history section in the wallet modal with positive/negative deltas so you can see whether each hotkey is moving up or down over time
+- Caches wallet activity in SQLite and opens the wallet transaction modal from local data first, with a loading state while the local cache or fallback sync is in progress
+- Surfaces wallet activity cache health as a colored badge in the top bar and admin panel, showing cached rows, last sync time, and the next scheduled sync
 - Includes a standalone Pool growth estimator beneath the wallet section so you can simulate TAO injection against the current subnet pool snapshot
 - Keeps operational JSON/debug views inside a collapsible admin panel that only appears when `TAOSTATS_ADMIN_API_KEY` is set, so the main dashboard stays clean
 - Includes a subnet sentiment card that prefers Taostats SSI when available and falls back to the legacy Fear & Greed value on older rows
@@ -54,6 +56,9 @@ Environment variables:
 - `TAOSTATS_BACKFILL_FREQUENCY` - backfill resolution, defaults to `by_hour`
 - `TAOSTATS_BACKFILL_ON_STARTUP` - set to `true` to run historical backfill on startup
 - `TAOSTATS_BACKFILL_OVERWRITE` - replace overlapping rows in the backfill window, defaults to `true`
+- `TAOSTATS_WALLET_ACTIVITY_BACKFILL_DAYS` - wallet activity backfill window, defaults to `60`
+- `TAOSTATS_WALLET_ACTIVITY_SYNC_DAYS` - rolling wallet activity sync window, defaults to `7`
+- `TAOSTATS_WALLET_ACTIVITY_SYNC_INTERVAL_MINUTES` - scheduled wallet activity sync cadence, defaults to `60`
 - `TAOSTATS_WALLET_1_NAME`, `TAOSTATS_WALLET_1_COLDKEY` (or the backward-compatible `TAOSTATS_WALLET_1_SS58`), `TAOSTATS_WALLET_1_NETWORK` - first tracked wallet entry
 - `TAOSTATS_WALLET_1_HOTKEY_1_NAME`, `TAOSTATS_WALLET_1_HOTKEY_1_SS58`, `TAOSTATS_WALLET_1_HOTKEY_1_NETUID`, `TAOSTATS_WALLET_1_HOTKEY_1_ROLE` - optional first hotkey for wallet 1
 - `TAOSTATS_WALLET_2_NAME`, `TAOSTATS_WALLET_2_COLDKEY`, `TAOSTATS_WALLET_2_NETWORK` - second tracked wallet entry
@@ -71,8 +76,9 @@ The checked-in `.env.example` is intentionally redacted, so copy it locally and 
 
 If the Taostats API requires a prefix like `Bearer`, put the full header value in `TAOSTATS_AUTH_HEADER`.
 When an API key is configured, the app rate-limits Taostats API requests to 5 per minute by default so the free tier is respected.
-If `TAOSTATS_ADMIN_API_KEY` is set, the admin drawer appears with the manual refresh button, poll interval controls, JSON links, backfill form, and ingest history views; without it, those controls stay hidden. The POST admin routes (`/api/subnets/:netuid/ingest`, `/api/subnets/:netuid/backfill`, and `/api/settings/poll-interval`) also require the matching `X-Admin-API-Key` header when the admin key is configured.
+If `TAOSTATS_ADMIN_API_KEY` is set, the admin drawer appears with the manual refresh button, poll interval controls, JSON links, backfill form, wallet activity status badge, and ingest history views; without it, those controls stay hidden. The POST admin routes (`/api/subnets/:netuid/ingest`, `/api/subnets/:netuid/backfill`, `/api/subnets/:netuid/wallet-backfill`, and `/api/settings/poll-interval`) also require the matching `X-Admin-API-Key` header when the admin key is configured.
 The dashboard also shows the current TAO price used for USD conversion and uses the stored TAO price history when you open the TAO price badge modal.
+Wallet activity uses a separate backfill flow and admin-panel trigger, so the transaction timeline can stay on a local cache even when the live Taostats request path is slow.
 
 ## Historical backfill
 
@@ -85,6 +91,8 @@ npm run backfill -- --days 30 --frequency by_hour
 ```
 
 Add `--no-overwrite` if you want the historical importer to keep existing local rows instead of replacing the overlapping window.
+Use `npm run wallet-backfill -- --days 60` to prefill wallet activity rows for every configured coldkey.
+That command uses the same wallet activity sync flow as the admin-panel trigger and the scheduled refresh, so overlapping windows dedupe safely in SQLite.
 
 ### Backfill command options
 
@@ -114,6 +122,8 @@ If wallets are configured, backfill also pulls Taostats account history for each
 Backfill also pulls historical hotkey stake snapshots for each configured coldkey, so the wallet modal can show a hotkey history section alongside the live current stake positions.
 Sentiment history will use SSI when Taostats provides it, with legacy Fear & Greed as a fallback for older live rows.
 
+Wallet activity backfill covers extrinsics, transfers, and derived stake-delta events for configured wallets, and the rolling sync keeps a recent overlap window fresh after the initial 60-day load.
+
 ## Historical chart controls
 
 Every historical metric modal includes:
@@ -129,12 +139,13 @@ The 24-hour sliding window keeps the chosen range but shifts the visible time sp
 The dashboard top bar includes a small live poller selector for `1h`, `2h`, and `4h`.
 Picking one updates the background polling timer immediately and saves the choice in SQLite under the app settings table, so the interval survives a restart.
 The same setting is used on startup if it has already been stored locally.
-The top bar also shows the next scheduled poll time.
+The top bar also shows the next scheduled poll time and the wallet activity cache badge.
 The dashboard now starts with a wallet section, followed by a collapsible financial perspective panel, then a beginner-friendly quick read and watchlist that highlight the main price, flow, sentiment, and supply relationships before the underlying charts.
 Configured wallet balances appear in their own section, and clicking a wallet card opens the historical balance modal with wallet profile details such as rank, created-on date, configured hotkeys, current subnet stake positions, and coldkey swap status when available.
 The wallet modal also includes an estimated income-sources section that can split recent wallet growth between validator and owner roles when you tag hotkeys with `ROLE`; anything you have not tagged yet stays in the residual bucket instead of being guessed as validator.
 The wallet modal also includes a hotkey history panel with delta color-coding so you can quickly spot which subnet positions are growing or shrinking.
 Ctrl/Cmd-clicking a wallet card opens a wallet transaction timeline modal that combines extrinsics, transfers, and hotkey stake deltas so you can inspect the underlying activity behind a wallet change.
+The transaction modal now reads from SQLite first and only falls back to Taostats for cache misses or a manual refresh, and it shows a clear “Fetching wallet activity…” loading state while the local read or fallback sync is in progress.
 
 ## Pool growth estimator
 
@@ -174,6 +185,7 @@ Implementation notes:
 - `npm start` - run the dashboard and background poller
 - `npm run ingest -- --once` - fetch one snapshot and exit
 - `npm run backfill -- --days 30 --frequency by_hour` - backfill historical API data, then refresh the live snapshot
+- `npm run wallet-backfill -- --days 60` - backfill wallet activity for all configured coldkeys
 - `npm test` - run tests
 
 ## Endpoints
@@ -186,7 +198,9 @@ Implementation notes:
 - `/api/wallets/<ss58>/latest` - latest stored wallet snapshot for a configured coldkey ss58 address
 - `/api/wallets/<ss58>/history?days=30` - historical wallet balance rows for a configured coldkey ss58 address
 - `/api/wallets/<ss58>/stake-history?days=30` - historical hotkey stake rows for a configured coldkey ss58 address
+- `/api/wallets/<ss58>/transactions?days=7` - wallet activity timeline from local SQLite, with `?refresh=1` for a live sync fallback
 - `/api/tao-price/history?days=30` - stored TAO/USD price history
 - `POST /api/subnets/110/ingest` - manual ingest trigger
 - `POST /api/subnets/110/backfill` - browser/admin backfill trigger
+- `POST /api/subnets/110/wallet-backfill` - browser/admin wallet activity backfill trigger
 - `/health` - current poll interval and next poll timestamp
