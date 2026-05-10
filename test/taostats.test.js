@@ -44,7 +44,14 @@ const {
   getSetting,
   setSetting,
 } = require('../src/db');
-const { buildPageModel, renderPage, numericMetricValue, createDashboardServer, formatChartDate } = require('../src/server');
+const {
+  buildPageModel,
+  buildWalletAttributionSummary,
+  renderPage,
+  numericMetricValue,
+  createDashboardServer,
+  formatChartDate,
+} = require('../src/server');
 const { loadConfig } = require('../src/config');
 
 test('extractEscapedJsonObject parses the Taostats page payload', () => {
@@ -440,6 +447,27 @@ test('pool growth scenario series builds a monotonic projected price curve', () 
   assert.ok(series.points[4].projectedPrice > series.points[1].projectedPrice);
 });
 
+test('wallet attribution keeps unknown stake in residual when only validator metadata is available', () => {
+  const attribution = buildWalletAttributionSummary({
+    totalChange: 90,
+    stakePositions: [
+      { hotkey_address_ss58: '5Validator', balance_as_tao_num: 100 },
+      { hotkey_address_ss58: '5Unknown', balance_as_tao_num: 200 },
+    ],
+    configuredHotkeys: [
+      { ss58: '5Validator', role: 'validator' },
+    ],
+  });
+
+  assert.equal(attribution.hasAnySplit, true);
+  assert.equal(attribution.validator !== null, true);
+  assert.equal(attribution.owner, null);
+  assert.equal(attribution.residual !== null, true);
+  assert.ok(Math.abs(attribution.validator - 30) < 1e-9);
+  assert.ok(Math.abs(attribution.residual - 60) < 1e-9);
+  assert.ok(Math.abs(attribution.recognizedCoveragePct - 33.3333333333) < 1e-6);
+});
+
 test('rate limiter spaces requests to respect the configured cap', async () => {
   const limiter = createRateLimiter({ maxRequests: 5, intervalMs: 1000 });
   const first = await limiter.waitForSlot();
@@ -562,6 +590,10 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('TAO 2,500'), true);
   assert.equal(html.includes('pool-estimator-scenario-tooltip'), true);
   assert.equal(html.includes('Show chart'), true);
+  assert.equal(html.includes('wallet-transactions-modal'), true);
+  assert.equal(html.includes('wallet-transactions-table-body'), true);
+  assert.equal(html.includes('data-wallet-tx-range="7"'), true);
+  assert.equal(html.includes('data-wallet-tx-filter="stake"'), true);
   assert.equal(html.includes('data-pool-preset='), true);
   assert.equal(html.includes('Wallet profile'), true);
   assert.equal(html.includes('Created'), true);
@@ -758,6 +790,142 @@ test('pool growth estimator updates projected values and scenario hover tooltip 
   assert.notEqual(input.value, injectedBefore);
   assert.notEqual(projectedPrice.textContent, projectedBefore);
   assert.notEqual(tooltip.style.left, leftBefore);
+
+  dom.window.close();
+  db.close();
+});
+
+test('ctrl-clicking a wallet card opens the transaction modal and renders the timeline', async () => {
+  const db = openDatabase(':memory:');
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 110,
+    block_number: 1,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '0.1',
+    market_cap: '2000000000',
+    liquidity: '100000000000',
+    total_tao: '100000000000',
+    alpha_in_pool: '1000',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 }));
+  insertWalletSnapshot(db, normalizeAccountSnapshot({
+    address: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    network: 'finney',
+    block_number: 2,
+    timestamp: '2026-04-30T00:00:00Z',
+    rank: 12,
+    balance_free: '1000000000',
+    balance_staked: '2000000000',
+    balance_staked_alpha_as_tao: '500000000',
+    balance_staked_root: '1500000000',
+    balance_total: '3000000000',
+    balance_total_24hr_ago: '2500000000',
+    created_on_date: '2025-01-01',
+    created_on_network: 'finney',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', network: 'finney', capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 8,
+    subnet_total_holders: 256,
+    balance: '1500000000',
+    balance_as_tao: '2500000000',
+    timestamp: '2026-04-30T00:00:00Z',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', capturedAt: '2026-04-30T00:00:00.000Z' }));
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: 'token',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney', role: 'validator' }] }],
+    },
+    netuid: 110,
+  });
+
+  const html = renderPage(model);
+  const dom = new JSDOM(html, {
+    url: 'http://localhost:3003/',
+    runScripts: 'dangerously',
+    resources: 'usable',
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.fetch = async (url) => {
+        const text = String(url);
+        if (text.includes('/transactions')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              available: true,
+              partial: false,
+              reason: null,
+              days: 7,
+              address: '5WalletAlpha123456789ABCDEFGH',
+              walletName: 'Alpha Treasury',
+              network: 'finney',
+              rows: [
+                {
+                  source_type: 'transfer',
+                  timestamp: '2026-04-30T00:00:00Z',
+                  block_number: 42,
+                  extrinsic_id: '0xabc',
+                  transaction_hash: '0xdef',
+                  coldkey_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_ss58: null,
+                  hotkey_name: null,
+                  netuid: null,
+                  action: 'Transfer',
+                  action_key: 'transfer',
+                  amount_tao: 1.5,
+                  amount_alpha: null,
+                  from_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  to_ss58: '5WalletBeta',
+                  status: 'success',
+                  note: 'Coldkey transfer',
+                  raw: { type: 'transfer' },
+                },
+              ],
+              summary: { total: 1, extrinsics: 0, transfers: 1, stakeSnapshots: 0, stakeDelta: 0, hotkeysTracked: 1 },
+              hotkeys: [{ ss58: '5HotkeyOne', name: 'Miner One', netuid: 111, role: 'validator', network: 'finney', source: 'configured' }],
+            }),
+            text: async () => '[]',
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' };
+      };
+      window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+      window.SVGElement.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 500, height: 160, right: 500, bottom: 160 });
+      window.HTMLCanvasElement.prototype.getContext = () => ({ clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, rect() {}, arc() {}, closePath() {}, save() {}, restore() {}, setLineDash() {}, fillText() {}, measureText() { return { width: 10 }; } });
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
+  const walletButton = Array.from(dom.window.document.querySelectorAll('[data-metric]'))
+    .find((button) => {
+      const metric = String(button.dataset.metric || '');
+      return metric.includes('"kind":"wallet"') && metric.includes('Alpha Treasury');
+    });
+  assert.ok(walletButton);
+
+  walletButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, ctrlKey: true }));
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  const txModal = dom.window.document.getElementById('wallet-transactions-modal');
+  const txTitle = dom.window.document.getElementById('wallet-transactions-modal-title');
+  const txBodyRows = dom.window.document.querySelectorAll('#wallet-transactions-table-body tr');
+  const txDetail = dom.window.document.getElementById('wallet-transactions-detail');
+
+  assert.ok(txModal.classList.contains('open'));
+  assert.equal(txTitle.textContent.includes('Alpha Treasury transactions'), true);
+  assert.equal(txBodyRows.length, 1);
+  assert.equal(txDetail.hidden, false);
+  assert.equal(txDetail.textContent.includes('"source_type": "transfer"'), true);
 
   dom.window.close();
   db.close();

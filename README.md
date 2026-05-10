@@ -66,7 +66,7 @@ Environment variables:
 
 The app automatically loads a local `.env` file from the project root if present.
 You can keep your Taostats key there for local development.
-You can also keep one or more wallet coldkeys there as indexed entries with matching names, and attach optional hotkeys per wallet for clearer miner/validator context. If you want the wallet modal to split the income sources, add `ROLE=validator` or `ROLE=owner` to the relevant hotkeys; otherwise the dashboard will keep the wallet inflow attribution mixed/unclassified.
+You can also keep one or more wallet coldkeys there as indexed entries with matching names, and attach optional hotkeys per wallet for clearer miner/validator context. If you want the wallet modal to split the income sources, add `ROLE=validator` or `ROLE=owner` to the relevant hotkeys; anything you have not tagged yet stays in the residual/unclassified bucket instead of being forced into validator.
 The checked-in `.env.example` is intentionally redacted, so copy it locally and replace the placeholder ss58 values with your own wallet and hotkey addresses.
 
 If the Taostats API requires a prefix like `Bearer`, put the full header value in `TAOSTATS_AUTH_HEADER`.
@@ -132,8 +132,9 @@ The same setting is used on startup if it has already been stored locally.
 The top bar also shows the next scheduled poll time.
 The dashboard now starts with a wallet section, followed by a collapsible financial perspective panel, then a beginner-friendly quick read and watchlist that highlight the main price, flow, sentiment, and supply relationships before the underlying charts.
 Configured wallet balances appear in their own section, and clicking a wallet card opens the historical balance modal with wallet profile details such as rank, created-on date, configured hotkeys, current subnet stake positions, and coldkey swap status when available.
-The wallet modal also includes an estimated income-sources section that can split recent wallet growth between validator and owner roles when you tag hotkeys with `ROLE`.
+The wallet modal also includes an estimated income-sources section that can split recent wallet growth between validator and owner roles when you tag hotkeys with `ROLE`; anything you have not tagged yet stays in the residual bucket instead of being guessed as validator.
 The wallet modal also includes a hotkey history panel with delta color-coding so you can quickly spot which subnet positions are growing or shrinking.
+Ctrl/Cmd-clicking a wallet card opens a wallet transaction timeline modal that combines extrinsics, transfers, and hotkey stake deltas so you can inspect the underlying activity behind a wallet change.
 
 ## Pool growth estimator
 

@@ -18,7 +18,16 @@ const {
   countWalletSnapshots,
 } = require('./db');
 const { POLL_INTERVAL_OPTIONS } = require('./config');
-const { buildPoolGrowthEstimatorState, buildPoolGrowthScenarioSeries, estimatePoolGrowth } = require('./pool-estimator');
+const {
+  buildPoolGrowthEstimatorState,
+  buildPoolGrowthScenarioSeries,
+  estimatePoolGrowth,
+} = require('./pool-estimator');
+const {
+  fetchExtrinsicsHistory,
+  fetchTransferHistory,
+  fetchHistoricalStakeBalance,
+} = require('./taostats');
 
 const TAO_PER_RAO = 1_000_000_000;
 
@@ -1135,11 +1144,13 @@ function buildWalletAttributionSummary({ totalChange = null, stakePositions = []
   );
   const roleBalances = new Map();
   let knownWeight = 0;
+  let totalWeight = 0;
   let hasRoleMetadata = false;
 
   for (const position of Array.isArray(stakePositions) ? stakePositions : []) {
     const balance = Number(position?.balance_as_tao_num ?? position?.balance_num ?? 0);
     if (!Number.isFinite(balance) || balance <= 0) continue;
+    totalWeight += balance;
     const role = inferHotkeyRoleFromMetadata(position, hotkeyMap) || 'unclassified';
     if (role !== 'unclassified') hasRoleMetadata = true;
     roleBalances.set(role, (roleBalances.get(role) || 0) + balance);
@@ -1152,17 +1163,19 @@ function buildWalletAttributionSummary({ totalChange = null, stakePositions = []
   const estimated = new Map();
   let assigned = 0;
 
-  if (changeIsFinite && change !== 0 && knownWeight > 0) {
+  if (changeIsFinite && change !== 0 && knownWeight > 0 && totalWeight > 0) {
+    const coverage = knownWeight / totalWeight;
     for (const role of prioritizedRoles) {
       const weight = roleBalances.get(role) || 0;
       if (!weight) continue;
-      const portion = (change * weight) / knownWeight;
+      const portion = (change * coverage * weight) / knownWeight;
       estimated.set(role, portion);
       assigned += portion;
     }
   }
 
   const residual = changeIsFinite ? change - assigned : null;
+  const recognizedCoveragePct = totalWeight > 0 ? (knownWeight / totalWeight) * 100 : null;
   const hasAnySplit = hasRoleMetadata && estimated.size > 0;
 
   return {
@@ -1174,8 +1187,297 @@ function buildWalletAttributionSummary({ totalChange = null, stakePositions = []
     shared: estimated.get('shared') ?? null,
     other: estimated.get('other') ?? null,
     residual,
+    recognizedCoveragePct,
     roleBalances,
   };
+}
+
+function parseJsonPayload(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function walletTransactionTimestamp(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'string' && value.includes('T')) return value;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const ms = parsed > 1e12 ? parsed : parsed * 1000;
+  const date = new Date(ms);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function walletTransactionAmountTao(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num / TAO_PER_RAO;
+}
+
+function readTransactionAmount(payload = {}) {
+  const candidates = [
+    payload.amount,
+    payload.amount_rao,
+    payload.amountRao,
+    payload.amount_staked,
+    payload.amountStaked,
+    payload.value,
+    payload.balance,
+  ];
+  for (const candidate of candidates) {
+    const num = Number(candidate);
+    if (Number.isFinite(num)) return num;
+  }
+  return null;
+}
+
+function normalizeWalletTxAction(fullName) {
+  const name = String(fullName || '').trim();
+  const lower = name.toLowerCase();
+  if (lower.includes('add_stake')) return { action: 'Stake add', actionKey: 'stake_add', group: 'stake' };
+  if (lower.includes('remove_stake') || lower.includes('unstake')) return { action: 'Unstake', actionKey: 'unstake', group: 'stake' };
+  if (lower.includes('move_stake')) return { action: 'Stake move', actionKey: 'stake_move', group: 'stake' };
+  if (lower.includes('swap_stake')) return { action: 'Stake swap', actionKey: 'stake_swap', group: 'stake' };
+  if (lower.includes('transfer_stake')) return { action: 'Stake transfer', actionKey: 'stake_transfer', group: 'stake' };
+  if (lower.includes('transfer')) return { action: 'Transfer', actionKey: 'transfer', group: 'transfer' };
+  if (lower.includes('register')) return { action: 'Register', actionKey: 'register', group: 'other' };
+  return {
+    action: name || 'Extrinsic',
+    actionKey: lower.replace(/[^a-z0-9]+/g, '_') || 'extrinsic',
+    group: 'other',
+  };
+}
+
+function extractWalletTransactionAddresses(payload = {}) {
+  const from = payload.from && typeof payload.from === 'object' ? payload.from.ss58 ?? payload.from.hex ?? null : payload.from ?? null;
+  const to = payload.to && typeof payload.to === 'object' ? payload.to.ss58 ?? payload.to.hex ?? null : payload.to ?? null;
+  return { from, to };
+}
+
+function mergeWalletHotkeyTargets(walletConfig = null, stakePositions = []) {
+  const hotkeyMap = new Map();
+  const configuredHotkeys = Array.isArray(walletConfig?.hotkeys) ? walletConfig.hotkeys : [];
+  for (const hotkey of configuredHotkeys) {
+    if (!hotkey || !hotkey.ss58) continue;
+    hotkeyMap.set(String(hotkey.ss58), {
+      ss58: String(hotkey.ss58),
+      name: hotkey.name || String(hotkey.ss58),
+      netuid: hotkey.netuid ?? null,
+      role: normalizeHotkeyRole(hotkey.role),
+      network: hotkey.network || walletConfig?.network || 'finney',
+      source: 'configured',
+    });
+  }
+  for (const position of Array.isArray(stakePositions) ? stakePositions : []) {
+    const ss58 = position?.hotkey_address_ss58 ? String(position.hotkey_address_ss58) : '';
+    if (!ss58 || hotkeyMap.has(ss58)) continue;
+    hotkeyMap.set(ss58, {
+      ss58,
+      name: position.hotkey_name || shortAddress(ss58),
+      netuid: position.netuid ?? null,
+      role: null,
+      network: walletConfig?.network || 'finney',
+      source: 'stake',
+    });
+  }
+  return [...hotkeyMap.values()];
+}
+
+async function buildWalletTransactionTimeline({
+  address,
+  walletConfig = null,
+  stakePositions = [],
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  days = 30,
+  limit = 200,
+}) {
+  const network = walletConfig?.network || 'finney';
+  const result = {
+    available: false,
+    partial: false,
+    reason: null,
+    days,
+    address,
+    walletName: walletConfig?.name || null,
+    network,
+    rows: [],
+    summary: {
+      total: 0,
+      extrinsics: 0,
+      transfers: 0,
+      stakeSnapshots: 0,
+      stakeDelta: 0,
+      hotkeysTracked: 0,
+    },
+    hotkeys: [],
+  };
+
+  if (!taostatsAuthHeader) {
+    result.reason = 'Taostats API access is required to load wallet transactions.';
+    return result;
+  }
+
+  const hotkeys = mergeWalletHotkeyTargets(walletConfig, stakePositions);
+  result.hotkeys = hotkeys;
+  result.summary.hotkeysTracked = hotkeys.length;
+
+  const fetchOptions = {
+    taostatsBaseUrl,
+    taostatsAuthHeader,
+    days,
+    limit,
+  };
+
+  const [extrinsicsRaw, transfersRaw, stakeSnapshotsRaw] = await Promise.all([
+    fetchExtrinsicsHistory({
+      signerAddress: address,
+      ...fetchOptions,
+    }).catch((error) => {
+      result.partial = true;
+      result.reason = result.reason || `Extrinsics unavailable: ${error.message}`;
+      return [];
+    }),
+    fetchTransferHistory({
+      address,
+      network,
+      ...fetchOptions,
+    }).catch((error) => {
+      result.partial = true;
+      result.reason = result.reason || `Transfers unavailable: ${error.message}`;
+      return [];
+    }),
+    hotkeys.length
+      ? Promise.all(hotkeys.map((hotkey) => fetchHistoricalStakeBalance({
+          coldkey: address,
+          hotkey: hotkey.ss58,
+          netuid: hotkey.netuid ?? null,
+          ...fetchOptions,
+        }).then((rows) => ({ hotkey, rows })).catch((error) => {
+          result.partial = true;
+          result.reason = result.reason || `Stake history unavailable: ${error.message}`;
+          return { hotkey, rows: [] };
+        })))
+      : Promise.resolve([]),
+  ]);
+
+  const rows = [];
+  const hotkeyLookup = new Map(hotkeys.map((hotkey) => [String(hotkey.ss58), hotkey]));
+
+  for (const raw of extrinsicsRaw) {
+    const payload = parseJsonPayload(raw) || {};
+    const fullName = String(payload.full_name || payload.fullName || payload.name || '').trim();
+    const actionInfo = normalizeWalletTxAction(fullName);
+    const callArgs = parseJsonPayload(payload.call_args || payload.args || payload.parameters || {});
+    const hotkeyAddress = callArgs?.hotkey?.ss58
+      || callArgs?.hotkey_address_ss58
+      || callArgs?.hotkey
+      || payload.hotkey_address_ss58
+      || payload.hotkey
+      || null;
+    const hotkey = hotkeyAddress ? hotkeyLookup.get(String(hotkeyAddress)) || null : null;
+    const amountRao = readTransactionAmount(callArgs || payload);
+    rows.push({
+      source_type: 'extrinsic',
+      timestamp: walletTransactionTimestamp(payload.timestamp ?? payload.created_at ?? payload.last_updated ?? payload.updated_at),
+      block_number: Number.isFinite(Number(payload.block_number)) ? Number(payload.block_number) : null,
+      extrinsic_id: payload.id ?? payload.extrinsic_id ?? null,
+      transaction_hash: payload.hash ?? payload.transaction_hash ?? null,
+      coldkey_ss58: address,
+      hotkey_ss58: hotkeyAddress ? String(hotkeyAddress) : null,
+      hotkey_name: hotkey ? hotkey.name : (payload.hotkey_name ?? null),
+      netuid: Number.isFinite(Number(callArgs?.netuid ?? payload.netuid)) ? Number(callArgs?.netuid ?? payload.netuid) : null,
+      action: actionInfo.action,
+      action_key: actionInfo.actionKey,
+      amount_tao: amountRao === null ? null : walletTransactionAmountTao(amountRao),
+      amount_alpha: null,
+      from_ss58: address,
+      to_ss58: hotkeyAddress ? String(hotkeyAddress) : null,
+      status: payload.success === false ? 'failed' : (payload.success === true ? 'success' : 'unknown'),
+      note: payload.error ? String(payload.error) : (actionInfo.group === 'stake' ? 'Stake-related extrinsic' : null),
+      raw: payload,
+    });
+  }
+
+  for (const raw of transfersRaw) {
+    const payload = parseJsonPayload(raw) || {};
+    const { from, to } = extractWalletTransactionAddresses(payload);
+    const amountRao = readTransactionAmount(payload);
+    rows.push({
+      source_type: 'transfer',
+      timestamp: walletTransactionTimestamp(payload.timestamp ?? payload.created_at ?? payload.last_updated ?? payload.updated_at),
+      block_number: Number.isFinite(Number(payload.block_number)) ? Number(payload.block_number) : null,
+      extrinsic_id: payload.extrinsic_id ?? null,
+      transaction_hash: payload.transaction_hash ?? payload.hash ?? null,
+      coldkey_ss58: address,
+      hotkey_ss58: null,
+      hotkey_name: null,
+      netuid: null,
+      action: 'Transfer',
+      action_key: 'transfer',
+      amount_tao: amountRao === null ? null : walletTransactionAmountTao(amountRao),
+      amount_alpha: null,
+      from_ss58: from ? String(from) : null,
+      to_ss58: to ? String(to) : null,
+      status: 'unknown',
+      note: 'Coldkey transfer',
+      raw: payload,
+    });
+  }
+
+  for (const bundle of stakeSnapshotsRaw) {
+    const hotkey = bundle.hotkey;
+    const history = Array.isArray(bundle.rows) ? bundle.rows : [];
+    let previous = null;
+    for (const row of history) {
+      const balance = Number(row.balance_as_tao_num ?? row.balance_num ?? row.balance_as_tao ?? row.balance ?? null);
+      const capturedAt = row.captured_at || row.timestamp || row.remote_timestamp || null;
+      if (previous !== null && Number.isFinite(balance)) {
+        const delta = balance - previous;
+        if (delta !== 0) {
+          rows.push({
+            source_type: 'stake_history',
+            timestamp: walletTransactionTimestamp(capturedAt),
+            block_number: null,
+            extrinsic_id: null,
+            transaction_hash: null,
+            coldkey_ss58: address,
+            hotkey_ss58: hotkey.ss58,
+            hotkey_name: hotkey.name,
+            netuid: hotkey.netuid ?? Number(row.netuid ?? null),
+            action: delta > 0 ? 'Stake increase' : 'Stake decrease',
+            action_key: 'stake_delta',
+            amount_tao: delta,
+            amount_alpha: null,
+            from_ss58: null,
+            to_ss58: null,
+            status: 'unknown',
+            note: `Derived from stake snapshot delta for ${hotkey.name || shortAddress(hotkey.ss58)}`,
+            raw: row,
+          });
+        }
+      }
+      previous = Number.isFinite(balance) ? balance : previous;
+      result.summary.stakeSnapshots += 1;
+    }
+  }
+
+  rows.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  result.rows = rows;
+  result.summary.total = rows.length;
+  result.summary.extrinsics = rows.filter((row) => row.source_type === 'extrinsic').length;
+  result.summary.transfers = rows.filter((row) => row.source_type === 'transfer').length;
+  result.summary.stakeDelta = rows.filter((row) => row.source_type === 'stake_history').length;
+  result.available = rows.length > 0;
+  if (!result.reason && !rows.length) {
+    result.reason = 'No wallet transactions were found for the selected period.';
+  }
+  return result;
 }
 
 function renderWalletSection(walletEntries, latestSubnet = null) {
@@ -1877,10 +2179,15 @@ function renderDashboardClientScript({ netuid, config }) {
         modalMetric: null,
         modalHistory: null,
         modalStakeHistory: null,
+        modalTransactions: null,
         modalHistoryDays: 7,
+        modalTransactionsDays: 7,
         modalHistoryRequestId: 0,
+        modalTransactionsRequestId: 0,
+        modalTransactionsCache: new Map(),
         modalHistoryWindowEndMs: null,
         modalHistoryAutoFollow: true,
+        modalTransactionsFilter: 'all',
         explanationOpen: true,
       };
 
@@ -2054,7 +2361,26 @@ function renderDashboardClientScript({ netuid, config }) {
         windowLabel: document.getElementById('history-window-label'),
       };
 
+      const txModalElements = {
+        backdrop: document.getElementById('wallet-transactions-modal'),
+        title: document.getElementById('wallet-transactions-modal-title'),
+        subtitle: document.getElementById('wallet-transactions-modal-subtitle'),
+        explanation: document.getElementById('wallet-transactions-modal-explanation'),
+        close: document.getElementById('wallet-transactions-modal-close'),
+        count: document.getElementById('wallet-transactions-count'),
+        stakeCount: document.getElementById('wallet-transactions-stake-count'),
+        transferCount: document.getElementById('wallet-transactions-transfer-count'),
+        countNote: document.getElementById('wallet-transactions-count-note'),
+        rangeLabel: document.getElementById('wallet-transactions-range-label'),
+        note: document.getElementById('wallet-transactions-note'),
+        tableBody: document.getElementById('wallet-transactions-table-body'),
+        detailEmpty: document.getElementById('wallet-transactions-detail-empty'),
+        detail: document.getElementById('wallet-transactions-detail'),
+      };
+
       const rangeButtons = Array.from(document.querySelectorAll('[data-history-range]'));
+      const txRangeButtons = Array.from(document.querySelectorAll('[data-wallet-tx-range]'));
+      const txFilterButtons = Array.from(document.querySelectorAll('[data-wallet-tx-filter]'));
       const pollButtons = Array.from(document.querySelectorAll('[data-poll-interval]'));
 
       const currencyToggle = document.getElementById('currency-toggle');
@@ -3155,7 +3481,7 @@ function renderDashboardClientScript({ netuid, config }) {
             '<div class="wallet-attribution">',
             '  <h4 class="wallet-details-title">Income sources</h4>',
             '  <p class="wallet-history-note">' + escapeHtml(walletAttribution.hasAnySplit
-              ? 'Estimated split of recent wallet growth based on configured hotkey roles. This is a heuristic, not an exact ledger.'
+              ? 'Estimated split of recent wallet growth based on known hotkey roles only. Untagged balance stays in residual.'
               : 'Configure HOTKEY_ROLE values in .env to split validator and owner inflows. Until then, this section stays mixed.') + '</p>',
             '  <div class="wallet-current-stake-row">',
             '    <div class="wallet-current-stake-card">',
@@ -3166,24 +3492,24 @@ function renderDashboardClientScript({ netuid, config }) {
             '    <div class="wallet-current-stake-card">',
             '      <div class="label">Validator</div>',
             '      <div class="value">' + escapeHtml(formatWalletSignedAmount(walletAttribution.validator, 2, priceUsd)) + '</div>',
-            '      <div class="subtext">' + escapeHtml(walletAttribution.hasAnySplit ? 'Estimated validator-side inflow' : 'Needs hotkey role metadata') + '</div>',
+            '      <div class="subtext">' + escapeHtml(walletAttribution.hasAnySplit ? 'Estimated validator-side inflow from known roles' : 'Needs hotkey role metadata') + '</div>',
             '    </div>',
             '    <div class="wallet-current-stake-card">',
             '      <div class="label">Owner</div>',
             '      <div class="value">' + escapeHtml(formatWalletSignedAmount(walletAttribution.owner, 2, priceUsd)) + '</div>',
-            '      <div class="subtext">' + escapeHtml(walletAttribution.hasAnySplit ? 'Estimated owner-side inflow' : 'Needs hotkey role metadata') + '</div>',
+            '      <div class="subtext">' + escapeHtml(walletAttribution.owner === null ? (walletAttribution.hasAnySplit ? 'Needs owner hotkey metadata' : 'Needs hotkey role metadata') : 'Estimated owner-side inflow') + '</div>',
             '    </div>',
             '    <div class="wallet-current-stake-card">',
             '      <div class="label">Residual</div>',
             '      <div class="value">' + escapeHtml(formatWalletSignedAmount(walletAttribution.residual, 2, priceUsd)) + '</div>',
-            '      <div class="subtext">Unclassified / mixed sources</div>',
+            '      <div class="subtext">' + escapeHtml(walletAttribution.hasAnySplit ? 'Untagged / unclassified remainder' : 'Needs hotkey role metadata') + '</div>',
             '    </div>',
             '  </div>',
             walletAttributionHistoryRows
               ? [
                   '  <details class="wallet-attribution-history">',
                   '    <summary>Estimated income history</summary>',
-                  '    <p class="wallet-history-note">Daily balance deltas split using the current hotkey role mix. If you change roles later, historical estimates will follow the current labels.</p>',
+                  '    <p class="wallet-history-note">Daily balance deltas split using the known hotkey role mix. Untagged remainder stays residual, and if you change roles later the historical estimates will follow the current labels.</p>',
                   '    <div class="wallet-positions-scroll wallet-history-scroll">',
                   '      <table class="wallet-positions-table">',
                   '        <thead>',
@@ -3266,6 +3592,264 @@ function renderDashboardClientScript({ netuid, config }) {
             ].join('');
           }
         }
+      }
+
+      function walletTransactionRangeLabel(days) {
+        if (days === 0) return 'All wallet transactions';
+        if (days === 1) return 'Last 24 hours';
+        if (days === 7) return 'Last 7 days';
+        if (days === 30) return 'Last 30 days';
+        if (days === 60) return 'Last 60 days';
+        return 'Last ' + days + ' days';
+      }
+
+      function walletTransactionRangeSubtitle(days) {
+        if (days === 0) return 'Showing every matched row available from the API and local snapshot history.';
+        if (days === 1) return 'Showing the last 24 hours of wallet activity.';
+        return 'Showing the last ' + days + ' day' + (days === 1 ? '' : 's') + ' of wallet activity.';
+      }
+
+      function walletTransactionGroup(row) {
+        const sourceType = String(row?.source_type || '').toLowerCase();
+        const actionKey = String(row?.action_key || '').toLowerCase();
+        if (sourceType === 'transfer' || actionKey === 'transfer') return 'transfer';
+        if (sourceType === 'stake_history' || actionKey.startsWith('stake_') || actionKey === 'unstake') return 'stake';
+        return 'other';
+      }
+
+      function walletTransactionCounterparty(row) {
+        if (!row) return '—';
+        if (row.source_type === 'transfer') {
+          const parts = [];
+          if (row.from_ss58) parts.push(shortAddress(row.from_ss58));
+          if (row.to_ss58) parts.push(shortAddress(row.to_ss58));
+          return parts.length ? parts.join(' → ') : 'Coldkey transfer';
+        }
+        if (row.hotkey_name) return row.hotkey_name;
+        if (row.hotkey_ss58) return shortAddress(row.hotkey_ss58);
+        return '—';
+      }
+
+      function walletTransactionDetailText(row) {
+        if (!row) return '';
+        const raw = row.raw ?? {};
+        return JSON.stringify({
+          source_type: row.source_type,
+          action: row.action,
+          action_key: row.action_key,
+          timestamp: row.timestamp,
+          block_number: row.block_number,
+          extrinsic_id: row.extrinsic_id,
+          transaction_hash: row.transaction_hash,
+          coldkey_ss58: row.coldkey_ss58,
+          hotkey_ss58: row.hotkey_ss58,
+          hotkey_name: row.hotkey_name,
+          netuid: row.netuid,
+          amount_tao: row.amount_tao,
+          amount_alpha: row.amount_alpha,
+          from_ss58: row.from_ss58,
+          to_ss58: row.to_ss58,
+          status: row.status,
+          note: row.note,
+          raw,
+        }, null, 2);
+      }
+
+      function walletTransactionFilterMatches(row, filter) {
+        const effective = String(filter || 'all');
+        if (effective === 'all') return true;
+        return walletTransactionGroup(row) === effective;
+      }
+
+      function renderWalletTransactions(metric, payload = null) {
+        if (!txModalElements.backdrop || !txModalElements.tableBody) return;
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+        const filteredRows = rows.filter((row) => walletTransactionFilterMatches(row, state.modalTransactionsFilter));
+        const summary = payload?.summary || {};
+        const stakeRows = rows.filter((row) => walletTransactionGroup(row) === 'stake').length;
+        const transferRows = rows.filter((row) => walletTransactionGroup(row) === 'transfer').length;
+        txRangeButtons.forEach((button) => {
+          const days = Number(button.dataset.walletTxRange);
+          const active = days === state.modalTransactionsDays;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        txFilterButtons.forEach((button) => {
+          const filter = String(button.dataset.walletTxFilter || 'all');
+          const active = filter === state.modalTransactionsFilter;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        const walletLabel = metric?.label || metric?.sourceText || 'Wallet';
+        txModalElements.title.textContent = walletLabel + ' transactions';
+        txModalElements.subtitle.textContent = walletTransactionRangeLabel(state.modalTransactionsDays) + ' • ' + walletTransactionRangeSubtitle(state.modalTransactionsDays);
+        const payloadIssue = payload && payload.reason && (payload.available === false || payload.partial);
+        if (txModalElements.explanation) {
+          txModalElements.explanation.hidden = !payloadIssue;
+          txModalElements.explanation.textContent = payload?.reason || '';
+        }
+        if (txModalElements.count) txModalElements.count.textContent = Number.isFinite(Number(summary.total)) ? formatInteger(summary.total) : String(rows.length || 0);
+        if (txModalElements.stakeCount) txModalElements.stakeCount.textContent = formatInteger(stakeRows);
+        if (txModalElements.transferCount) txModalElements.transferCount.textContent = formatInteger(transferRows);
+        if (txModalElements.countNote) {
+          txModalElements.countNote.textContent = payloadIssue
+            ? payload.reason
+            : 'Matched rows from extrinsics, transfers, and hotkey stake snapshots.';
+        }
+        if (txModalElements.note) {
+          txModalElements.note.textContent = payloadIssue
+            ? payload.reason
+            : 'Click a row to inspect the raw payload and inference notes.';
+        }
+
+        if (!filteredRows.length) {
+          txModalElements.tableBody.innerHTML = '<tr><td colspan="9" class="empty">No matching transaction rows found for this filter.</td></tr>';
+          if (txModalElements.detailEmpty) txModalElements.detailEmpty.hidden = false;
+          if (txModalElements.detail) {
+            txModalElements.detail.hidden = true;
+            txModalElements.detail.textContent = '';
+          }
+          return;
+        }
+
+        txModalElements.tableBody.innerHTML = filteredRows.map((row, index) => {
+          const amount = row.amount_tao === null || row.amount_tao === undefined ? '—' : formatWalletSignedAmount(row.amount_tao, 4, metric?.latestTaoPriceUsd ?? null);
+          const time = row.timestamp ? new Date(row.timestamp).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+          const counterparty = walletTransactionCounterparty(row);
+          const txId = row.extrinsic_id || row.transaction_hash || '—';
+          const actionClass = walletTransactionGroup(row);
+          const amountNum = Number(row.amount_tao);
+          return [
+            '<tr data-wallet-tx-row="', escapeHtml(String(index)), '" data-wallet-tx-filter-group="', escapeHtml(actionClass), '">',
+            '<td>', escapeHtml(time), '</td>',
+            '<td>', escapeHtml(row.action || '—'), '</td>',
+            '<td>', escapeHtml(row.hotkey_name || (row.hotkey_ss58 ? shortAddress(row.hotkey_ss58) : '—')), '</td>',
+            '<td>', escapeHtml(row.netuid ?? '—'), '</td>',
+            '<td><span class="wallet-history-delta ', (Number.isFinite(amountNum) && amountNum !== 0 ? (amountNum > 0 ? 'positive' : 'negative') : 'neutral'), '">', escapeHtml(amount), '</span></td>',
+            '<td>', escapeHtml(counterparty), '</td>',
+            '<td>', escapeHtml(row.block_number ?? '—'), '</td>',
+            '<td>', escapeHtml(String(txId).slice(0, 16)), '</td>',
+            '<td>', escapeHtml(row.status || '—'), '</td>',
+            '</tr>',
+          ].join('');
+        }).join('');
+
+        const rowsHtml = filteredRows.map((row, index) => {
+          const amount = row.amount_tao === null || row.amount_tao === undefined ? '—' : formatWalletSignedAmount(row.amount_tao, 4, metric?.latestTaoPriceUsd ?? null);
+          const time = row.timestamp ? new Date(row.timestamp).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+          const counterparty = walletTransactionCounterparty(row);
+          const txId = row.extrinsic_id || row.transaction_hash || '—';
+          const actionClass = walletTransactionGroup(row);
+          return {
+            index,
+            actionClass,
+            detail: walletTransactionDetailText(row),
+            time,
+            amount,
+            counterparty,
+            txId,
+            row,
+          };
+        });
+
+        txModalElements.tableBody.querySelectorAll('[data-wallet-tx-row]').forEach((tr, index) => {
+          tr.classList.toggle('active', index === 0);
+          tr.addEventListener('click', () => {
+            txModalElements.tableBody.querySelectorAll('[data-wallet-tx-row]').forEach((node) => node.classList.remove('active'));
+            tr.classList.add('active');
+            const item = rowsHtml[index];
+            if (item && txModalElements.detail && txModalElements.detailEmpty) {
+              txModalElements.detailEmpty.hidden = true;
+              txModalElements.detail.hidden = false;
+              txModalElements.detail.textContent = item.detail;
+            }
+          });
+        });
+
+        if (txModalElements.detail && txModalElements.detailEmpty) {
+          const first = rowsHtml[0];
+          txModalElements.detailEmpty.hidden = false;
+          txModalElements.detail.hidden = true;
+          txModalElements.detail.textContent = '';
+          if (first) {
+            txModalElements.detailEmpty.hidden = true;
+            txModalElements.detail.hidden = false;
+            txModalElements.detail.textContent = first.detail;
+          }
+        }
+      }
+
+      async function loadWalletTransactions(metric, days = 7) {
+        if (!metric || metric.kind !== 'wallet') return null;
+        const address = metric.historyId || metric.walletAddress || metric.rawValue || metric.sourceText || '';
+        if (!address) return null;
+        const key = address + ':' + String(days);
+        if (state.modalTransactionsCache.has(key)) {
+          return state.modalTransactionsCache.get(key);
+        }
+        const payload = await fetch('/api/wallets/' + encodeURIComponent(address) + '/transactions?days=' + encodeURIComponent(days))
+          .then(async (response) => {
+            const json = await response.json();
+            if (!response.ok) {
+              return {
+                available: false,
+                reason: json?.error || json?.reason || ('Unable to load wallet transactions (' + response.status + ')'),
+                rows: [],
+                summary: {},
+              };
+            }
+            return json;
+          })
+          .catch((error) => ({ available: false, reason: error?.message || 'Unable to load wallet transactions', rows: [], summary: {} }));
+        state.modalTransactionsCache.set(key, payload);
+        return payload;
+      }
+
+      function openWalletTransactionsModal(metricJson) {
+        const metric = typeof metricJson === 'string' ? JSON.parse(metricJson) : metricJson;
+        state.modalTransactions = metric;
+        state.modalTransactionsDays = 7;
+        state.modalTransactionsFilter = 'all';
+        if (modalElements.backdrop?.classList.contains('open')) {
+          closeModal();
+        }
+        openModalTransactions();
+        renderWalletTransactions(metric, { available: true, rows: [], summary: {} });
+        void loadWalletTransactions(metric, state.modalTransactionsDays).then((payload) => {
+          if (state.modalTransactions !== metric) return;
+          renderWalletTransactions(metric, payload || { available: false, rows: [], summary: {} });
+        });
+      }
+
+      function openModalTransactions() {
+        txModalElements.backdrop.classList.add('open');
+        txModalElements.backdrop.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('modal-open');
+      }
+
+      function closeWalletTransactionsModal() {
+        txModalElements.backdrop.classList.remove('open');
+        txModalElements.backdrop.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('modal-open');
+        state.modalTransactions = null;
+        state.modalTransactionsDays = 7;
+        state.modalTransactionsFilter = 'all';
+        if (txModalElements.detail) {
+          txModalElements.detail.hidden = true;
+          txModalElements.detail.textContent = '';
+        }
+        if (txModalElements.detailEmpty) {
+          txModalElements.detailEmpty.hidden = false;
+        }
+      }
+
+      function refreshWalletTransactionsView() {
+        if (!state.modalTransactions) return;
+        const metric = state.modalTransactions;
+        const address = metric.historyId || metric.walletAddress || metric.rawValue || metric.sourceText || '';
+        const cacheKey = address + ':' + String(state.modalTransactionsDays);
+        const payload = state.modalTransactionsCache.get(cacheKey);
+        renderWalletTransactions(metric, payload || { available: true, rows: [], summary: {} });
       }
 
       function refreshMetricElements() {
@@ -4500,7 +5084,12 @@ function renderDashboardClientScript({ netuid, config }) {
             metric = null;
           }
           if (!metric || !metric.clickable) return;
-          button.addEventListener('click', () => {
+          button.addEventListener('click', (event) => {
+            if (metric.kind === 'wallet' && (event.ctrlKey || event.metaKey)) {
+              event.preventDefault();
+              openWalletTransactionsModal(button.dataset.metric);
+              return;
+            }
             openHistoryModal(button.dataset.metric);
           });
         });
@@ -4571,6 +5160,35 @@ function renderDashboardClientScript({ netuid, config }) {
         });
       });
 
+      txRangeButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const days = Number(button.dataset.walletTxRange);
+          if (!Number.isFinite(days)) return;
+          if (state.modalTransactionsDays === days && state.modalTransactions) return;
+          state.modalTransactionsDays = days;
+          if (state.modalTransactions) {
+            loadWalletTransactions(state.modalTransactions, days).then((payload) => {
+              if (state.modalTransactions) {
+                renderWalletTransactions(state.modalTransactions, payload || { available: false, rows: [], summary: {} });
+              }
+            }).catch((error) => console.error(error));
+          }
+        });
+      });
+
+      txFilterButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const filter = String(button.dataset.walletTxFilter || 'all');
+          state.modalTransactionsFilter = filter;
+          txFilterButtons.forEach((candidate) => {
+            const active = String(candidate.dataset.walletTxFilter || 'all') === filter;
+            candidate.classList.toggle('active', active);
+            candidate.setAttribute('aria-pressed', active ? 'true' : 'false');
+          });
+          refreshWalletTransactionsView();
+        });
+      });
+
       modalElements.windowPrev?.addEventListener('click', () => {
         shiftModalHistoryWindow(-1);
       });
@@ -4595,6 +5213,7 @@ function renderDashboardClientScript({ netuid, config }) {
       });
 
       modalElements.close.addEventListener('click', closeModal);
+      txModalElements.close?.addEventListener('click', closeWalletTransactionsModal);
       modalElements.info.addEventListener('click', () => {
         if (!modalElements.explanation.textContent) return;
         state.explanationOpen = !state.explanationOpen;
@@ -4607,8 +5226,17 @@ function renderDashboardClientScript({ netuid, config }) {
           closeModal();
         }
       });
+      txModalElements.backdrop?.addEventListener('click', (event) => {
+        if (event.target === txModalElements.backdrop) {
+          closeWalletTransactionsModal();
+        }
+      });
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && modalElements.backdrop.classList.contains('open')) {
+        if (event.key === 'Escape' && (modalElements.backdrop.classList.contains('open') || txModalElements.backdrop?.classList.contains('open'))) {
+          if (txModalElements.backdrop?.classList.contains('open')) {
+            closeWalletTransactionsModal();
+            return;
+          }
           closeModal();
         }
       });
@@ -5838,6 +6466,76 @@ function renderPage(model) {
       .modal-chart {
         min-height: 360px;
       }
+      .wallet-transactions-panel {
+        width: min(1240px, 100%);
+      }
+      .wallet-transactions-summary {
+        margin-bottom: 14px;
+      }
+      .wallet-transactions-controls {
+        align-items: flex-start;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .wallet-tx-filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+        align-items: center;
+      }
+      .wallet-transactions-note {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .wallet-transactions-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+        gap: 14px;
+        align-items: start;
+      }
+      .wallet-transactions-table-wrap {
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: rgba(7, 12, 22, 0.55);
+      }
+      .wallet-transactions-table {
+        min-width: 1080px;
+        background: transparent;
+      }
+      .wallet-transactions-table tbody tr {
+        cursor: pointer;
+      }
+      .wallet-transactions-table tbody tr:hover {
+        background: rgba(0, 219, 188, 0.05);
+      }
+      .wallet-transactions-table tbody tr.active {
+        background: rgba(0, 219, 188, 0.08);
+      }
+      .wallet-transactions-detail {
+        padding: 14px;
+        border: 1px solid rgba(143, 163, 184, 0.18);
+        border-radius: 16px;
+        background: rgba(11, 16, 26, 0.55);
+        min-height: 320px;
+      }
+      .wallet-transactions-detail-empty {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .wallet-transactions-detail-pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.45;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
       .admin-panel {
         margin-top: 16px;
         border: 1px solid var(--border);
@@ -6240,6 +6938,85 @@ function renderPage(model) {
       </div>
     </div>
 
+    <div class="modal-backdrop" id="wallet-transactions-modal" aria-hidden="true">
+      <div class="modal-panel wallet-transactions-panel" role="dialog" aria-modal="true" aria-labelledby="wallet-transactions-modal-title">
+        <div class="modal-header">
+          <div>
+            <div class="eyebrow">Wallet transactions</div>
+            <div class="modal-title-row">
+              <h3 id="wallet-transactions-modal-title">Select a wallet</h3>
+            </div>
+            <p id="wallet-transactions-modal-subtitle">Ctrl/Cmd-click a wallet card to inspect its on-chain activity.</p>
+          </div>
+          <button class="button" type="button" id="wallet-transactions-modal-close">Close</button>
+        </div>
+        <div class="modal-explanation" id="wallet-transactions-modal-explanation" hidden></div>
+        <div class="modal-grid wallet-transactions-summary">
+          <section class="card">
+            <div class="card-label">Events</div>
+            <div class="card-value" id="wallet-transactions-count">—</div>
+            <div class="card-subtext" id="wallet-transactions-count-note">All matched rows in the selected range</div>
+          </section>
+          <section class="card">
+            <div class="card-label">Stake actions</div>
+            <div class="card-value" id="wallet-transactions-stake-count">—</div>
+            <div class="card-subtext">Add / move / swap / unstake / stake deltas</div>
+          </section>
+          <section class="card">
+            <div class="card-label">Transfers</div>
+            <div class="card-value" id="wallet-transactions-transfer-count">—</div>
+            <div class="card-subtext">Direct coldkey TAO movements</div>
+          </section>
+        </div>
+        <div class="window-shift-row wallet-transactions-controls">
+          <div class="window-shift-center">
+            <div class="range-switcher" role="tablist" aria-label="Wallet transaction range">
+              <button class="button range-button" type="button" data-wallet-tx-range="1" aria-pressed="false">24H</button>
+              <button class="button range-button active" type="button" data-wallet-tx-range="7" aria-pressed="true">7D</button>
+              <button class="button range-button" type="button" data-wallet-tx-range="30" aria-pressed="false">30D</button>
+              <button class="button range-button" type="button" data-wallet-tx-range="60" aria-pressed="false">60D</button>
+              <button class="button range-button" type="button" data-wallet-tx-range="0" aria-pressed="false">All</button>
+            </div>
+            <div class="window-shift-label" id="wallet-transactions-range-label">Use the pills to change the timeline window.</div>
+          </div>
+          <div class="wallet-tx-filter-row" role="tablist" aria-label="Wallet transaction type filter">
+            <button class="button range-button active" type="button" data-wallet-tx-filter="all" aria-pressed="true">All</button>
+            <button class="button range-button" type="button" data-wallet-tx-filter="stake" aria-pressed="false">Stake</button>
+            <button class="button range-button" type="button" data-wallet-tx-filter="transfer" aria-pressed="false">Transfer</button>
+            <button class="button range-button" type="button" data-wallet-tx-filter="other" aria-pressed="false">Other</button>
+          </div>
+        </div>
+        <p class="wallet-transactions-note" id="wallet-transactions-note">No transactions loaded yet.</p>
+        <div class="wallet-transactions-layout">
+          <div class="wallet-transactions-table-wrap">
+            <table class="wallet-transactions-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>Hotkey</th>
+                  <th>Netuid</th>
+                  <th>Amount</th>
+                  <th>Counterparty</th>
+                  <th>Block</th>
+                  <th>Extrinsic / Tx</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="wallet-transactions-table-body">
+                <tr><td colspan="9" class="empty">Ctrl/Cmd-click a wallet card to load transactions.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="wallet-transactions-detail">
+            <h4 class="wallet-details-title">Selected transaction</h4>
+            <p class="wallet-transactions-detail-empty" id="wallet-transactions-detail-empty">Select a row to inspect the raw payload.</p>
+            <pre class="wallet-transactions-detail-pre" id="wallet-transactions-detail" hidden></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
       ${renderDashboardClientScript({ netuid, config })}
   </body>
   </html>`;
@@ -6339,6 +7116,33 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           : getWalletHistory(db, address, sinceIso);
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ address, days, history }, null, 2));
+        return;
+      }
+
+      const walletTxMatch = url.pathname.match(/^\/api\/wallets\/([^/]+)\/transactions$/);
+      if (req.method === 'GET' && walletTxMatch) {
+        const address = decodeURIComponent(walletTxMatch[1]);
+        const days = Math.max(1, parseDays(url.searchParams));
+        const walletConfig = (config.wallets || []).find((wallet) => String(wallet.ss58 || wallet.coldkey || '') === address)
+          || {
+            name: address,
+            ss58: address,
+            coldkey: address,
+            network: 'finney',
+            hotkeys: [],
+          };
+        const stakePositions = getLatestWalletStakePositions(db, address);
+        const transactionTimeline = await buildWalletTransactionTimeline({
+          address,
+          walletConfig,
+          stakePositions,
+          taostatsBaseUrl: config.taostatsBaseUrl,
+          taostatsAuthHeader: config.taostatsAuthHeader,
+          days,
+          limit: 200,
+        });
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(transactionTimeline, null, 2));
         return;
       }
 
@@ -6470,4 +7274,5 @@ module.exports = {
   formatNumber,
   buildComparisons,
   numericMetricValue,
+  buildWalletAttributionSummary,
 };

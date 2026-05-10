@@ -747,6 +747,86 @@ async function fetchAccountHistory({
   }));
 }
 
+async function fetchExtrinsicsHistory({
+  signerAddress = null,
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  days = 30,
+  limit = 200,
+}) {
+  if (!taostatsAuthHeader) {
+    return [];
+  }
+
+  const now = Date.now();
+  const startIso = new Date(now - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString();
+  const timestampStart = Math.floor(new Date(startIso).getTime() / 1000);
+  const timestampEnd = Math.floor(now / 1000);
+  const headers = { authorization: taostatsAuthHeader };
+  const rows = [];
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL('/api/extrinsic/v1', taostatsBaseUrl);
+    if (signerAddress) url.searchParams.set('signer_address', signerAddress);
+    url.searchParams.set('timestamp_start', String(timestampStart));
+    url.searchParams.set('timestamp_end', String(timestampEnd));
+    url.searchParams.set('order', 'timestamp_asc');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('page', String(page));
+    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+    const pageRows = extractRecords(json);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    if (pageRows.length < limit) break;
+  }
+
+  return rows;
+}
+
+async function fetchTransferHistory({
+  address = null,
+  network = 'finney',
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  days = 30,
+  limit = 200,
+}) {
+  if (!taostatsAuthHeader) {
+    return [];
+  }
+
+  const now = Date.now();
+  const startIso = new Date(now - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString();
+  const timestampStart = Math.floor(new Date(startIso).getTime() / 1000);
+  const timestampEnd = Math.floor(now / 1000);
+  const headers = { authorization: taostatsAuthHeader };
+  const rows = [];
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL('/api/transfer/v1', taostatsBaseUrl);
+    if (address) {
+      url.searchParams.set('address', address);
+    }
+    if (network) {
+      url.searchParams.set('network', network);
+    }
+    url.searchParams.set('timestamp_start', String(timestampStart));
+    url.searchParams.set('timestamp_end', String(timestampEnd));
+    url.searchParams.set('order', 'timestamp_asc');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('page', String(page));
+    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+    const pageRows = extractRecords(json);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    if (pageRows.length < limit) break;
+  }
+
+  return rows;
+}
+
 async function fetchStakeBalanceLatest({
   coldkey,
   hotkey = null,
@@ -998,6 +1078,8 @@ module.exports = {
   fetchTaoFlowHistory,
   fetchAccountLatest,
   fetchAccountHistory,
+  fetchExtrinsicsHistory,
+  fetchTransferHistory,
   fetchStakeBalanceLatest,
   fetchHistoricalStakeBalance,
   fetchHistoricalSnapshots,
