@@ -1167,6 +1167,114 @@ test('wallet stake history endpoint returns stored hotkey history', async () => 
   db.close();
 });
 
+test('wallet transactions endpoint downgrades stake history 429 to a warning', async () => {
+  const db = openDatabase(':memory:');
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 9,
+    subnet_total_holders: 256,
+    balance: '1500000000',
+    balance_as_tao: '2500000000',
+    timestamp: '2026-04-29T00:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', capturedAt: '2026-04-29T00:00:00.000Z' }));
+
+  const originalFetch = global.fetch;
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: 'token',
+      taostatsBaseUrl: 'https://api.taostats.io',
+      pollIntervalMinutes: 60,
+      nextPollAtIso: null,
+      wallets: [
+        {
+          name: 'Alpha Treasury',
+          ss58: '5WalletAlpha123456789ABCDEFGH',
+          network: 'finney',
+          hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney', role: 'validator' }],
+        },
+      ],
+    },
+  });
+
+  try {
+    global.fetch = async (url) => {
+      const text = String(url);
+      if (text.startsWith('http://127.0.0.1:') || text.startsWith('http://localhost:') || text.startsWith('https://127.0.0.1:')) {
+        return originalFetch(url);
+      }
+      if (text.includes('/api/extrinsic/v1')) {
+        const body = JSON.stringify([
+          {
+            id: 'ext-1',
+            full_name: 'SubtensorModule.add_stake',
+            signer_address: '5WalletAlpha123456789ABCDEFGH',
+            timestamp: '2026-04-30T00:00:00Z',
+            block_number: 42,
+            call_args: { hotkey: { ss58: '5HotkeyOne' }, netuid: 111, amount: '1000000000' },
+            success: true,
+          },
+        ]);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => JSON.parse(body),
+          text: async () => body,
+        };
+      }
+      if (text.includes('/api/transfer/v1')) {
+        const body = JSON.stringify([
+          {
+            id: 'transfer-1',
+            from: '5WalletAlpha123456789ABCDEFGH',
+            to: '5WalletBeta',
+            timestamp: '2026-04-30T01:00:00Z',
+            block_number: 43,
+            amount: '2000000000',
+          },
+        ]);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => JSON.parse(body),
+          text: async () => body,
+        };
+      }
+      if (text.includes('/api/dtao/stake_balance/history/v1')) {
+        return {
+          ok: false,
+          status: 429,
+          json: async () => ({ error: 'rate limited' }),
+          text: async () => JSON.stringify({ error: 'rate limited' }),
+        };
+      }
+      throw new Error(`unexpected fetch ${text}`);
+    };
+
+    const server = await app.start(0);
+    const { port } = server.address();
+    const response = await fetch(`http://127.0.0.1:${port}/api/wallets/5WalletAlpha123456789ABCDEFGH/transactions?days=7`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.available, true);
+    assert.equal(payload.warning.includes('rate-limited'), true);
+    assert.equal(payload.reason, null);
+    assert.equal(payload.rows.some((row) => row.source_type === 'extrinsic'), true);
+    assert.equal(payload.rows.some((row) => row.source_type === 'transfer'), true);
+    assert.equal(payload.rows.some((row) => row.source_type === 'stake_history'), false);
+  } finally {
+    global.fetch = originalFetch;
+    await app.close();
+    db.close();
+  }
+});
+
 test('poll interval selector endpoint updates the interval setting', async () => {
   const db = openDatabase(':memory:');
   let observedMinutes = null;

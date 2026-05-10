@@ -1294,6 +1294,7 @@ async function buildWalletTransactionTimeline({
   stakePositions = [],
   taostatsBaseUrl,
   taostatsAuthHeader,
+  rateLimiter = null,
   days = 30,
   limit = 200,
 }) {
@@ -1302,6 +1303,7 @@ async function buildWalletTransactionTimeline({
     available: false,
     partial: false,
     reason: null,
+    warning: null,
     days,
     address,
     walletName: walletConfig?.name || null,
@@ -1330,11 +1332,12 @@ async function buildWalletTransactionTimeline({
   const fetchOptions = {
     taostatsBaseUrl,
     taostatsAuthHeader,
+    rateLimiter,
     days,
     limit,
   };
 
-  const [extrinsicsRaw, transfersRaw, stakeSnapshotsRaw] = await Promise.all([
+  const [extrinsicsRaw, transfersRaw] = await Promise.all([
     fetchExtrinsicsHistory({
       signerAddress: address,
       ...fetchOptions,
@@ -1352,22 +1355,31 @@ async function buildWalletTransactionTimeline({
       result.reason = result.reason || `Transfers unavailable: ${error.message}`;
       return [];
     }),
-    hotkeys.length
-      ? Promise.all(hotkeys.map((hotkey) => fetchHistoricalStakeBalance({
-          coldkey: address,
-          hotkey: hotkey.ss58,
-          netuid: hotkey.netuid ?? null,
-          ...fetchOptions,
-        }).then((rows) => ({ hotkey, rows })).catch((error) => {
-          result.partial = true;
-          result.reason = result.reason || `Stake history unavailable: ${error.message}`;
-          return { hotkey, rows: [] };
-        })))
-      : Promise.resolve([]),
   ]);
 
   const rows = [];
   const hotkeyLookup = new Map(hotkeys.map((hotkey) => [String(hotkey.ss58), hotkey]));
+  const stakeSnapshotsRaw = [];
+
+  for (const hotkey of hotkeys) {
+    try {
+      const rowsForHotkey = await fetchHistoricalStakeBalance({
+        coldkey: address,
+        hotkey: hotkey.ss58,
+        netuid: hotkey.netuid ?? null,
+        ...fetchOptions,
+      });
+      stakeSnapshotsRaw.push({ hotkey, rows: rowsForHotkey });
+    } catch (error) {
+      result.partial = true;
+      if (Number(error?.status) === 429) {
+        result.warning = result.warning || 'Stake history is temporarily rate-limited by Taostats; showing extrinsics and transfers only.';
+      } else {
+        result.reason = result.reason || `Stake history unavailable: ${error.message}`;
+      }
+      stakeSnapshotsRaw.push({ hotkey, rows: [] });
+    }
+  }
 
   for (const raw of extrinsicsRaw) {
     const payload = parseJsonPayload(raw) || {};
@@ -1474,6 +1486,9 @@ async function buildWalletTransactionTimeline({
   result.summary.transfers = rows.filter((row) => row.source_type === 'transfer').length;
   result.summary.stakeDelta = rows.filter((row) => row.source_type === 'stake_history').length;
   result.available = rows.length > 0;
+  if (!result.reason && !rows.length && result.warning) {
+    result.reason = result.warning;
+  }
   if (!result.reason && !rows.length) {
     result.reason = 'No wallet transactions were found for the selected period.';
   }
@@ -3683,7 +3698,8 @@ function renderDashboardClientScript({ netuid, config }) {
         const walletLabel = metric?.label || metric?.sourceText || 'Wallet';
         txModalElements.title.textContent = walletLabel + ' transactions';
         txModalElements.subtitle.textContent = walletTransactionRangeLabel(state.modalTransactionsDays) + ' • ' + walletTransactionRangeSubtitle(state.modalTransactionsDays);
-        const payloadIssue = payload && payload.reason && (payload.available === false || payload.partial);
+        const payloadIssue = payload && payload.reason && payload.available === false;
+        const payloadWarning = payload && payload.warning ? String(payload.warning) : '';
         if (txModalElements.explanation) {
           txModalElements.explanation.hidden = !payloadIssue;
           txModalElements.explanation.textContent = payload?.reason || '';
@@ -3694,12 +3710,22 @@ function renderDashboardClientScript({ netuid, config }) {
         if (txModalElements.countNote) {
           txModalElements.countNote.textContent = payloadIssue
             ? payload.reason
-            : 'Matched rows from extrinsics, transfers, and hotkey stake snapshots.';
+            : (payloadWarning || 'Matched rows from extrinsics, transfers, and hotkey stake snapshots.');
         }
         if (txModalElements.note) {
           txModalElements.note.textContent = payloadIssue
             ? payload.reason
-            : 'Click a row to inspect the raw payload and inference notes.';
+            : (payloadWarning || 'Click a row to inspect the raw payload and inference notes.');
+        }
+        if (payloadWarning && txModalElements.explanation) {
+          txModalElements.explanation.hidden = true;
+          txModalElements.explanation.textContent = '';
+        }
+        if (payloadWarning && txModalElements.note && !payloadIssue) {
+          txModalElements.note.textContent = payloadWarning;
+        }
+        if (payloadWarning && txModalElements.countNote && !payloadIssue) {
+          txModalElements.countNote.textContent = payloadWarning;
         }
 
         if (!filteredRows.length) {
@@ -7138,6 +7164,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           stakePositions,
           taostatsBaseUrl: config.taostatsBaseUrl,
           taostatsAuthHeader: config.taostatsAuthHeader,
+          rateLimiter: config.taostatsRateLimiter || null,
           days,
           limit: 200,
         });
