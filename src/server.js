@@ -16,6 +16,8 @@ const {
   getWalletTransactions,
   getLatestIngestRun,
   getLatestIngestRunBySource,
+  getLatestAlphaHolderSnapshots,
+  countAlphaHolderSnapshots,
   countSnapshots,
   countWalletSnapshots,
   countWalletTransactions,
@@ -803,6 +805,54 @@ function renderLatestSnapshotCards(latest, defs) {
 
 function renderSubnetDataCards(latest) {
   return renderMetricCards(latest, getSubnetDataMetricDefs(), { defaultSubtext: false });
+}
+
+function renderAlphaHolderSection(rows, { latestCaptureAt = null, totalRowCount = null } = {}) {
+  const entries = Array.isArray(rows) ? rows : [];
+  const latestCapturedAt = latestCaptureAt || entries[0]?.captured_at || null;
+  const latestText = latestCapturedAt ? `Latest snapshot captured ${formatIso(latestCapturedAt)} from the local SQLite history.` : 'No alpha holder snapshots have been stored yet.';
+  const totalLabel = Number.isFinite(Number(totalRowCount)) && Number(totalRowCount) > 0
+    ? `${Number(totalRowCount).toLocaleString('en-US')} holder rows are stored in SQLite across the local history.`
+    : '';
+  const topLabel = entries.length ? `Showing the top ${entries.length} addresses from the latest holder snapshot.` : '';
+  const body = entries.length
+    ? entries.map((row, index) => {
+        const address = row.coldkey_ss58 || row.wallet_address_ss58 || '—';
+        const validator = row.hotkey_name || row.hotkey_address_ss58 || '—';
+        return `
+          <tr>
+            <td>${escapeHtml(integer(index + 1))}</td>
+            <td title="${escapeHtml(address)}">${escapeHtml(shortAddress(address))}</td>
+            <td title="${escapeHtml(row.hotkey_address_ss58 || validator)}">${escapeHtml(validator)}</td>
+            <td>${escapeHtml(formatNumber(row.balance_num))}</td>
+            <td>${escapeHtml(formatNumber(row.balance_as_tao_num))}</td>
+          </tr>
+        `;
+      }).join('')
+    : '<tr><td colspan="5" class="empty">No holder rows available yet.</td></tr>';
+
+  return `
+    <section class="section">
+      <h2>Alpha holder addresses</h2>
+      <p class="muted">${escapeHtml(latestText)} ${escapeHtml(totalLabel)} ${escapeHtml(topLabel)}</p>
+      <div class="panel">
+        <div class="table-wrap alpha-holder-table-wrap">
+          <table class="data-table alpha-holder-table">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Address</th>
+                <th>Validator</th>
+                <th>Alpha</th>
+                <th>Tao</th>
+              </tr>
+            </thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 function renderSignalSection(signal) {
@@ -1973,6 +2023,7 @@ function buildPageModel({ db, config, netuid }) {
     hotkeys: Array.isArray(wallet.hotkeys) ? wallet.hotkeys : [],
   }));
   const latestWalletActivityRun = getLatestIngestRunBySource(db, 'wallet-activity');
+  const latestAlphaHolderRows = latest ? getLatestAlphaHolderSnapshots(db, netuid, 20) : [];
   const comparisons = latestWithPrice ? buildComparisons(history, latestWithPrice) : [];
 
   return {
@@ -1993,6 +2044,8 @@ function buildPageModel({ db, config, netuid }) {
       nextSyncAtIso: config.nextWalletActivitySyncAtIso ?? null,
       syncIntervalMinutes: config.walletActivitySyncIntervalMinutes ?? config.taostatsWalletActivitySyncIntervalMinutes ?? null,
     },
+    alphaHolderRows: latestAlphaHolderRows,
+    alphaHolderRowCount: latest ? countAlphaHolderSnapshots(db, netuid) : 0,
     totalWalletSnapshots,
     nextPollAtIso: config.nextPollAtIso ?? null,
     hasApiKey: Boolean(config.taostatsAuthHeader),
@@ -5474,7 +5527,7 @@ function renderDashboardClientScript({ netuid, config }) {
 }
 
 function renderPage(model) {
-  const { latest, recent, ingestRun, totalSnapshots, totalWalletSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso, walletEntries, walletActivityStatus } = model;
+  const { latest, recent, ingestRun, totalSnapshots, totalWalletSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso, walletEntries, walletActivityStatus, alphaHolderRows, alphaHolderRowCount } = model;
   const latestMetricDefs = getLatestMetricDefs();
   const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
   const insight = buildInsightSummary(latest, comparisons, signal);
@@ -5930,6 +5983,7 @@ function renderPage(model) {
       }
       .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 16px; }
       table { width: 100%; border-collapse: collapse; min-width: 900px; background: rgba(16, 23, 34, 0.88); }
+      table.alpha-holder-table { min-width: 760px; }
       th, td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; }
       th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
       .empty { color: var(--muted); padding: 16px; }
@@ -7094,6 +7148,8 @@ function renderPage(model) {
         <h2>Subnet stats</h2>
         <div class="grid stats">${latest ? renderSubnetDataCards(latest) : ''}</div>
       </section>
+
+      ${latest ? renderAlphaHolderSection(alphaHolderRows, { latestCaptureAt: alphaHolderRows?.[0]?.captured_at ?? null, totalRowCount: alphaHolderRowCount }) : ''}
 
       <section class="section">
         <h2>What changed in the last 24h</h2>

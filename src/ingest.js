@@ -12,6 +12,7 @@ const {
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
   insertWalletStakePosition,
+  insertAlphaHolderSnapshot,
   insertWalletTransaction,
   insertIngestRun,
   snapshotExists,
@@ -22,6 +23,7 @@ const {
   deleteTaoFlowHistoryInRange,
   deleteWalletSnapshotsInRange,
   deleteWalletStakePositionsInRange,
+  deleteAlphaHolderSnapshotsInRange,
   getWalletTransactions,
 } = require('./db');
 
@@ -66,6 +68,28 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         source,
       });
       insertWalletTransaction(db, record);
+      inserted += 1;
+    }
+    return inserted;
+  }
+
+  async function storeAlphaHolderRows({ rows, source = 'api', sourceUrl = null, capturedAt = null }) {
+    let inserted = 0;
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const blockNumber = row.block_number ?? null;
+      const dedupeKey = [
+        row.netuid ?? config.netuid ?? 'unknown',
+        blockNumber ?? row.remote_timestamp ?? row.captured_at ?? capturedAt ?? 'unknown',
+        row.wallet_address_ss58 ?? row.coldkey_ss58 ?? 'unknown',
+        row.hotkey_address_ss58 ?? 'unknown',
+      ].join(':');
+      insertAlphaHolderSnapshot(db, {
+        ...row,
+        source: row.source || source,
+        source_url: row.source_url || sourceUrl,
+        captured_at: row.captured_at || capturedAt || new Date().toISOString(),
+        dedupe_key: row.dedupe_key || dedupeKey,
+      });
       inserted += 1;
     }
     return inserted;
@@ -297,6 +321,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     let walletErrors = [];
     let walletStakeFetched = 0;
     let walletStakeInserted = 0;
+    let alphaHolderFetched = 0;
+    let alphaHolderInserted = 0;
 
     try {
       const result = await fetchLatestSnapshot({
@@ -400,6 +426,34 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           }
         }
       }
+      if (config.taostatsAuthHeader) {
+        try {
+          const alphaHolderRows = await fetchStakeBalanceLatest({
+            netuid,
+            taostatsBaseUrl: config.taostatsBaseUrl,
+            taostatsAuthHeader: config.taostatsAuthHeader,
+            rateLimiter: config.taostatsRateLimiter || null,
+            capturedAt: result.snapshot.captured_at,
+          });
+          alphaHolderFetched = alphaHolderRows.length;
+          alphaHolderInserted = await storeAlphaHolderRows({
+            rows: alphaHolderRows,
+            source: 'api',
+            sourceUrl: `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/stake_balance/latest/v1`,
+            capturedAt: result.snapshot.captured_at,
+          });
+          detail = {
+            ...detail,
+            alphaHolderFetched,
+            alphaHolderInserted,
+          };
+        } catch (alphaHolderError) {
+          detail = {
+            ...detail,
+            alphaHolderError: alphaHolderError instanceof Error ? alphaHolderError.message : String(alphaHolderError),
+          };
+        }
+      }
       ok = true;
       message = `Captured ${result.snapshot.name || `SN${netuid}`} from ${source}`;
       return {
@@ -408,6 +462,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         fallbackUsed,
         snapshotId,
         walletInserted,
+        alphaHolderFetched,
+        alphaHolderInserted,
         detail,
         message,
       };
@@ -420,6 +476,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         fallbackUsed,
         snapshotId: null,
         walletInserted,
+        alphaHolderFetched,
+        alphaHolderInserted,
         detail,
         error: errorMessage,
         message,
@@ -479,6 +537,10 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     let walletStakeHistoryFetched = 0;
     let walletStakeHistoryInserted = 0;
     let walletStakeHistoryDeleted = 0;
+    let alphaHolderHistoryFetched = 0;
+    let alphaHolderHistoryInserted = 0;
+    let alphaHolderHistoryDeleted = 0;
+    let alphaHolderHistorySkipped = 0;
 
     try {
       if (!config.taostatsAuthHeader) {
@@ -575,6 +637,54 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         detail.priceError = priceError instanceof Error ? priceError.message : String(priceError);
       }
 
+      try {
+        const alphaHolderHistory = await fetchHistoricalStakeBalance({
+          netuid,
+          taostatsBaseUrl: config.taostatsBaseUrl,
+          taostatsAuthHeader: config.taostatsAuthHeader,
+          rateLimiter: config.taostatsRateLimiter || null,
+          days,
+        });
+        alphaHolderHistoryFetched = alphaHolderHistory.length;
+        if (overwrite && alphaHolderHistory.length > 0) {
+          const capturedAts = alphaHolderHistory
+            .map((row) => row.captured_at)
+            .filter(Boolean)
+            .sort();
+          const holderStartIso = capturedAts[0];
+          const holderEndIso = capturedAts[capturedAts.length - 1];
+          alphaHolderHistoryDeleted = deleteAlphaHolderSnapshotsInRange(db, netuid, holderStartIso, holderEndIso);
+          detail.alphaHolderStartIso = holderStartIso;
+          detail.alphaHolderEndIso = holderEndIso;
+        }
+        for (const row of alphaHolderHistory) {
+          if (!overwrite && row.block_number !== null && row.block_number !== undefined) {
+            const existing = db.prepare(`
+              SELECT 1
+              FROM alpha_holder_snapshots
+              WHERE netuid = ? AND block_number = ? AND coldkey_ss58 = ? AND hotkey_address_ss58 = ?
+              LIMIT 1
+            `).get(netuid, row.block_number, row.wallet_address_ss58 ?? null, row.hotkey_address_ss58 ?? null);
+            if (existing) {
+              alphaHolderHistorySkipped += 1;
+              continue;
+            }
+          }
+          insertAlphaHolderSnapshot(db, {
+            ...row,
+            dedupe_key: [
+              row.netuid ?? netuid,
+              row.block_number ?? row.remote_timestamp ?? row.captured_at,
+              row.wallet_address_ss58 ?? row.coldkey_ss58 ?? 'unknown',
+              row.hotkey_address_ss58 ?? 'unknown',
+            ].join(':'),
+          });
+          alphaHolderHistoryInserted += 1;
+        }
+      } catch (alphaHolderError) {
+        detail.alphaHolderError = alphaHolderError instanceof Error ? alphaHolderError.message : String(alphaHolderError);
+      }
+
       if (Array.isArray(config.wallets) && config.wallets.length > 0) {
         const walletErrors = [];
         for (const wallet of config.wallets) {
@@ -656,6 +766,10 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         detail.walletStakeHistoryFetched = walletStakeHistoryFetched;
         detail.walletStakeHistoryInserted = walletStakeHistoryInserted;
         detail.walletStakeHistoryDeleted = walletStakeHistoryDeleted;
+        detail.alphaHolderHistoryFetched = alphaHolderHistoryFetched;
+        detail.alphaHolderHistoryInserted = alphaHolderHistoryInserted;
+        detail.alphaHolderHistoryDeleted = alphaHolderHistoryDeleted;
+        detail.alphaHolderHistorySkipped = alphaHolderHistorySkipped;
         if (walletErrors.length) {
           detail.walletErrors = walletErrors;
           detail.walletError = walletErrors[0].error;
@@ -680,6 +794,10 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       detail.walletStakeHistoryFetched = walletStakeHistoryFetched;
       detail.walletStakeHistoryInserted = walletStakeHistoryInserted;
       detail.walletStakeHistoryDeleted = walletStakeHistoryDeleted;
+      detail.alphaHolderHistoryFetched = alphaHolderHistoryFetched;
+      detail.alphaHolderHistoryInserted = alphaHolderHistoryInserted;
+      detail.alphaHolderHistoryDeleted = alphaHolderHistoryDeleted;
+      detail.alphaHolderHistorySkipped = alphaHolderHistorySkipped;
       return {
         ok,
         source,
@@ -699,6 +817,10 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         walletStakeHistoryFetched,
         walletStakeHistoryInserted,
         walletStakeHistoryDeleted,
+        alphaHolderHistoryFetched,
+        alphaHolderHistoryInserted,
+        alphaHolderHistoryDeleted,
+        alphaHolderHistorySkipped,
         snapshotId,
         detail,
         message,
@@ -725,6 +847,10 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         walletStakeHistoryFetched,
         walletStakeHistoryInserted,
         walletStakeHistoryDeleted,
+        alphaHolderHistoryFetched,
+        alphaHolderHistoryInserted,
+        alphaHolderHistoryDeleted,
+        alphaHolderHistorySkipped,
         snapshotId: null,
         detail,
         error: errorMessage,

@@ -495,6 +495,7 @@ function normalizeStakeBalanceSnapshot(raw, { source, sourceUrl, walletName, add
   const r = (value) => raoToTao(value);
 
   return {
+    block_number: asInteger(payload.block_number),
     wallet_name: walletName,
     wallet_address_ss58: t(coldkeyPayload.ss58 ?? address),
     wallet_address_hex: t(coldkeyPayload.hex ?? null),

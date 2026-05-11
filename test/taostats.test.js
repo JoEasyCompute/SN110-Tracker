@@ -33,6 +33,7 @@ const {
   insertWalletSnapshot,
   insertWalletStakePosition,
   insertWalletTransaction,
+  insertAlphaHolderSnapshot,
   getLatestSnapshot,
   getRecentSnapshots,
   getHistory,
@@ -41,6 +42,9 @@ const {
   getTaoFlowHistory,
   getLatestWalletSnapshot,
   getLatestWalletStakePositions,
+  getLatestAlphaHolderSnapshots,
+  getAlphaHolderSnapshotLatestCapturedAt,
+  countAlphaHolderSnapshots,
   getWalletHistory,
   getWalletTransactions,
   countWalletTransactions,
@@ -355,6 +359,48 @@ test('sqlite persistence stores and retrieves wallet stake positions', () => {
   db.close();
 });
 
+test('sqlite persistence stores and retrieves alpha holder snapshots', () => {
+  const db = openDatabase(':memory:');
+  const latest = normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-05-01T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 2,
+    balance: '2000000000',
+    balance_as_tao: '1000000000',
+    coldkey: { ss58: '5AlphaHolderOne', hex: '0xholder1' },
+    hotkey: { ss58: '5ValOne', hex: '0xval1' },
+    hotkey_name: 'Validator One',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-01T00:00:00.000Z' });
+  const older = normalizeStakeBalanceSnapshot({
+    block_number: 8160001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 2,
+    subnet_total_holders: 2,
+    balance: '1000000000',
+    balance_as_tao: '500000000',
+    coldkey: { ss58: '5AlphaHolderTwo', hex: '0xholder2' },
+    hotkey: { ss58: '5ValTwo', hex: '0xval2' },
+    hotkey_name: 'Validator Two',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z' });
+
+  insertAlphaHolderSnapshot(db, older);
+  insertAlphaHolderSnapshot(db, latest);
+  insertAlphaHolderSnapshot(db, { ...latest });
+
+  const rows = getLatestAlphaHolderSnapshots(db, 110);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].coldkey_ss58, '5AlphaHolderOne');
+  assert.equal(rows[0].hotkey_name, 'Validator One');
+  assert.equal(rows[0].balance_as_tao_num, 1);
+  assert.equal(getAlphaHolderSnapshotLatestCapturedAt(db, 110), '2026-05-01T00:00:00.000Z');
+  assert.equal(countAlphaHolderSnapshots(db, 110), 2);
+
+  db.close();
+});
+
 test('sqlite persistence stores and retrieves wallet transactions', () => {
   const db = openDatabase(':memory:');
   const walletConfig = { name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [] };
@@ -650,6 +696,30 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   snapshot.alpha_holders_num = 39;
   snapshot.alpha_holders_text = '39';
   insertSnapshot(db, snapshot);
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 39,
+    balance: '292569440000000',
+    balance_as_tao: '1487790000000',
+    coldkey: { ss58: '5EbftbTwkQ9r123456789ABCDEFGH', hex: '0xholder1' },
+    hotkey: { ss58: '5GreenComputeValidator1234567', hex: '0xval1' },
+    hotkey_name: 'Green Compute',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: null, address: null, capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 2,
+    subnet_total_holders: 39,
+    balance: '103363080000000',
+    balance_as_tao: '525630000000',
+    coldkey: { ss58: '5D7NDUmpNX2n123456789ABCDEFGH', hex: '0xholder2' },
+    hotkey: { ss58: '5taobotValidator123456789ABCDE', hex: '0xval2' },
+    hotkey_name: 'tao.bot',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: null, address: null, capturedAt: '2026-04-30T00:00:00.000Z' }));
   insertWalletSnapshot(db, normalizeAccountSnapshot({
     address: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
     network: 'finney',
@@ -710,6 +780,9 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="wallet-activity-topbar-status"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-status"'), true);
   assert.equal(html.includes('Alpha Holders'), true);
+  assert.equal(html.includes('Alpha holder addresses'), true);
+  assert.equal(html.includes('5Ebftb…CDEFGH'), true);
+  assert.equal(html.includes('Green Compute'), true);
   const dom = new JSDOM(html);
   const alphaHoldersButton = [...dom.window.document.querySelectorAll('[data-metric]')].find((element) => {
     try {

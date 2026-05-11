@@ -27,7 +27,7 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Includes a subnet sentiment card that prefers Taostats SSI when available and falls back to the legacy Fear & Greed value on older rows
 - Money In/Out charts use Taostats Tao Flow history so the historical view stays available even when the subnet snapshot history is sparse
 - Subnet stats are arranged as a 4-column grid so the ten cards flow into three neat rows
-- Includes an Alpha Holders card in Subnet stats that mirrors the Taostats SN110 chart holders tab count and opens a historical trend view from the locally stored snapshot history
+- Includes an Alpha Holders card in Subnet stats that mirrors the Taostats SN110 chart holders tab count, stores the latest holder addresses in SQLite from Taostats stake-balance data, and opens a historical trend view from the locally stored snapshot history
 - Collapsible panels use a visible chevron affordance so expand/collapse behavior is easier to spot
 
 ## Requirements
@@ -115,7 +115,7 @@ Optional startup mode:
 TAOSTATS_BACKFILL_DAYS=30 TAOSTATS_BACKFILL_FREQUENCY=by_hour TAOSTATS_BACKFILL_ON_STARTUP=true npm start
 ```
 
-Backfill mode pulls Taostats historical subnet, pool, and registration-cost data, merges it into the same snapshot schema, and skips rows already stored for a block number when overwrite is disabled.
+Backfill mode pulls Taostats historical subnet, pool, registration-cost, and alpha-holder address data, merges it into the same snapshot schema, and skips rows already stored for a block number when overwrite is disabled.
 By default it deletes overlapping local rows in the requested time window before inserting the historical API snapshots, so the local chart stays continuous during testing.
 It also backfills TAO price history so USD toggles keep working for historical values.
 It also backfills Tao Flow history so the Money In/Out charts can render historical values from dedicated flow data.

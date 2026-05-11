@@ -250,6 +250,35 @@ function openDatabase(filePath) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_stake_positions_address_netuid_hotkey
       ON wallet_stake_positions(wallet_address_ss58, netuid, hotkey_address_ss58, captured_at);
 
+    CREATE TABLE IF NOT EXISTS alpha_holder_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      netuid INTEGER NOT NULL,
+      captured_at TEXT NOT NULL,
+      remote_timestamp TEXT,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      block_number INTEGER,
+      coldkey_ss58 TEXT NOT NULL,
+      coldkey_hex TEXT,
+      hotkey_name TEXT,
+      hotkey_address_ss58 TEXT,
+      hotkey_address_hex TEXT,
+      subnet_rank INTEGER,
+      subnet_total_holders INTEGER,
+      balance_text TEXT,
+      balance_num REAL,
+      balance_as_tao_text TEXT,
+      balance_as_tao_num REAL,
+      dedupe_key TEXT NOT NULL UNIQUE,
+      raw_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_alpha_holder_snapshots_netuid_captured_at
+      ON alpha_holder_snapshots(netuid, captured_at DESC, balance_as_tao_num DESC, id DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_alpha_holder_snapshots_netuid_holder
+      ON alpha_holder_snapshots(netuid, coldkey_ss58, hotkey_address_ss58, captured_at DESC, id DESC);
+
     CREATE TABLE IF NOT EXISTS wallet_transactions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wallet_name TEXT NOT NULL,
@@ -994,6 +1023,52 @@ function insertWalletStakePosition(db, snapshot) {
   return Number(info.lastInsertRowid);
 }
 
+function insertAlphaHolderSnapshot(db, snapshot) {
+  const dedupeKey = String(snapshot.dedupe_key || [
+    snapshot.netuid ?? 'unknown',
+    snapshot.block_number ?? snapshot.remote_timestamp ?? snapshot.captured_at ?? 'unknown',
+    snapshot.coldkey_ss58 ?? snapshot.wallet_address_ss58 ?? 'unknown',
+    snapshot.hotkey_address_ss58 ?? 'unknown',
+  ].join(':'));
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO alpha_holder_snapshots (
+      netuid, captured_at, remote_timestamp, source, source_url, block_number,
+      coldkey_ss58, coldkey_hex, hotkey_name, hotkey_address_ss58, hotkey_address_hex,
+      subnet_rank, subnet_total_holders, balance_text, balance_num, balance_as_tao_text,
+      balance_as_tao_num, dedupe_key, raw_json
+    ) VALUES (
+      @netuid, @captured_at, @remote_timestamp, @source, @source_url, @block_number,
+      @coldkey_ss58, @coldkey_hex, @hotkey_name, @hotkey_address_ss58, @hotkey_address_hex,
+      @subnet_rank, @subnet_total_holders, @balance_text, @balance_num, @balance_as_tao_text,
+      @balance_as_tao_num, @dedupe_key, @raw_json
+    )
+  `);
+
+  const info = stmt.run({
+    netuid: toDbValue(snapshot.netuid),
+    captured_at: snapshot.captured_at,
+    remote_timestamp: toDbValue(snapshot.remote_timestamp),
+    source: snapshot.source,
+    source_url: toDbValue(snapshot.source_url),
+    block_number: toDbValue(snapshot.block_number),
+    coldkey_ss58: toDbValue(snapshot.wallet_address_ss58 ?? snapshot.coldkey_ss58),
+    coldkey_hex: toDbValue(snapshot.wallet_address_hex ?? snapshot.coldkey_hex),
+    hotkey_name: toDbValue(snapshot.hotkey_name),
+    hotkey_address_ss58: toDbValue(snapshot.hotkey_address_ss58),
+    hotkey_address_hex: toDbValue(snapshot.hotkey_address_hex),
+    subnet_rank: toDbValue(snapshot.subnet_rank),
+    subnet_total_holders: toDbValue(snapshot.subnet_total_holders),
+    balance_text: toDbValue(snapshot.balance_text),
+    balance_num: toDbValue(snapshot.balance_num),
+    balance_as_tao_text: toDbValue(snapshot.balance_as_tao_text),
+    balance_as_tao_num: toDbValue(snapshot.balance_as_tao_num),
+    dedupe_key: dedupeKey,
+    raw_json: snapshot.raw_json,
+  });
+
+  return Number(info.lastInsertRowid);
+}
+
 function insertWalletTransaction(db, transaction) {
   const stmt = db.prepare(`
     INSERT INTO wallet_transactions (
@@ -1185,6 +1260,74 @@ function getLatestWalletStakePositions(db, address) {
     ORDER BY balance_as_tao_num DESC, netuid ASC, hotkey_address_ss58 ASC, id DESC
   `);
   return stmt.all(address, address);
+}
+
+function getLatestAlphaHolderSnapshots(db, netuid, limit = 25) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM alpha_holder_snapshots
+    WHERE netuid = ?
+      AND captured_at = (
+        SELECT MAX(captured_at)
+        FROM alpha_holder_snapshots
+        WHERE netuid = ?
+      )
+    ORDER BY balance_as_tao_num DESC, coldkey_ss58 ASC, hotkey_address_ss58 ASC, id DESC
+    LIMIT ?
+  `);
+  return stmt.all(netuid, netuid, limit);
+}
+
+function getAlphaHolderSnapshotLatestCapturedAt(db, netuid) {
+  const stmt = db.prepare(`
+    SELECT MAX(captured_at) AS captured_at
+    FROM alpha_holder_snapshots
+    WHERE netuid = ?
+  `);
+  const row = stmt.get(netuid);
+  return row?.captured_at ?? null;
+}
+
+function countAlphaHolderSnapshots(db, netuid = null) {
+  const stmt = netuid !== null && netuid !== undefined
+    ? db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM alpha_holder_snapshots
+      WHERE netuid = ?
+    `)
+    : db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM alpha_holder_snapshots
+    `);
+  return netuid !== null && netuid !== undefined ? stmt.get(netuid).count : stmt.get().count;
+}
+
+function deleteAlphaHolderSnapshotsInRange(db, netuid, startIso, endIso) {
+  const rows = db.prepare(`
+    SELECT id
+    FROM alpha_holder_snapshots
+    WHERE netuid = ?
+      AND captured_at >= ?
+      AND captured_at <= ?
+  `).all(netuid, startIso, endIso);
+
+  if (!rows.length) return 0;
+
+  const ids = rows.map((row) => row.id);
+  const placeholders = ids.map(() => '?').join(', ');
+
+  db.exec('BEGIN');
+  try {
+    const info = db.prepare(`
+      DELETE FROM alpha_holder_snapshots
+      WHERE id IN (${placeholders})
+    `).run(...ids);
+    db.exec('COMMIT');
+    return Number(info.changes || 0);
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function getWalletStakePositionsHistory(db, address, sinceIso) {
@@ -1498,6 +1641,7 @@ module.exports = {
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
   insertWalletStakePosition,
+  insertAlphaHolderSnapshot,
   insertWalletTransaction,
   insertIngestRun,
   getLatestSnapshot,
@@ -1508,6 +1652,8 @@ module.exports = {
   getTaoFlowHistory,
   getLatestWalletSnapshot,
   getLatestWalletStakePositions,
+  getLatestAlphaHolderSnapshots,
+  getAlphaHolderSnapshotLatestCapturedAt,
   getWalletStakePositionsHistory,
   getWalletTransactions,
   getWalletHistory,
@@ -1516,11 +1662,13 @@ module.exports = {
   countSnapshots,
   countWalletSnapshots,
   countWalletTransactions,
+  countAlphaHolderSnapshots,
   snapshotExists,
   taoFlowSnapshotExists,
   walletSnapshotExists,
   deleteWalletStakePositions,
   deleteWalletStakePositionsInRange,
+  deleteAlphaHolderSnapshotsInRange,
   deleteSnapshotsInRange,
   deleteTaoPriceHistoryInRange,
   deleteTaoFlowHistoryInRange,
