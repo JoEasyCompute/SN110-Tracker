@@ -540,7 +540,53 @@ function combineApiPayloads(primary, secondary) {
   };
 }
 
-async function fetchFromApi({ netuid, taostatsBaseUrl, taostatsAuthHeader, rateLimiter = null }) {
+function countAlphaHolders(records) {
+  const uniqueColdkeys = new Set();
+  for (const row of Array.isArray(records) ? records : []) {
+    const coldkey = row?.coldkey?.ss58 ?? row?.coldkey ?? row?.coldkey_address?.ss58 ?? row?.coldkey_address ?? null;
+    const alphaStake = asNumber(row?.total_alpha_stake ?? row?.alpha_stake ?? null);
+    if (coldkey && Number.isFinite(alphaStake) && alphaStake > 0) {
+      uniqueColdkeys.add(String(coldkey));
+    }
+  }
+  return uniqueColdkeys.size;
+}
+
+function extractSubnetHoldersCountFromHtml(html, netuid) {
+  const match = String(html || '').match(/Holders\(([\d,]+)\)/i);
+  if (!match) {
+    throw new Error(`Could not find holders count in Taostats chart page for SN${netuid}`);
+  }
+  return Number(match[1].replace(/,/g, ''));
+}
+
+async function fetchSubnetHoldersCount({ netuid, taostatsPublicBaseUrl, rateLimiter = null }) {
+  const url = `${taostatsPublicBaseUrl.replace(/\/$/, '')}/subnets/${netuid}/chart`;
+  const { text: html } = await fetchText(url, { rateLimiter });
+  return {
+    sourceUrl: url,
+    holderCount: extractSubnetHoldersCountFromHtml(html, netuid),
+  };
+}
+
+async function fetchMetagraphLatest({ netuid, taostatsBaseUrl, taostatsAuthHeader, rateLimiter = null }) {
+  if (!taostatsAuthHeader) {
+    return null;
+  }
+
+  const headers = { authorization: taostatsAuthHeader };
+  const url = new URL('/api/metagraph/latest/v1', taostatsBaseUrl);
+  url.searchParams.set('netuid', String(netuid));
+  const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+  const records = extractRecords(json);
+  return {
+    sourceUrl: url.toString(),
+    holderCount: countAlphaHolders(records),
+    rowCount: records.length,
+  };
+}
+
+async function fetchFromApi({ netuid, taostatsBaseUrl, taostatsPublicBaseUrl, taostatsAuthHeader, rateLimiter = null }) {
   if (!taostatsAuthHeader) {
     return null;
   }
@@ -558,22 +604,46 @@ async function fetchFromApi({ netuid, taostatsBaseUrl, taostatsAuthHeader, rateL
   const subnetPayload = subnetResponse.json;
 
   const merged = combineApiPayloads(pickRecord(subnetPayload, netuid), pickRecord(poolPayload, netuid));
-  return normalizeSnapshot(merged, {
+  const snapshot = normalizeSnapshot(merged, {
     source: 'api',
     sourceUrl: poolUrl.toString(),
     netuid,
   });
+  try {
+    const holders = await fetchSubnetHoldersCount({ netuid, taostatsPublicBaseUrl, rateLimiter });
+    snapshot.alpha_holders_text = holders.holderCount === null ? null : String(holders.holderCount);
+    snapshot.alpha_holders_num = holders.holderCount;
+  } catch {
+    try {
+      const metagraph = await fetchMetagraphLatest({ netuid, taostatsBaseUrl, taostatsAuthHeader, rateLimiter });
+      if (metagraph) {
+        snapshot.alpha_holders_text = metagraph.holderCount === null ? null : String(metagraph.holderCount);
+        snapshot.alpha_holders_num = metagraph.holderCount;
+      }
+    } catch {
+      // Non-fatal enrichment: keep the core subnet snapshot even if both holder-count sources fail.
+    }
+  }
+  return snapshot;
 }
 
 async function fetchFromPublicPage({ netuid, taostatsPublicBaseUrl, rateLimiter = null }) {
   const url = `${taostatsPublicBaseUrl.replace(/\/$/, '')}/subnets/${netuid}`;
   const { text: html } = await fetchText(url, { rateLimiter });
   const payload = extractEscapedJsonObject(html, '\\"dtaoSubnet\\":{');
-  return normalizeSnapshot(payload, {
+  const snapshot = normalizeSnapshot(payload, {
     source: 'scrape',
     sourceUrl: url,
     netuid,
   });
+  try {
+    const holders = await fetchSubnetHoldersCount({ netuid, taostatsPublicBaseUrl, rateLimiter });
+    snapshot.alpha_holders_text = holders.holderCount === null ? null : String(holders.holderCount);
+    snapshot.alpha_holders_num = holders.holderCount;
+  } catch {
+    // Non-fatal enrichment: keep the subnet snapshot even if the holders count page fails.
+  }
+  return snapshot;
 }
 
 async function fetchTaoPriceLatest({ taostatsBaseUrl, taostatsAuthHeader, rateLimiter = null, capturedAt = nowIso() }) {
@@ -1043,7 +1113,7 @@ async function fetchLatestSnapshot(options) {
   if (taostatsAuthHeader) {
     try {
       return {
-        snapshot: await fetchFromApi({ netuid, taostatsBaseUrl, taostatsAuthHeader, rateLimiter }),
+        snapshot: await fetchFromApi({ netuid, taostatsBaseUrl, taostatsPublicBaseUrl, taostatsAuthHeader, rateLimiter }),
         source: 'api',
         fallbackUsed: false,
         detail: { source: 'api' },
@@ -1073,6 +1143,9 @@ module.exports = {
   fetchLatestSnapshot,
   fetchFromApi,
   fetchFromPublicPage,
+  fetchSubnetHoldersCount,
+  extractSubnetHoldersCountFromHtml,
+  fetchMetagraphLatest,
   fetchTaoPriceLatest,
   fetchTaoPriceHistory,
   fetchTaoFlowHistory,
@@ -1091,6 +1164,7 @@ module.exports = {
   normalizeStakeBalanceSnapshot,
   pickRecord,
   extractRecords,
+  countAlphaHolders,
   asNumber,
   asInteger,
   asBoolean,

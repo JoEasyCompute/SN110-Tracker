@@ -16,6 +16,8 @@ const {
   normalizeAccountSnapshot,
   normalizeStakeBalanceSnapshot,
   pickRecord,
+  countAlphaHolders,
+  extractSubnetHoldersCountFromHtml,
   createRateLimiter,
 } = require('../src/taostats');
 const {
@@ -487,6 +489,21 @@ test('pickRecord supports array-shaped API payloads', () => {
   assert.equal(record.name, 'Green Compute');
 });
 
+test('countAlphaHolders counts unique coldkeys with positive alpha stake', () => {
+  const count = countAlphaHolders([
+    { coldkey: { ss58: '5AlphaOne' }, alpha_stake: '10' },
+    { coldkey: { ss58: '5AlphaOne' }, total_alpha_stake: '5' },
+    { coldkey: { ss58: '5AlphaTwo' }, total_alpha_stake: '0' },
+    { coldkey: { ss58: '5AlphaThree' }, total_alpha_stake: '3' },
+  ]);
+  assert.equal(count, 2);
+});
+
+test('extractSubnetHoldersCountFromHtml parses the Taostats holders tab count', () => {
+  const html = '<p>Transactions</p><p>Holders(1,364)</p><p>Rows</p>';
+  assert.equal(extractSubnetHoldersCountFromHtml(html, 110), 1364);
+});
+
 test('pool growth estimator resolves pool state and projects AMM changes', () => {
   const state = buildPoolGrowthEstimatorState({
     total_tao_num: 100_000_000_000,
@@ -628,6 +645,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     fear_and_greed_index: '46.2',
     fear_and_greed_sentiment: 'Neutral',
   }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
+  snapshot.alpha_holders_num = 39;
+  snapshot.alpha_holders_text = '39';
   insertSnapshot(db, snapshot);
   insertWalletSnapshot(db, normalizeAccountSnapshot({
     address: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
@@ -688,6 +707,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('last synced never'), true);
   assert.equal(html.includes('id="wallet-activity-topbar-status"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-status"'), true);
+  assert.equal(html.includes('Alpha Holders'), true);
   assert.equal(html.includes('id="wallet-activity-topbar-badge"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-badge"'), true);
   assert.equal(html.includes('status-badge status-badge-neutral'), true);
@@ -1788,6 +1808,7 @@ test('openDatabase migrates legacy snapshots tables missing newer columns', () =
   const columns = db.prepare('PRAGMA table_info(snapshots)').all().map((row) => row.name);
   assert.equal(columns.includes('total_tao_num'), true);
   assert.equal(columns.includes('market_cap_change_1_day_text'), true);
+  assert.equal(columns.includes('alpha_holders_num'), true);
   assert.equal(columns.includes('raw_json'), true);
 
   const snapshot = normalizeSnapshot({

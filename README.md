@@ -27,6 +27,7 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Includes a subnet sentiment card that prefers Taostats SSI when available and falls back to the legacy Fear & Greed value on older rows
 - Money In/Out charts use Taostats Tao Flow history so the historical view stays available even when the subnet snapshot history is sparse
 - Subnet stats are arranged as a 4-column grid so the ten cards flow into three neat rows
+- Includes an Alpha Holders card in Subnet stats that mirrors the Taostats SN110 chart holders tab count
 - Collapsible panels use a visible chevron affordance so expand/collapse behavior is easier to spot
 
 ## Requirements

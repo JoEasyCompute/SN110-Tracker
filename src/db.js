@@ -94,6 +94,8 @@ function openDatabase(filePath) {
       sentiment_index_source_text TEXT,
       fear_and_greed_index TEXT,
       fear_and_greed_sentiment TEXT,
+      alpha_holders_text TEXT,
+      alpha_holders_num INTEGER,
       startup_mode INTEGER,
       swap_v3_initialized INTEGER,
       enabled_user_liquidity INTEGER,
@@ -397,6 +399,8 @@ function ensureSnapshotColumns(db) {
     ['alpha_volume_24_hr_change_1_day_text', 'TEXT'],
     ['fear_and_greed_index', 'TEXT'],
     ['fear_and_greed_sentiment', 'TEXT'],
+    ['alpha_holders_text', 'TEXT'],
+    ['alpha_holders_num', 'INTEGER'],
     ['startup_mode', 'INTEGER'],
     ['swap_v3_initialized', 'INTEGER'],
     ['enabled_user_liquidity', 'INTEGER'],
@@ -564,6 +568,7 @@ function insertSnapshot(db, snapshot) {
       alpha_volume_24_hr_text, alpha_volume_24_hr_num, alpha_volume_24_hr_change_1_day_text,
       sentiment_index_text, sentiment_index_num, sentiment_index_source_text,
       fear_and_greed_index, fear_and_greed_sentiment,
+      alpha_holders_text, alpha_holders_num,
       startup_mode, swap_v3_initialized, enabled_user_liquidity, current_tick, liquidity_raw,
       raw_json
     ) VALUES (
@@ -587,6 +592,7 @@ function insertSnapshot(db, snapshot) {
       @alpha_volume_24_hr_text, @alpha_volume_24_hr_num, @alpha_volume_24_hr_change_1_day_text,
       @sentiment_index_text, @sentiment_index_num, @sentiment_index_source_text,
       @fear_and_greed_index, @fear_and_greed_sentiment,
+      @alpha_holders_text, @alpha_holders_num,
       @startup_mode, @swap_v3_initialized, @enabled_user_liquidity, @current_tick, @liquidity_raw,
       @raw_json
     )
@@ -669,6 +675,8 @@ function insertSnapshot(db, snapshot) {
     sentiment_index_source_text: toDbValue(snapshot.sentiment_index_source_text),
     fear_and_greed_index: toDbValue(snapshot.fear_and_greed_index),
     fear_and_greed_sentiment: toDbValue(snapshot.fear_and_greed_sentiment),
+    alpha_holders_text: toDbValue(snapshot.alpha_holders_text),
+    alpha_holders_num: toDbValue(snapshot.alpha_holders_num),
     startup_mode: snapshot.startup_mode ? 1 : 0,
     swap_v3_initialized: snapshot.swap_v3_initialized ? 1 : 0,
     enabled_user_liquidity: snapshot.enabled_user_liquidity ? 1 : 0,
