@@ -43,7 +43,9 @@ const {
   getLatestWalletSnapshot,
   getLatestWalletStakePositions,
   getLatestAlphaHolderSnapshots,
+  getLatestAlphaHolderCount,
   getAlphaHolderSnapshotLatestCapturedAt,
+  getAlphaHolderSnapshotCounts,
   countAlphaHolderSnapshots,
   getWalletHistory,
   getWalletTransactions,
@@ -395,7 +397,15 @@ test('sqlite persistence stores and retrieves alpha holder snapshots', () => {
   assert.equal(rows[0].coldkey_ss58, '5AlphaHolderOne');
   assert.equal(rows[0].hotkey_name, 'Validator One');
   assert.equal(rows[0].balance_as_tao_num, 1);
+  assert.equal(getLatestAlphaHolderCount(db, 110), 1);
   assert.equal(getAlphaHolderSnapshotLatestCapturedAt(db, 110), '2026-05-01T00:00:00.000Z');
+  assert.deepEqual(getAlphaHolderSnapshotCounts(db, 110, '2026-04-29T00:00:00.000Z').map((row) => ({
+    captured_at: row.captured_at,
+    alpha_holders_num: row.alpha_holders_num,
+  })), [
+    { captured_at: '2026-04-30T00:00:00.000Z', alpha_holders_num: 1 },
+    { captured_at: '2026-05-01T00:00:00.000Z', alpha_holders_num: 1 },
+  ]);
   assert.equal(countAlphaHolderSnapshots(db, 110), 2);
 
   db.close();
@@ -783,6 +793,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Alpha holder addresses'), true);
   assert.equal(html.includes('5Ebftb…CDEFGH'), true);
   assert.equal(html.includes('Green Compute'), true);
+  assert.equal(model.latest.alpha_holders_num, 2);
   const dom = new JSDOM(html);
   const alphaHoldersButton = [...dom.window.document.querySelectorAll('[data-metric]')].find((element) => {
     try {
@@ -792,6 +803,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     }
   });
   assert.equal(alphaHoldersButton?.tagName, 'BUTTON');
+  assert.equal(alphaHoldersButton?.querySelector('.card-value')?.textContent?.trim(), '2');
   assert.equal(html.includes('id="wallet-activity-topbar-badge"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-badge"'), true);
   assert.equal(html.includes('status-badge status-badge-neutral'), true);

@@ -1278,6 +1278,22 @@ function getLatestAlphaHolderSnapshots(db, netuid, limit = 25) {
   return stmt.all(netuid, netuid, limit);
 }
 
+function getLatestAlphaHolderCount(db, netuid) {
+  const stmt = db.prepare(`
+    SELECT COUNT(DISTINCT coldkey_ss58) AS count
+    FROM alpha_holder_snapshots
+    WHERE netuid = ?
+      AND captured_at = (
+        SELECT MAX(captured_at)
+        FROM alpha_holder_snapshots
+        WHERE netuid = ?
+      )
+      AND COALESCE(balance_as_tao_num, 0) > 0
+  `);
+  const row = stmt.get(netuid, netuid);
+  return Number(row?.count ?? 0);
+}
+
 function getAlphaHolderSnapshotLatestCapturedAt(db, netuid) {
   const stmt = db.prepare(`
     SELECT MAX(captured_at) AS captured_at
@@ -1286,6 +1302,21 @@ function getAlphaHolderSnapshotLatestCapturedAt(db, netuid) {
   `);
   const row = stmt.get(netuid);
   return row?.captured_at ?? null;
+}
+
+function getAlphaHolderSnapshotCounts(db, netuid, sinceIso) {
+  const stmt = db.prepare(`
+    SELECT
+      captured_at,
+      COUNT(DISTINCT coldkey_ss58) AS alpha_holders_num
+    FROM alpha_holder_snapshots
+    WHERE netuid = ?
+      AND captured_at >= ?
+      AND COALESCE(balance_as_tao_num, 0) > 0
+    GROUP BY captured_at
+    ORDER BY captured_at ASC
+  `);
+  return stmt.all(netuid, sinceIso);
 }
 
 function countAlphaHolderSnapshots(db, netuid = null) {
@@ -1653,7 +1684,9 @@ module.exports = {
   getLatestWalletSnapshot,
   getLatestWalletStakePositions,
   getLatestAlphaHolderSnapshots,
+  getLatestAlphaHolderCount,
   getAlphaHolderSnapshotLatestCapturedAt,
+  getAlphaHolderSnapshotCounts,
   getWalletStakePositionsHistory,
   getWalletTransactions,
   getWalletHistory,

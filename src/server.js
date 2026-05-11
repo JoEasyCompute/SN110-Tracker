@@ -17,7 +17,8 @@ const {
   getLatestIngestRun,
   getLatestIngestRunBySource,
   getLatestAlphaHolderSnapshots,
-  countAlphaHolderSnapshots,
+  getLatestAlphaHolderCount,
+  getAlphaHolderSnapshotCounts,
   countSnapshots,
   countWalletSnapshots,
   countWalletTransactions,
@@ -481,6 +482,27 @@ function attachTaoPrice(rows, priceRows) {
   return output;
 }
 
+function attachAlphaHolderCounts(rows, alphaHolderCounts) {
+  if (!rows.length) return rows;
+  const countsByCapturedAt = new Map(
+    Array.isArray(alphaHolderCounts)
+      ? alphaHolderCounts
+        .filter((row) => row && row.captured_at)
+        .map((row) => [row.captured_at, Number(row.alpha_holders_num ?? row.count ?? 0)])
+      : [],
+  );
+
+  return rows.map((row) => {
+    const alphaHolders = countsByCapturedAt.get(row.captured_at);
+    if (!Number.isFinite(alphaHolders)) return row;
+    return {
+      ...row,
+      alpha_holders_num: alphaHolders,
+      alpha_holders_text: String(alphaHolders),
+    };
+  });
+}
+
 function currencyScaleForField(field) {
   return {
     market_cap_num: 1 / TAO_PER_RAO,
@@ -574,7 +596,7 @@ function getSubnetDataMetricDefs() {
     { key: 'owner_per_day_tao_num', label: 'Owner Share', description: 'This is the part of that daily TAO that goes to the subnet owner.', valueField: 'owner_per_day_tao_num', valueFormat: 'tao', historyField: 'owner_per_day_tao_num', chartLabel: 'Owner Share', chartColor: '#60a5fa', clickable: true },
     { key: 'miner_per_day_tao_num', label: 'Miner Share', description: 'This is the part of the daily TAO that goes to miners for doing the work that supports the subnet.', valueField: 'miner_per_day_tao_num', valueFormat: 'tao', historyField: 'miner_per_day_tao_num', chartLabel: 'Miner Share', chartColor: '#22c55e', clickable: true },
     { key: 'validator_per_day_tao_num', label: 'Validator Share', description: 'This is the part of the daily TAO that goes to validators for checking and confirming activity.', valueField: 'validator_per_day_tao_num', valueFormat: 'tao', historyField: 'validator_per_day_tao_num', chartLabel: 'Validator Share', chartColor: '#a855f7', clickable: true },
-    { key: 'alpha_holders_num', label: 'Alpha Holders', description: 'This is the number of unique wallets holding alpha on the subnet right now. Click it to see the historical trend.', valueField: 'alpha_holders_num', valueFormat: 'integer', historyField: 'alpha_holders_num', chartLabel: 'Alpha Holders', chartColor: '#38bdf8', clickable: true },
+    { key: 'alpha_holders_num', label: 'Alpha Holders', description: 'This is the number of unique wallets holding alpha on the subnet right now, derived from the stored holder snapshots. Click it to see the historical trend.', valueField: 'alpha_holders_num', valueFormat: 'integer', historyField: 'alpha_holders_num', chartLabel: 'Alpha Holders', chartColor: '#38bdf8', clickable: true },
     { key: 'incentive_burn_num', label: 'Burn Rate', description: 'This shows how much reward is burned instead of being paid out. Higher values mean more gets removed from circulation.', valueField: 'incentive_burn_num', valueFormat: 'percent', historyField: 'incentive_burn_num', chartLabel: 'Burn Rate', chartColor: '#fb7185', clickable: true },
     { key: 'recycled_24_hours_num', label: 'Recycled TAO', description: 'This is the amount of TAO that got recycled in the last 24 hours. In plain English, it’s TAO that came back into use instead of staying spent.', valueField: 'recycled_24_hours_num', valueFormat: 'tao', historyField: 'recycled_24_hours_num', chartLabel: 'Recycled TAO', chartColor: '#38bdf8', clickable: true },
     { key: 'registration_cost_num', label: 'Registration Fee', description: 'This is the fee to register a new neuron. Think of it as the cost to get a seat at the table.', valueField: 'registration_cost_num', valueFormat: 'tao', historyField: 'registration_cost_num', chartLabel: 'Registration Fee', chartColor: '#c084fc', clickable: true },
@@ -812,7 +834,7 @@ function renderAlphaHolderSection(rows, { latestCaptureAt = null, totalRowCount 
   const latestCapturedAt = latestCaptureAt || entries[0]?.captured_at || null;
   const latestText = latestCapturedAt ? `Latest snapshot captured ${formatIso(latestCapturedAt)} from the local SQLite history.` : 'No alpha holder snapshots have been stored yet.';
   const totalLabel = Number.isFinite(Number(totalRowCount)) && Number(totalRowCount) > 0
-    ? `${Number(totalRowCount).toLocaleString('en-US')} holder rows are stored in SQLite across the local history.`
+    ? `${Number(totalRowCount).toLocaleString('en-US')} unique holders are present in the latest snapshot.`
     : '';
   const topLabel = entries.length ? `Showing the top ${entries.length} addresses from the latest holder snapshot.` : '';
   const body = entries.length
@@ -2009,9 +2031,14 @@ function buildPageModel({ db, config, netuid }) {
   const latestTaoPrice = getLatestTaoPrice(db);
   const history = attachTaoPrice(historyRaw, taoPriceHistory);
   const recentWithPrice = attachTaoPrice(recent.slice().reverse(), taoPriceHistory).reverse();
+  const alphaHolderHistoryCounts = latest ? getAlphaHolderSnapshotCounts(db, netuid, sinceIso) : [];
+  const latestAlphaHolderCount = latest ? getLatestAlphaHolderCount(db, netuid) : null;
+  const historyWithAlphaHolders = attachAlphaHolderCounts(history, alphaHolderHistoryCounts);
   const latestWithPrice = latest
     ? {
         ...latest,
+        alpha_holders_num: Number.isFinite(latestAlphaHolderCount) ? latestAlphaHolderCount : latest.alpha_holders_num,
+        alpha_holders_text: Number.isFinite(latestAlphaHolderCount) ? String(latestAlphaHolderCount) : latest.alpha_holders_text,
         tao_price_usd: latest.tao_price_usd ?? latestTaoPrice?.price_usd ?? null,
         tao_price_captured_at: latest.tao_price_captured_at ?? latestTaoPrice?.captured_at ?? null,
       }
@@ -2024,7 +2051,7 @@ function buildPageModel({ db, config, netuid }) {
   }));
   const latestWalletActivityRun = getLatestIngestRunBySource(db, 'wallet-activity');
   const latestAlphaHolderRows = latest ? getLatestAlphaHolderSnapshots(db, netuid, 20) : [];
-  const comparisons = latestWithPrice ? buildComparisons(history, latestWithPrice) : [];
+  const comparisons = latestWithPrice ? buildComparisons(historyWithAlphaHolders, latestWithPrice) : [];
 
   return {
     config,
@@ -2033,7 +2060,7 @@ function buildPageModel({ db, config, netuid }) {
     recent: recentWithPrice,
     ingestRun,
     totalSnapshots,
-    history,
+    history: historyWithAlphaHolders,
     comparisons,
     latestTaoPrice,
     latestTaoPriceUsd: latestWithPrice?.tao_price_usd ?? latestTaoPrice?.price_usd ?? null,
@@ -2045,7 +2072,7 @@ function buildPageModel({ db, config, netuid }) {
       syncIntervalMinutes: config.walletActivitySyncIntervalMinutes ?? config.taostatsWalletActivitySyncIntervalMinutes ?? null,
     },
     alphaHolderRows: latestAlphaHolderRows,
-    alphaHolderRowCount: latest ? countAlphaHolderSnapshots(db, netuid) : 0,
+    alphaHolderRowCount: Number.isFinite(latestAlphaHolderCount) ? latestAlphaHolderCount : 0,
     totalWalletSnapshots,
     nextPollAtIso: config.nextPollAtIso ?? null,
     hasApiKey: Boolean(config.taostatsAuthHeader),
