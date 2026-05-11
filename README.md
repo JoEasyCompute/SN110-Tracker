@@ -120,6 +120,7 @@ By default it deletes overlapping local rows in the requested time window before
 It also backfills TAO price history so USD toggles keep working for historical values.
 It also backfills Tao Flow history so the Money In/Out charts can render historical values from dedicated flow data.
 If wallets are configured, backfill also pulls Taostats account history for each configured coldkey and stores the daily wallet balance history locally.
+Alpha holder history is stored as snapshot rows in SQLite too, so the Alpha Holders card can chart previous days from the local `alpha_holder_snapshots` table.
 Backfill also pulls historical hotkey stake snapshots for each configured coldkey, so the wallet modal can show a hotkey history section alongside the live current stake positions.
 Sentiment history will use SSI when Taostats provides it, with legacy Fear & Greed as a fallback for older live rows.
 

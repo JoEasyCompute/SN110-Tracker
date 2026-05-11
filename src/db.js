@@ -1280,7 +1280,7 @@ function getLatestAlphaHolderSnapshots(db, netuid, limit = 25) {
 
 function getLatestAlphaHolderCount(db, netuid) {
   const stmt = db.prepare(`
-    SELECT COUNT(DISTINCT coldkey_ss58) AS count
+    SELECT COUNT(*) AS count
     FROM alpha_holder_snapshots
     WHERE netuid = ?
       AND captured_at = (
@@ -1308,7 +1308,7 @@ function getAlphaHolderSnapshotCounts(db, netuid, sinceIso) {
   const stmt = db.prepare(`
     SELECT
       captured_at,
-      COUNT(DISTINCT coldkey_ss58) AS alpha_holders_num
+      COUNT(*) AS alpha_holders_num
     FROM alpha_holder_snapshots
     WHERE netuid = ?
       AND captured_at >= ?

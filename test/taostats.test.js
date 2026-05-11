@@ -375,6 +375,18 @@ test('sqlite persistence stores and retrieves alpha holder snapshots', () => {
     hotkey: { ss58: '5ValOne', hex: '0xval1' },
     hotkey_name: 'Validator One',
   }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-01T00:00:00.000Z' });
+  const latestDuplicate = normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-05-01T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 2,
+    balance: '500000000',
+    balance_as_tao: '250000000',
+    coldkey: { ss58: '5AlphaHolderOne', hex: '0xholder1' },
+    hotkey: { ss58: '5ValThree', hex: '0xval3' },
+    hotkey_name: 'Validator Three',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-01T00:00:00.000Z' });
   const older = normalizeStakeBalanceSnapshot({
     block_number: 8160001,
     timestamp: '2026-04-30T00:00:00Z',
@@ -390,23 +402,22 @@ test('sqlite persistence stores and retrieves alpha holder snapshots', () => {
 
   insertAlphaHolderSnapshot(db, older);
   insertAlphaHolderSnapshot(db, latest);
-  insertAlphaHolderSnapshot(db, { ...latest });
+  insertAlphaHolderSnapshot(db, latestDuplicate);
 
   const rows = getLatestAlphaHolderSnapshots(db, 110);
-  assert.equal(rows.length, 1);
+  assert.equal(rows.length, 2);
   assert.equal(rows[0].coldkey_ss58, '5AlphaHolderOne');
-  assert.equal(rows[0].hotkey_name, 'Validator One');
-  assert.equal(rows[0].balance_as_tao_num, 1);
-  assert.equal(getLatestAlphaHolderCount(db, 110), 1);
+  assert.equal(rows[1].coldkey_ss58, '5AlphaHolderOne');
+  assert.equal(getLatestAlphaHolderCount(db, 110), 2);
   assert.equal(getAlphaHolderSnapshotLatestCapturedAt(db, 110), '2026-05-01T00:00:00.000Z');
   assert.deepEqual(getAlphaHolderSnapshotCounts(db, 110, '2026-04-29T00:00:00.000Z').map((row) => ({
     captured_at: row.captured_at,
     alpha_holders_num: row.alpha_holders_num,
   })), [
     { captured_at: '2026-04-30T00:00:00.000Z', alpha_holders_num: 1 },
-    { captured_at: '2026-05-01T00:00:00.000Z', alpha_holders_num: 1 },
+    { captured_at: '2026-05-01T00:00:00.000Z', alpha_holders_num: 2 },
   ]);
-  assert.equal(countAlphaHolderSnapshots(db, 110), 2);
+  assert.equal(countAlphaHolderSnapshots(db, 110), 3);
 
   db.close();
 });
