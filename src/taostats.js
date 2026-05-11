@@ -553,7 +553,12 @@ function countAlphaHolders(records) {
 }
 
 function extractSubnetHoldersCountFromHtml(html, netuid) {
-  const match = String(html || '').match(/Holders\(([\d,]+)\)/i);
+  const text = String(html || '');
+  const embeddedMatch = text.match(/"holderCount"\s*:\s*(\d+)/i);
+  if (embeddedMatch) {
+    return Number(embeddedMatch[1]);
+  }
+  const match = text.match(/Holders\(([\d,]+)\)/i);
   if (!match) {
     throw new Error(`Could not find holders count in Taostats chart page for SN${netuid}`);
   }

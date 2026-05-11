@@ -500,8 +500,10 @@ test('countAlphaHolders counts unique coldkeys with positive alpha stake', () =>
 });
 
 test('extractSubnetHoldersCountFromHtml parses the Taostats holders tab count', () => {
-  const html = '<p>Transactions</p><p>Holders(1,364)</p><p>Rows</p>';
-  assert.equal(extractSubnetHoldersCountFromHtml(html, 110), 1364);
+  const embedded = '{"holderCount":1364,"id":110}';
+  const rendered = '<p>Transactions</p><p>Holders(1,364)</p><p>Rows</p>';
+  assert.equal(extractSubnetHoldersCountFromHtml(embedded, 110), 1364);
+  assert.equal(extractSubnetHoldersCountFromHtml(rendered, 110), 1364);
 });
 
 test('pool growth estimator resolves pool state and projects AMM changes', () => {
@@ -708,6 +710,15 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="wallet-activity-topbar-status"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-status"'), true);
   assert.equal(html.includes('Alpha Holders'), true);
+  const dom = new JSDOM(html);
+  const alphaHoldersButton = [...dom.window.document.querySelectorAll('[data-metric]')].find((element) => {
+    try {
+      return JSON.parse(element.getAttribute('data-metric') || '{}').label === 'Alpha Holders';
+    } catch {
+      return false;
+    }
+  });
+  assert.equal(alphaHoldersButton?.tagName, 'BUTTON');
   assert.equal(html.includes('id="wallet-activity-topbar-badge"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-badge"'), true);
   assert.equal(html.includes('status-badge status-badge-neutral'), true);
