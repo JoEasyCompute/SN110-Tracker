@@ -856,24 +856,26 @@ function renderAlphaHolderSection(rows, { latestCaptureAt = null, totalRowCount 
 
   return `
     <section class="section">
-      <h2>Alpha holder addresses</h2>
-      <p class="muted">${escapeHtml(latestText)} ${escapeHtml(totalLabel)} ${escapeHtml(topLabel)}</p>
-      <div class="panel">
-        <div class="table-wrap alpha-holder-table-wrap">
-          <table class="data-table alpha-holder-table">
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Address</th>
-                <th>Validator</th>
-                <th>Alpha</th>
-                <th>Tao</th>
-              </tr>
-            </thead>
-            <tbody>${body}</tbody>
-          </table>
+      <details class="alpha-holder-details">
+        <summary>Alpha holder addresses</summary>
+        <p class="muted">${escapeHtml(latestText)} ${escapeHtml(totalLabel)} ${escapeHtml(topLabel)}</p>
+        <div class="panel">
+          <div class="table-wrap alpha-holder-table-wrap">
+            <table class="data-table alpha-holder-table">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Address</th>
+                  <th>Validator</th>
+                  <th>Alpha</th>
+                  <th>Tao</th>
+                </tr>
+              </thead>
+              <tbody>${body}</tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      </details>
     </section>
   `;
 }
@@ -6300,6 +6302,42 @@ function renderPage(model) {
         flex: 0 0 auto;
       }
       .wallet-history-details[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .alpha-holder-details {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid rgba(143, 163, 184, 0.14);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .alpha-holder-details > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .alpha-holder-details > summary::-webkit-details-marker {
+        display: none;
+      }
+      .alpha-holder-details > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .alpha-holder-details[open] > summary::before {
         transform: rotate(90deg);
       }
       .wallet-attribution-history {

@@ -865,12 +865,15 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('last synced never'), true);
   assert.equal(html.includes('id="wallet-activity-topbar-status"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-status"'), true);
+  assert.equal(html.includes('class="alpha-holder-details"'), true);
   assert.equal(html.includes('Alpha Holders'), true);
   assert.equal(html.includes('Alpha holder addresses'), true);
   assert.equal(html.includes('5Ebftb…CDEFGH'), true);
   assert.equal(html.includes('Green Compute'), true);
   assert.equal(model.latest.alpha_holders_num, 2);
   const dom = new JSDOM(html);
+  const alphaHolderDetails = dom.window.document.querySelector('.alpha-holder-details');
+  assert.equal(alphaHolderDetails?.hasAttribute('open'), false);
   const alphaHoldersButton = [...dom.window.document.querySelectorAll('[data-metric]')].find((element) => {
     try {
       return JSON.parse(element.getAttribute('data-metric') || '{}').label === 'Alpha Holders';
