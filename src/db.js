@@ -1304,6 +1304,32 @@ function getAlphaHolderSnapshotLatestCapturedAt(db, netuid) {
   return row?.captured_at ?? null;
 }
 
+function getAlphaHolderSnapshotHistory(db, netuid, sinceIso) {
+  const stmt = db.prepare(`
+    WITH daily_latest AS (
+      SELECT
+        substr(captured_at, 1, 10) AS day,
+        MAX(captured_at) AS captured_at
+      FROM alpha_holder_snapshots
+      WHERE netuid = ?
+        AND captured_at >= ?
+      GROUP BY substr(captured_at, 1, 10)
+    )
+    SELECT
+      l.captured_at,
+      COUNT(*) AS alpha_holders_num
+    FROM alpha_holder_snapshots a
+    JOIN daily_latest l
+      ON substr(a.captured_at, 1, 10) = l.day
+     AND a.captured_at = l.captured_at
+    WHERE a.netuid = ?
+      AND COALESCE(a.balance_as_tao_num, 0) > 0
+    GROUP BY l.captured_at
+    ORDER BY l.captured_at ASC
+  `);
+  return stmt.all(netuid, sinceIso, netuid);
+}
+
 function getAlphaHolderSnapshotCounts(db, netuid, sinceIso) {
   const stmt = db.prepare(`
     SELECT
@@ -1686,6 +1712,7 @@ module.exports = {
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
   getAlphaHolderSnapshotLatestCapturedAt,
+  getAlphaHolderSnapshotHistory,
   getAlphaHolderSnapshotCounts,
   getWalletStakePositionsHistory,
   getWalletTransactions,

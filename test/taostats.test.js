@@ -45,6 +45,7 @@ const {
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
   getAlphaHolderSnapshotLatestCapturedAt,
+  getAlphaHolderSnapshotHistory,
   getAlphaHolderSnapshotCounts,
   countAlphaHolderSnapshots,
   getWalletHistory,
@@ -410,6 +411,13 @@ test('sqlite persistence stores and retrieves alpha holder snapshots', () => {
   assert.equal(rows[1].coldkey_ss58, '5AlphaHolderOne');
   assert.equal(getLatestAlphaHolderCount(db, 110), 2);
   assert.equal(getAlphaHolderSnapshotLatestCapturedAt(db, 110), '2026-05-01T00:00:00.000Z');
+  assert.deepEqual(getAlphaHolderSnapshotHistory(db, 110, '2026-04-29T00:00:00.000Z').map((row) => ({
+    captured_at: row.captured_at,
+    alpha_holders_num: row.alpha_holders_num,
+  })), [
+    { captured_at: '2026-04-30T00:00:00.000Z', alpha_holders_num: 1 },
+    { captured_at: '2026-05-01T00:00:00.000Z', alpha_holders_num: 2 },
+  ]);
   assert.deepEqual(getAlphaHolderSnapshotCounts(db, 110, '2026-04-29T00:00:00.000Z').map((row) => ({
     captured_at: row.captured_at,
     alpha_holders_num: row.alpha_holders_num,
@@ -535,6 +543,63 @@ test('wallet activity sync deduplicates overlapping backfill windows', async () 
   const rows = getWalletTransactions(db, '5WalletAlpha123456789ABCDEFGH');
   assert.equal(rows.length, 3);
   assert.equal(new Set(rows.map((row) => row.dedupe_key)).size, 3);
+
+  db.close();
+});
+
+test('alpha holder snapshot job stores one daily capture and skips same-day duplicates', async () => {
+  const db = openDatabase(':memory:');
+  const holderRows = [
+    normalizeStakeBalanceSnapshot({
+      block_number: 200,
+      timestamp: '2026-05-11T00:00:00.000Z',
+      netuid: 110,
+      subnet_rank: 1,
+      subnet_total_holders: 2,
+      balance: '1000000000',
+      balance_as_tao: '1000000000',
+      coldkey: { ss58: '5AlphaHolderOne', hex: '0xholder1' },
+      hotkey: { ss58: '5ValOne', hex: '0xval1' },
+      hotkey_name: 'Validator One',
+    }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-11T00:00:00.000Z' }),
+    normalizeStakeBalanceSnapshot({
+      block_number: 200,
+      timestamp: '2026-05-11T00:00:00.000Z',
+      netuid: 110,
+      subnet_rank: 1,
+      subnet_total_holders: 2,
+      balance: '2000000000',
+      balance_as_tao: '2000000000',
+      coldkey: { ss58: '5AlphaHolderTwo', hex: '0xholder2' },
+      hotkey: { ss58: '5ValTwo', hex: '0xval2' },
+      hotkey_name: 'Validator Two',
+    }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-11T00:00:00.000Z' }),
+  ];
+  const taostats = {
+    fetchStakeBalanceLatest: async () => holderRows,
+  };
+  const config = {
+    netuid: 110,
+    taostatsBaseUrl: 'https://example.invalid',
+    taostatsAuthHeader: 'secret',
+    taostatsRateLimiter: null,
+  };
+  const service = createIngestService({ db, config, taostats });
+
+  const first = await service.syncAlphaHolderSnapshot({
+    netuid: 110,
+    capturedAt: '2026-05-11T00:00:00.000Z',
+  });
+  const second = await service.syncAlphaHolderSnapshot({
+    netuid: 110,
+    capturedAt: '2026-05-11T12:00:00.000Z',
+  });
+
+  assert.equal(first.ok, true);
+  assert.equal(first.inserted, 2);
+  assert.equal(second.skipped, true);
+  assert.equal(countAlphaHolderSnapshots(db, 110), 2);
+  assert.equal(getLatestAlphaHolderCount(db, 110), 2);
 
   db.close();
 });
@@ -1334,6 +1399,63 @@ test('tao flow history endpoint returns stored flow history', async () => {
   assert.equal(payload.history.length, 2);
   assert.equal(payload.history[0].tao_flow_num, 1000);
   assert.equal(payload.history[1].tao_flow_num, 1100);
+  await app.close();
+  db.close();
+});
+
+test('alpha holder history endpoint returns daily holder rows from local snapshots', async () => {
+  const db = openDatabase(':memory:');
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8160001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 2,
+    subnet_total_holders: 2,
+    balance: '1000000000',
+    balance_as_tao: '500000000',
+    coldkey: { ss58: '5AlphaHolderOne', hex: '0xholder1' },
+    hotkey: { ss58: '5ValOne', hex: '0xval1' },
+    hotkey_name: 'Validator One',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-05-01T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 2,
+    balance: '2000000000',
+    balance_as_tao: '1000000000',
+    coldkey: { ss58: '5AlphaHolderOne', hex: '0xholder1' },
+    hotkey: { ss58: '5ValOne', hex: '0xval1' },
+    hotkey_name: 'Validator One',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-01T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-05-01T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 2,
+    balance: '500000000',
+    balance_as_tao: '250000000',
+    coldkey: { ss58: '5AlphaHolderTwo', hex: '0xholder2' },
+    hotkey: { ss58: '5ValTwo', hex: '0xval2' },
+    hotkey_name: 'Validator Two',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-01T00:00:00.000Z' }));
+
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: { netuid: 110, taostatsAuthHeader: '', pollIntervalMinutes: 60, nextPollAtIso: null },
+  });
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/alpha-holder-history?days=30`);
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.days, 30);
+  assert.equal(payload.history.length, 2);
+  assert.equal(payload.history[0].alpha_holders_num, 1);
+  assert.equal(payload.history[1].alpha_holders_num, 2);
   await app.close();
   db.close();
 });

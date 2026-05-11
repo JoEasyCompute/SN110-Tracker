@@ -23,6 +23,44 @@ async function main() {
   const ingestService = createIngestService({ db, config });
   let timer = null;
   let walletActivityTimer = null;
+  let alphaHolderTimer = null;
+
+  const msUntilNextUtcMidnight = (now = Date.now()) => {
+    const current = new Date(now);
+    const nextMidnight = Date.UTC(
+      current.getUTCFullYear(),
+      current.getUTCMonth(),
+      current.getUTCDate() + 1,
+      0,
+      0,
+      0,
+      0,
+    );
+    return Math.max(1000, nextMidnight - now);
+  };
+
+  const scheduleAlphaHolderSnapshot = () => {
+    if (!config.taostatsAuthHeader) {
+      return null;
+    }
+    if (alphaHolderTimer) {
+      clearTimeout(alphaHolderTimer);
+      alphaHolderTimer = null;
+    }
+    const nextRunMs = msUntilNextUtcMidnight();
+    config.nextAlphaHolderSnapshotAtIso = new Date(Date.now() + nextRunMs).toISOString();
+    alphaHolderTimer = setTimeout(() => {
+      void ingestService.syncAlphaHolderSnapshot({ netuid: config.netuid }).catch((error) => {
+        console.error('Scheduled alpha-holder snapshot failed:', error);
+      }).finally(() => {
+        scheduleAlphaHolderSnapshot();
+      });
+    }, nextRunMs);
+    alphaHolderTimer.unref();
+    return {
+      nextAlphaHolderSnapshotAtIso: config.nextAlphaHolderSnapshotAtIso,
+    };
+  };
 
   const schedulePolling = (minutes) => {
     const normalizedMinutes = normalizePollIntervalMinutes(minutes, config.pollIntervalMinutes);
@@ -85,6 +123,7 @@ async function main() {
 
   schedulePolling(config.pollIntervalMinutes);
   scheduleWalletActivitySync(config.taostatsWalletActivitySyncIntervalMinutes);
+  scheduleAlphaHolderSnapshot();
   await app.start(config.port);
   console.log(`SN${config.netuid} dashboard running on http://localhost:${config.port}`);
   console.log(`SQLite database: ${config.dbPath}`);
@@ -96,6 +135,9 @@ async function main() {
   }
   if (config.taostatsAuthHeader && Array.isArray(config.wallets) && config.wallets.length > 0) {
     console.log(`Wallet activity sync: every ${config.taostatsWalletActivitySyncIntervalMinutes} minute${config.taostatsWalletActivitySyncIntervalMinutes === 1 ? '' : 's'} (recent ${config.taostatsWalletActivitySyncDays} days)`);
+  }
+  if (config.taostatsAuthHeader) {
+    console.log('Alpha-holder snapshots: daily at UTC midnight');
   }
   if (config.taostatsBackfillOnStartup && config.taostatsBackfillDays > 0) {
     console.log(`Historical backfill: enabled (${config.taostatsBackfillDays} days, ${config.taostatsBackfillFrequency})`);
@@ -130,6 +172,9 @@ async function main() {
     }
     if (walletActivityTimer) {
       clearInterval(walletActivityTimer);
+    }
+    if (alphaHolderTimer) {
+      clearTimeout(alphaHolderTimer);
     }
     await app.close();
     db.close();

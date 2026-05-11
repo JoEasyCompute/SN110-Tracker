@@ -24,6 +24,7 @@ const {
   deleteWalletSnapshotsInRange,
   deleteWalletStakePositionsInRange,
   deleteAlphaHolderSnapshotsInRange,
+  getAlphaHolderSnapshotLatestCapturedAt,
   getWalletTransactions,
 } = require('./db');
 
@@ -93,6 +94,63 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       inserted += 1;
     }
     return inserted;
+  }
+
+  async function syncAlphaHolderSnapshot({
+    netuid = config.netuid,
+    capturedAt = new Date().toISOString(),
+    skipIfAlreadyCapturedToday = true,
+  } = {}) {
+    if (!config.taostatsAuthHeader) {
+      return {
+        ok: false,
+        skipped: true,
+        source: 'alpha-holder-snapshot',
+        fetched: 0,
+        inserted: 0,
+        reason: 'Taostats API auth header is required for alpha holder snapshots',
+      };
+    }
+
+    if (skipIfAlreadyCapturedToday) {
+      const latestCapturedAt = getAlphaHolderSnapshotLatestCapturedAt(db, netuid);
+      const latestDay = latestCapturedAt ? String(latestCapturedAt).slice(0, 10) : null;
+      const currentDay = String(capturedAt).slice(0, 10);
+      if (latestDay && latestDay === currentDay) {
+        return {
+          ok: true,
+          skipped: true,
+          source: 'alpha-holder-snapshot',
+          fetched: 0,
+          inserted: 0,
+          capturedAt,
+          reason: 'Alpha holder snapshot already captured today',
+        };
+      }
+    }
+
+    const rows = await fetchStakeBalanceLatest({
+      netuid,
+      taostatsBaseUrl: config.taostatsBaseUrl,
+      taostatsAuthHeader: config.taostatsAuthHeader,
+      rateLimiter: config.taostatsRateLimiter || null,
+      capturedAt,
+    });
+    const inserted = await storeAlphaHolderRows({
+      rows,
+      source: 'api',
+      sourceUrl: `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/stake_balance/latest/v1`,
+      capturedAt,
+    });
+
+    return {
+      ok: true,
+      skipped: false,
+      source: 'alpha-holder-snapshot',
+      fetched: rows.length,
+      inserted,
+      capturedAt,
+    };
   }
 
   async function runWalletActivityForWallet({
@@ -426,33 +484,26 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           }
         }
       }
-      if (config.taostatsAuthHeader) {
-        try {
-          const alphaHolderRows = await fetchStakeBalanceLatest({
-            netuid,
-            taostatsBaseUrl: config.taostatsBaseUrl,
-            taostatsAuthHeader: config.taostatsAuthHeader,
-            rateLimiter: config.taostatsRateLimiter || null,
-            capturedAt: result.snapshot.captured_at,
-          });
-          alphaHolderFetched = alphaHolderRows.length;
-          alphaHolderInserted = await storeAlphaHolderRows({
-            rows: alphaHolderRows,
-            source: 'api',
-            sourceUrl: `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/stake_balance/latest/v1`,
-            capturedAt: result.snapshot.captured_at,
-          });
-          detail = {
-            ...detail,
-            alphaHolderFetched,
-            alphaHolderInserted,
-          };
-        } catch (alphaHolderError) {
-          detail = {
-            ...detail,
-            alphaHolderError: alphaHolderError instanceof Error ? alphaHolderError.message : String(alphaHolderError),
-          };
-        }
+      try {
+        const alphaHolderSnapshot = await syncAlphaHolderSnapshot({
+          netuid,
+          capturedAt: result.snapshot.captured_at,
+          skipIfAlreadyCapturedToday: true,
+        });
+        alphaHolderFetched = alphaHolderSnapshot.fetched || 0;
+        alphaHolderInserted = alphaHolderSnapshot.inserted || 0;
+        detail = {
+          ...detail,
+          alphaHolderFetched,
+          alphaHolderInserted,
+          alphaHolderSnapshotSkipped: Boolean(alphaHolderSnapshot.skipped),
+          alphaHolderSnapshotCapturedAt: alphaHolderSnapshot.capturedAt || result.snapshot.captured_at,
+        };
+      } catch (alphaHolderError) {
+        detail = {
+          ...detail,
+          alphaHolderError: alphaHolderError instanceof Error ? alphaHolderError.message : String(alphaHolderError),
+        };
       }
       ok = true;
       message = `Captured ${result.snapshot.name || `SN${netuid}`} from ${source}`;
@@ -879,6 +930,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
   return {
     ingestOnce,
     backfillHistoricalSnapshots,
+    syncAlphaHolderSnapshot,
     syncWalletActivity,
     syncWalletActivityForWallet,
     backfillWalletActivity,

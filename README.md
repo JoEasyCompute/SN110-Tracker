@@ -28,6 +28,7 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Money In/Out charts use Taostats Tao Flow history so the historical view stays available even when the subnet snapshot history is sparse
 - Subnet stats are arranged as a 4-column grid so the ten cards flow into three neat rows
 - Includes an Alpha Holders card in Subnet stats that mirrors the Taostats SN110 chart holders tab count, derives the live count from the locally stored stake-balance holder snapshots, stores the latest holder addresses in SQLite, and opens a historical trend view from the locally stored snapshot history
+- Runs a dedicated daily alpha-holder snapshot job at UTC midnight so the holder chart keeps growing from local snapshots even when Taostats historical coverage is unavailable
 - Collapsible panels use a visible chevron affordance so expand/collapse behavior is easier to spot
 
 ## Requirements
