@@ -12,6 +12,7 @@
     "ingest": "node src/cli.js --once",
     "backfill": "node src/cli.js --backfill",
     "wallet-backfill": "node src/cli.js --wallet-backfill",
+    "alpha-holder-backfill": "node src/cli.js --alpha-holder-backfill",
     "test": "node --test"
   }
 }

@@ -40,6 +40,8 @@ async function run() {
   const ingestService = createIngestService({ db, config });
   const backfill = process.argv.includes('--backfill');
   const walletBackfill = process.argv.includes('--wallet-backfill') || process.argv.includes('--wallet-activity-backfill');
+  const alphaHolderBackfill = process.argv.includes('--alpha-holder-backfill') || process.argv.includes('--alpha-holder-history-backfill');
+  const alphaHolderSync = process.argv.includes('--alpha-holder-sync');
   const once = process.argv.includes('--once');
 
   let result;
@@ -47,6 +49,19 @@ async function run() {
     result = await ingestService.backfillWalletActivity({
       days: intArg(readArg('days', config.taostatsWalletActivityBackfillDays || 60), config.taostatsWalletActivityBackfillDays || 60),
       limit: intArg(readArg('limit', 200), 200),
+    });
+  } else if (alphaHolderBackfill) {
+    result = await ingestService.backfillAlphaHolderHistory({
+      netuid: intArg(readArg('netuid', null), null),
+      days: intArg(readArg('days', config.taostatsBackfillDays || 30), config.taostatsBackfillDays || 30),
+      overwrite: boolArg('overwrite', config.taostatsBackfillOverwrite ?? true),
+      limit: intArg(readArg('limit', 1024), 1024),
+    });
+  } else if (alphaHolderSync) {
+    result = await ingestService.backfillAlphaHolderSnapshots({
+      capturedAt: new Date().toISOString(),
+      skipIfAlreadyCapturedToday: boolArg('skip-if-captured-today', true),
+      limit: intArg(readArg('limit', 1024), 1024),
     });
   } else if (backfill) {
     const backfillResult = await ingestService.backfillHistoricalSnapshots({

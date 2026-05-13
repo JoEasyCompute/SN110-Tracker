@@ -575,6 +575,38 @@ async function fetchSubnetHoldersCount({ netuid, taostatsPublicBaseUrl, rateLimi
   };
 }
 
+async function fetchLatestSubnets({
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  limit = 1024,
+} = {}) {
+  if (!taostatsAuthHeader) {
+    return [];
+  }
+
+  const headers = { authorization: taostatsAuthHeader };
+  const rows = [];
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL('/api/subnet/latest/v1', taostatsBaseUrl);
+    url.searchParams.set('order', 'netuid_asc');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('page', String(page));
+    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+    const pageRows = extractRecords(json);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    if (pageRows.length < limit) break;
+  }
+
+  return rows.map((row) => normalizeSnapshot(row, {
+    source: 'api',
+    sourceUrl: `${taostatsBaseUrl.replace(/\/$/, '')}/api/subnet/latest/v1`,
+    netuid: asInteger(row.netuid),
+  })).filter((row) => Number.isFinite(Number(row.netuid)) && Number(row.netuid) > 0);
+}
+
 async function fetchMetagraphLatest({ netuid, taostatsBaseUrl, taostatsAuthHeader, rateLimiter = null }) {
   if (!taostatsAuthHeader) {
     return null;
@@ -1106,6 +1138,45 @@ async function fetchHistoricalSnapshots({
   return snapshots;
 }
 
+async function fetchSubnetLatestCatalog({
+  taostatsBaseUrl,
+  taostatsAuthHeader,
+  rateLimiter = null,
+  limit = 1024,
+}) {
+  if (!taostatsAuthHeader) {
+    return [];
+  }
+
+  const headers = { authorization: taostatsAuthHeader };
+  const rows = [];
+  const seenNetuids = new Set();
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL('/api/subnet/latest/v1', taostatsBaseUrl);
+    url.searchParams.set('order', 'netuid_asc');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('page', String(page));
+    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+    const pageRows = extractRecords(json);
+    if (!pageRows.length) break;
+    rows.push(...pageRows);
+    if (pageRows.length < limit) break;
+  }
+
+  const catalog = [];
+  for (const row of rows) {
+    const netuid = asInteger(row?.netuid);
+    if (netuid === null || seenNetuids.has(netuid)) {
+      continue;
+    }
+    seenNetuids.add(netuid);
+    catalog.push(row);
+  }
+
+  return catalog;
+}
+
 async function fetchLatestSnapshot(options) {
   const {
     netuid,
@@ -1150,6 +1221,7 @@ module.exports = {
   fetchFromApi,
   fetchFromPublicPage,
   fetchSubnetHoldersCount,
+  fetchLatestSubnets,
   extractSubnetHoldersCountFromHtml,
   fetchMetagraphLatest,
   fetchTaoPriceLatest,
@@ -1162,6 +1234,7 @@ module.exports = {
   fetchStakeBalanceLatest,
   fetchHistoricalStakeBalance,
   fetchHistoricalSnapshots,
+  fetchSubnetLatestCatalog,
   extractEscapedJsonObject,
   normalizeSnapshot,
   normalizeTaoPriceSnapshot,

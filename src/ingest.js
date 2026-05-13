@@ -32,6 +32,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
   const {
     fetchLatestSnapshot,
     fetchHistoricalSnapshots,
+    fetchSubnetLatestCatalog,
     fetchTaoPriceLatest,
     fetchTaoPriceHistory,
     fetchTaoFlowHistory,
@@ -150,6 +151,109 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       fetched: rows.length,
       inserted,
       capturedAt,
+    };
+  }
+
+  async function resolveAlphaHolderNetuids({
+    netuid = null,
+    limit = 1024,
+  } = {}) {
+    const netuids = new Set();
+    const fallbackNetuid = Number.parseInt(String(netuid ?? config.netuid), 10);
+    if (Number.isFinite(fallbackNetuid) && fallbackNetuid > 0) {
+      netuids.add(fallbackNetuid);
+    }
+
+    if (!config.taostatsAuthHeader) {
+      return [...netuids].sort((a, b) => a - b);
+    }
+
+    try {
+      const catalog = await fetchSubnetLatestCatalog({
+        taostatsBaseUrl: config.taostatsBaseUrl,
+        taostatsAuthHeader: config.taostatsAuthHeader,
+        rateLimiter: config.taostatsRateLimiter || null,
+        limit,
+      });
+      for (const subnet of Array.isArray(catalog) ? catalog : []) {
+        const subnetNetuid = Number.parseInt(String(subnet?.netuid), 10);
+        if (Number.isFinite(subnetNetuid) && subnetNetuid > 0) {
+          netuids.add(subnetNetuid);
+        }
+      }
+    } catch {
+      // Compatibility path: keep the configured subnet even if catalog discovery fails.
+    }
+
+    return [...netuids].sort((a, b) => a - b);
+  }
+
+  async function syncAllAlphaHolderSnapshots({
+    capturedAt = new Date().toISOString(),
+    skipIfAlreadyCapturedToday = true,
+    limit = 1024,
+  } = {}) {
+    if (!config.taostatsAuthHeader) {
+      return {
+        ok: false,
+        skipped: true,
+        source: 'alpha-holder-snapshot-all',
+        fetched: 0,
+        inserted: 0,
+        netuids: 0,
+        reason: 'Taostats API auth header is required for alpha holder snapshots',
+      };
+    }
+
+    const subnets = await resolveAlphaHolderNetuids({ limit });
+
+    let fetched = 0;
+    let inserted = 0;
+    let ok = true;
+    const results = [];
+
+    for (const netuid of subnets) {
+      try {
+        const snapshot = await syncAlphaHolderSnapshot({
+          netuid,
+          capturedAt,
+          skipIfAlreadyCapturedToday,
+        });
+        fetched += Number(snapshot.fetched || 0);
+        inserted += Number(snapshot.inserted || 0);
+        if (snapshot.ok === false || snapshot.error) {
+          ok = false;
+        }
+        results.push({
+          netuid,
+          ok: snapshot.ok !== false && !snapshot.error,
+          skipped: Boolean(snapshot.skipped),
+          fetched: Number(snapshot.fetched || 0),
+          inserted: Number(snapshot.inserted || 0),
+          reason: snapshot.reason || null,
+        });
+      } catch (error) {
+        ok = false;
+        results.push({
+          netuid,
+          ok: false,
+          skipped: false,
+          fetched: 0,
+          inserted: 0,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return {
+      ok,
+      skipped: false,
+      source: 'alpha-holder-snapshot-all',
+      fetched,
+      inserted,
+      netuids: subnets.length,
+      capturedAt,
+      results,
     };
   }
 
@@ -359,6 +463,170 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     });
   }
 
+  async function backfillAlphaHolderSnapshots({
+    capturedAt = new Date().toISOString(),
+    skipIfAlreadyCapturedToday = false,
+    limit = 1024,
+  } = {}) {
+    return syncAllAlphaHolderSnapshots({
+      capturedAt,
+      skipIfAlreadyCapturedToday,
+      limit,
+    });
+  }
+
+  async function backfillAlphaHolderHistoryForNetuid({
+    netuid,
+    days = config.taostatsBackfillDays ?? 30,
+    overwrite = config.taostatsBackfillOverwrite ?? true,
+  } = {}) {
+    if (!config.taostatsAuthHeader) {
+      return {
+        ok: false,
+        netuid,
+        fetched: 0,
+        inserted: 0,
+        deleted: 0,
+        skipped: 0,
+        reason: 'Taostats API auth header is required for alpha holder history backfill',
+      };
+    }
+
+    const rows = await fetchHistoricalStakeBalance({
+      netuid,
+      taostatsBaseUrl: config.taostatsBaseUrl,
+      taostatsAuthHeader: config.taostatsAuthHeader,
+      rateLimiter: config.taostatsRateLimiter || null,
+      days,
+    });
+
+    let deleted = 0;
+    let inserted = 0;
+    let skipped = 0;
+
+    if (overwrite && rows.length > 0) {
+      const capturedAts = rows
+        .map((row) => row.captured_at)
+        .filter(Boolean)
+        .sort();
+      const startIso = capturedAts[0];
+      const endIso = capturedAts[capturedAts.length - 1];
+      deleted = deleteAlphaHolderSnapshotsInRange(db, netuid, startIso, endIso);
+    }
+
+    for (const row of rows) {
+      if (!overwrite && row.block_number !== null && row.block_number !== undefined) {
+        const existing = db.prepare(`
+          SELECT 1
+          FROM alpha_holder_snapshots
+          WHERE netuid = ? AND block_number = ? AND coldkey_ss58 = ? AND hotkey_address_ss58 = ?
+          LIMIT 1
+        `).get(netuid, row.block_number, row.wallet_address_ss58 ?? null, row.hotkey_address_ss58 ?? null);
+        if (existing) {
+          skipped += 1;
+          continue;
+        }
+      }
+
+      insertAlphaHolderSnapshot(db, {
+        ...row,
+        source: row.source || 'api-history',
+        source_url: row.source_url || `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/stake_balance/history/v1`,
+        captured_at: row.captured_at || new Date().toISOString(),
+        dedupe_key: [
+          row.netuid ?? netuid,
+          row.block_number ?? row.remote_timestamp ?? row.captured_at,
+          row.wallet_address_ss58 ?? row.coldkey_ss58 ?? 'unknown',
+          row.hotkey_address_ss58 ?? 'unknown',
+        ].join(':'),
+      });
+      inserted += 1;
+    }
+
+    return {
+      ok: true,
+      netuid,
+      fetched: rows.length,
+      inserted,
+      deleted,
+      skipped,
+    };
+  }
+
+  async function backfillAlphaHolderHistory({
+    netuid = null,
+    days = config.taostatsBackfillDays ?? 30,
+    overwrite = config.taostatsBackfillOverwrite ?? true,
+    limit = 1024,
+  } = {}) {
+    if (!config.taostatsAuthHeader) {
+      return {
+        ok: false,
+        skipped: true,
+        source: 'alpha-holder-history-backfill',
+        fetched: 0,
+        inserted: 0,
+        deleted: 0,
+        netuids: 0,
+        reason: 'Taostats API auth header is required for alpha holder history backfill',
+      };
+    }
+
+    const subnets = await resolveAlphaHolderNetuids({ netuid, limit });
+    let fetched = 0;
+    let inserted = 0;
+    let deleted = 0;
+    let skipped = 0;
+    let ok = true;
+    const results = [];
+
+    for (const subnetNetuid of subnets) {
+      try {
+        const result = await backfillAlphaHolderHistoryForNetuid({
+          netuid: subnetNetuid,
+          days,
+          overwrite,
+        });
+        fetched += Number(result.fetched || 0);
+        inserted += Number(result.inserted || 0);
+        deleted += Number(result.deleted || 0);
+        skipped += Number(result.skipped || 0);
+        if (result.ok === false || result.error) {
+          ok = false;
+        }
+        results.push({
+          ...result,
+          ok: result.ok !== false && !result.error,
+        });
+      } catch (error) {
+        results.push({
+          ok: false,
+          netuid: subnetNetuid,
+          fetched: 0,
+          inserted: 0,
+          deleted: 0,
+          skipped: 0,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        ok = false;
+      }
+    }
+
+    return {
+      ok,
+      skipped: false,
+      source: 'alpha-holder-history-backfill',
+      fetched,
+      inserted,
+      deleted,
+      skipped,
+      days,
+      overwrite: Boolean(overwrite),
+      netuids: subnets.length,
+      results,
+    };
+  }
+
   async function ingestOnce({ netuid = config.netuid } = {}) {
     if (active) {
       return { skipped: true, reason: 'ingest already running' };
@@ -485,10 +753,10 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         }
       }
       try {
-        const alphaHolderSnapshot = await syncAlphaHolderSnapshot({
-          netuid,
+        const alphaHolderSnapshot = await syncAllAlphaHolderSnapshots({
           capturedAt: result.snapshot.captured_at,
           skipIfAlreadyCapturedToday: true,
+          limit: 1024,
         });
         alphaHolderFetched = alphaHolderSnapshot.fetched || 0;
         alphaHolderInserted = alphaHolderSnapshot.inserted || 0;
@@ -498,6 +766,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           alphaHolderInserted,
           alphaHolderSnapshotSkipped: Boolean(alphaHolderSnapshot.skipped),
           alphaHolderSnapshotCapturedAt: alphaHolderSnapshot.capturedAt || result.snapshot.captured_at,
+          alphaHolderSubnetCount: alphaHolderSnapshot.netuids || 0,
         };
       } catch (alphaHolderError) {
         detail = {
@@ -931,6 +1200,9 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     ingestOnce,
     backfillHistoricalSnapshots,
     syncAlphaHolderSnapshot,
+    syncAllAlphaHolderSnapshots,
+    backfillAlphaHolderSnapshots,
+    backfillAlphaHolderHistory,
     syncWalletActivity,
     syncWalletActivityForWallet,
     backfillWalletActivity,

@@ -28,6 +28,7 @@ Local dashboard for tracking Taostats subnet `110` with SQLite history storage.
 - Money In/Out charts use Taostats Tao Flow history so the historical view stays available even when the subnet snapshot history is sparse
 - Subnet stats are arranged as a 4-column grid so the ten cards flow into three neat rows
 - Includes an Alpha Holders card in Subnet stats that mirrors the Taostats SN110 chart holders tab count, derives the live count from the locally stored stake-balance holder snapshots, stores the latest holder addresses in SQLite, and opens a historical trend view from the locally stored snapshot history
+- Adds a local alpha-holder ranking panel that compares every stored subnet by the latest DB-backed holder count, highlights SN110 in that table, and opens a historical SN110 rank chart built from the same local snapshot history
 - Runs a dedicated daily alpha-holder snapshot job at UTC midnight so the holder chart keeps growing from local snapshots even when Taostats historical coverage is unavailable
 - Keeps the Alpha holder addresses section collapsed by default so the table stays out of the way until you expand it
 - Collapsible panels use a visible chevron affordance so expand/collapse behavior is easier to spot
@@ -96,6 +97,7 @@ npm run backfill -- --days 30 --frequency by_hour
 Add `--no-overwrite` if you want the historical importer to keep existing local rows instead of replacing the overlapping window.
 Use `npm run wallet-backfill -- --days 60` to prefill wallet activity rows for every configured coldkey.
 That command uses the same wallet activity sync flow as the admin-panel trigger and the scheduled refresh, so overlapping windows dedupe safely in SQLite.
+Use `npm run alpha-holder-backfill` to snapshot the current holder rows for every discovered subnet. That command seeds the local alpha-holder ranking/history views with a baseline, and the daily UTC snapshot job keeps those charts growing after the initial collection starts.
 
 ### Backfill command options
 
@@ -122,7 +124,8 @@ By default it deletes overlapping local rows in the requested time window before
 It also backfills TAO price history so USD toggles keep working for historical values.
 It also backfills Tao Flow history so the Money In/Out charts can render historical values from dedicated flow data.
 If wallets are configured, backfill also pulls Taostats account history for each configured coldkey and stores the daily wallet balance history locally.
-Alpha holder history is stored as snapshot rows in SQLite too, so the Alpha Holders card can chart previous days from the local `alpha_holder_snapshots` table.
+Alpha holder history is stored as snapshot rows in SQLite too, so the Alpha Holders card can chart previous days from the local `alpha_holder_snapshots` table. The new ranking panel also uses that table, so both the all-subnet ranking view and the SN110 rank chart only begin once local collection has stored its first alpha-holder samples.
+The ranking panel compares every stored subnet by latest local holder count, highlights SN110 in the table, and exposes a clickable SN110 rank card that opens the historical rank chart.
 Backfill also pulls historical hotkey stake snapshots for each configured coldkey, so the wallet modal can show a hotkey history section alongside the live current stake positions.
 Sentiment history will use SSI when Taostats provides it, with legacy Fear & Greed as a fallback for older live rows.
 
@@ -190,6 +193,7 @@ Implementation notes:
 - `npm run ingest -- --once` - fetch one snapshot and exit
 - `npm run backfill -- --days 30 --frequency by_hour` - backfill historical API data, then refresh the live snapshot
 - `npm run wallet-backfill -- --days 60` - backfill wallet activity for all configured coldkeys
+- `npm run alpha-holder-backfill` - snapshot the current alpha-holder row set for every discovered subnet so the ranking/history views start with a local baseline
 - `npm test` - run tests
 
 ## Endpoints
@@ -199,6 +203,8 @@ Implementation notes:
 - `/api/subnets/110/latest` - latest stored snapshot
 - `/api/subnets/110/history?days=30` - historical snapshots
 - `/api/subnets/110/flow-history?days=30` - historical Tao Flow series used by Money In/Out charts
+- `/api/subnets/110/alpha-holder-ranking` - latest local alpha-holder ranking across all stored subnets
+- `/api/subnets/110/alpha-holder-rank-history?days=30` - historical SN110 rank series built from local alpha-holder snapshots across subnets
 - `/api/wallets/<ss58>/latest` - latest stored wallet snapshot for a configured coldkey ss58 address
 - `/api/wallets/<ss58>/history?days=30` - historical wallet balance rows for a configured coldkey ss58 address
 - `/api/wallets/<ss58>/stake-history?days=30` - historical hotkey stake rows for a configured coldkey ss58 address

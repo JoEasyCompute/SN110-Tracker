@@ -18,8 +18,10 @@ const {
   getLatestIngestRunBySource,
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
+  getAlphaHolderLatestRanking,
   getAlphaHolderSnapshotHistory,
   getAlphaHolderSnapshotCounts,
+  getAlphaHolderSnapshotCountsByDay,
   countSnapshots,
   countWalletSnapshots,
   countWalletTransactions,
@@ -504,6 +506,147 @@ function attachAlphaHolderCounts(rows, alphaHolderCounts) {
   });
 }
 
+function buildAlphaHolderRankingRows(rows, currentNetuid = null) {
+  const sortedRows = Array.isArray(rows)
+    ? rows
+        .filter((row) => row && Number.isFinite(Number(row.netuid)))
+        .slice()
+        .sort((a, b) => {
+          const countDelta = Number(b.alpha_holders_num ?? 0) - Number(a.alpha_holders_num ?? 0);
+          if (countDelta !== 0) return countDelta;
+          const captureDelta = new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime();
+          if (captureDelta !== 0) return captureDelta;
+          return Number(a.netuid) - Number(b.netuid);
+        })
+    : [];
+
+  let previousCount = null;
+  let previousRank = 0;
+  const rankedRows = sortedRows.map((row, index) => {
+    const count = Number(row.alpha_holders_num ?? 0);
+    const rank = count !== previousCount ? index + 1 : previousRank;
+    previousCount = count;
+    previousRank = rank;
+    return {
+      netuid: Number(row.netuid),
+      captured_at: row.captured_at || null,
+      alpha_holders_num: Number.isFinite(count) ? count : 0,
+      rank_num: rank,
+      current: currentNetuid !== null && Number(row.netuid) === Number(currentNetuid),
+    };
+  });
+
+  return rankedRows;
+}
+
+function fetchAlphaHolderCurrentRanking(db, currentNetuid = null) {
+  const rows = db.prepare(`
+    WITH latest_capture AS (
+      SELECT netuid, MAX(captured_at) AS captured_at
+      FROM alpha_holder_snapshots
+      GROUP BY netuid
+    ),
+    latest_counts AS (
+      SELECT
+        a.netuid,
+        l.captured_at,
+        COUNT(*) AS alpha_holders_num
+      FROM alpha_holder_snapshots a
+      JOIN latest_capture l
+        ON a.netuid = l.netuid
+       AND a.captured_at = l.captured_at
+      WHERE COALESCE(a.balance_as_tao_num, 0) > 0
+      GROUP BY a.netuid, l.captured_at
+    )
+    SELECT
+      netuid,
+      captured_at,
+      alpha_holders_num
+    FROM latest_counts
+    ORDER BY alpha_holders_num DESC, captured_at DESC, netuid ASC
+  `).all();
+  return buildAlphaHolderRankingRows(rows, currentNetuid);
+}
+
+function fetchAlphaHolderRankHistory(db, netuid, sinceIso) {
+  const rows = db.prepare(`
+    WITH daily_latest AS (
+      SELECT
+        netuid,
+        substr(captured_at, 1, 10) AS day,
+        MAX(captured_at) AS captured_at
+      FROM alpha_holder_snapshots
+      WHERE captured_at >= ?
+      GROUP BY netuid, substr(captured_at, 1, 10)
+    ),
+    daily_counts AS (
+      SELECT
+        a.netuid,
+        l.day,
+        l.captured_at,
+        COUNT(*) AS alpha_holders_num
+      FROM alpha_holder_snapshots a
+      JOIN daily_latest l
+        ON a.netuid = l.netuid
+       AND substr(a.captured_at, 1, 10) = l.day
+       AND a.captured_at = l.captured_at
+      WHERE COALESCE(a.balance_as_tao_num, 0) > 0
+      GROUP BY a.netuid, l.day, l.captured_at
+      ORDER BY l.day ASC, alpha_holders_num DESC, a.netuid ASC
+    )
+    SELECT
+      netuid,
+      day,
+      captured_at,
+      alpha_holders_num
+    FROM daily_counts
+    ORDER BY day ASC, alpha_holders_num DESC, netuid ASC
+  `).all(sinceIso);
+
+  const groupedByDay = new Map();
+  for (const row of rows) {
+    if (!row || !row.day || !Number.isFinite(Number(row.netuid))) continue;
+    if (!groupedByDay.has(row.day)) groupedByDay.set(row.day, []);
+    groupedByDay.get(row.day).push({
+      netuid: Number(row.netuid),
+      captured_at: row.captured_at || null,
+      alpha_holders_num: Number(row.alpha_holders_num ?? 0),
+    });
+  }
+
+  const history = [];
+  for (const [day, dayRows] of groupedByDay.entries()) {
+    const sortedRows = dayRows
+      .slice()
+      .sort((a, b) => {
+        const countDelta = Number(b.alpha_holders_num ?? 0) - Number(a.alpha_holders_num ?? 0);
+        if (countDelta !== 0) return countDelta;
+        const captureDelta = new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime();
+        if (captureDelta !== 0) return captureDelta;
+        return Number(a.netuid) - Number(b.netuid);
+      });
+    let previousCount = null;
+    let previousRank = 0;
+    for (const [index, row] of sortedRows.entries()) {
+      const count = Number(row.alpha_holders_num ?? 0);
+      const rank = count !== previousCount ? index + 1 : previousRank;
+      previousCount = count;
+      previousRank = rank;
+      if (Number(row.netuid) !== Number(netuid)) continue;
+      history.push({
+        netuid: Number(row.netuid),
+        captured_at: row.captured_at || `${day}T00:00:00.000Z`,
+        alpha_holders_num: count,
+        rank_num: rank,
+        subnet_count_num: sortedRows.length,
+      });
+      break;
+    }
+  }
+
+  return history;
+}
+
 function currencyScaleForField(field) {
   return {
     market_cap_num: 1 / TAO_PER_RAO,
@@ -597,7 +740,7 @@ function getSubnetDataMetricDefs() {
     { key: 'owner_per_day_tao_num', label: 'Owner Share', description: 'This is the part of that daily TAO that goes to the subnet owner.', valueField: 'owner_per_day_tao_num', valueFormat: 'tao', historyField: 'owner_per_day_tao_num', chartLabel: 'Owner Share', chartColor: '#60a5fa', clickable: true },
     { key: 'miner_per_day_tao_num', label: 'Miner Share', description: 'This is the part of the daily TAO that goes to miners for doing the work that supports the subnet.', valueField: 'miner_per_day_tao_num', valueFormat: 'tao', historyField: 'miner_per_day_tao_num', chartLabel: 'Miner Share', chartColor: '#22c55e', clickable: true },
     { key: 'validator_per_day_tao_num', label: 'Validator Share', description: 'This is the part of the daily TAO that goes to validators for checking and confirming activity.', valueField: 'validator_per_day_tao_num', valueFormat: 'tao', historyField: 'validator_per_day_tao_num', chartLabel: 'Validator Share', chartColor: '#a855f7', clickable: true },
-    { key: 'alpha_holders_num', label: 'Alpha Holders', description: 'This is the number of holder rows in the latest subnet snapshot, derived from the stored holder snapshots. Click it to see the historical trend.', valueField: 'alpha_holders_num', valueFormat: 'integer', historyField: 'alpha_holders_num', chartLabel: 'Alpha Holders', chartColor: '#38bdf8', clickable: true, historySource: 'alpha-holder' },
+    { key: 'alpha_holders_num', label: 'Alpha Holders', description: 'This is the number of holder rows in the latest subnet snapshot, derived from the stored holder snapshots. Click it to see the historical trend, and use the new all-subnet ranking view below to compare SN110 with the rest.', valueField: 'alpha_holders_num', valueFormat: 'integer', historyField: 'alpha_holders_num', chartLabel: 'Alpha Holders', chartColor: '#38bdf8', clickable: true, historySource: 'alpha-holder' },
     { key: 'incentive_burn_num', label: 'Burn Rate', description: 'This shows how much reward is burned instead of being paid out. Higher values mean more gets removed from circulation.', valueField: 'incentive_burn_num', valueFormat: 'percent', historyField: 'incentive_burn_num', chartLabel: 'Burn Rate', chartColor: '#fb7185', clickable: true },
     { key: 'recycled_24_hours_num', label: 'Recycled TAO', description: 'This is the amount of TAO that got recycled in the last 24 hours. In plain English, it’s TAO that came back into use instead of staying spent.', valueField: 'recycled_24_hours_num', valueFormat: 'tao', historyField: 'recycled_24_hours_num', chartLabel: 'Recycled TAO', chartColor: '#38bdf8', clickable: true },
     { key: 'registration_cost_num', label: 'Registration Fee', description: 'This is the fee to register a new neuron. Think of it as the cost to get a seat at the table.', valueField: 'registration_cost_num', valueFormat: 'tao', historyField: 'registration_cost_num', chartLabel: 'Registration Fee', chartColor: '#c084fc', clickable: true },
@@ -830,7 +973,14 @@ function renderSubnetDataCards(latest) {
   return renderMetricCards(latest, getSubnetDataMetricDefs(), { defaultSubtext: false });
 }
 
-function renderAlphaHolderSection(rows, { latestCaptureAt = null, totalRowCount = null } = {}) {
+function renderAlphaHolderSection(rows, {
+  latestCaptureAt = null,
+  totalRowCount = null,
+  rankingRows = [],
+  currentRankingRow = null,
+  currentNetuid = null,
+  rankHistoryStartAt = null,
+} = {}) {
   const entries = Array.isArray(rows) ? rows : [];
   const latestCapturedAt = latestCaptureAt || entries[0]?.captured_at || null;
   const latestText = latestCapturedAt ? `Latest snapshot captured ${formatIso(latestCapturedAt)} from the local SQLite history.` : 'No alpha holder snapshots have been stored yet.';
@@ -838,6 +988,77 @@ function renderAlphaHolderSection(rows, { latestCaptureAt = null, totalRowCount 
     ? `${Number(totalRowCount).toLocaleString('en-US')} holder rows are present in the latest snapshot.`
     : '';
   const topLabel = entries.length ? `Showing the top ${entries.length} addresses from the latest holder snapshot.` : '';
+  const rankingEntries = Array.isArray(rankingRows) ? rankingRows.slice() : [];
+  const visibleRankingEntries = rankingEntries.slice(0, 15);
+  const currentVisibleRow = currentRankingRow && !visibleRankingEntries.some((row) => Number(row.netuid) === Number(currentRankingRow.netuid))
+    ? currentRankingRow
+    : null;
+  if (currentVisibleRow) {
+    visibleRankingEntries.push(currentVisibleRow);
+  }
+  const chartEntries = rankingEntries.slice(0, 10);
+  if (currentVisibleRow && !chartEntries.some((row) => Number(row.netuid) === Number(currentVisibleRow.netuid))) {
+    chartEntries.push(currentVisibleRow);
+  }
+  const chartMax = Math.max(1, ...chartEntries.map((row) => Number(row.alpha_holders_num ?? 0)));
+  const rankingChart = chartEntries.length
+    ? `
+      <div class="alpha-holder-ranking-chart" aria-label="Alpha-holder ranking bar chart">
+        <svg viewBox="0 0 1000 ${chartEntries.length * 34 + 28}" role="img" aria-label="Alpha-holder ranking bar chart">
+          ${chartEntries.map((row, index) => {
+            const barWidth = Math.max(8, Math.round((Number(row.alpha_holders_num ?? 0) / chartMax) * 710));
+            const y = 24 + index * 34;
+            const isCurrent = currentNetuid !== null && Number(row.netuid) === Number(currentNetuid);
+            return `
+              <text x="0" y="${y + 13}" class="alpha-holder-ranking-chart-label">#${escapeHtml(integer(row.rank_num))} SN${escapeHtml(row.netuid)}</text>
+              <rect x="210" y="${y}" width="${barWidth}" height="20" rx="10" class="alpha-holder-ranking-chart-bar${isCurrent ? ' current' : ''}"></rect>
+              <text x="${220 + barWidth}" y="${y + 13}" class="alpha-holder-ranking-chart-value">${escapeHtml(integer(row.alpha_holders_num))}</text>
+            `;
+          }).join('')}
+        </svg>
+      </div>
+    `
+    : '<p class="muted alpha-holder-ranking-chart-empty">No ranking data available yet.</p>';
+  const rankMetricCard = currentRankingRow ? metricCard({
+    label: `SN${currentNetuid} alpha-holder rank`,
+    value: integer(currentRankingRow.rank_num),
+    subtext: rankHistoryStartAt
+      ? `Current local rank among ${integer(rankingEntries.length)} tracked subnets. History starts at ${formatIso(rankHistoryStartAt)}. Click to open the local rank chart.`
+      : `Current local rank among ${integer(rankingEntries.length)} tracked subnets. Click to open the local rank chart.`,
+    tone: currentRankingRow.rank_num === 1 ? 'positive' : 'neutral',
+    clickable: true,
+    metricData: {
+      kind: 'alpha-holder-rank',
+      key: `alpha-holder-rank:${currentNetuid}`,
+      label: `SN${currentNetuid} alpha-holder rank`,
+      description: 'This is SN' + currentNetuid + '\'s place in the local alpha-holder ranking across all stored subnets. Lower numbers mean more alpha holders. The chart starts when local collection begins.',
+      valueField: 'rank_num',
+      valueFormat: 'integer',
+      historyField: 'rank_num',
+      chartLabel: `SN${currentNetuid} Alpha-holder rank`,
+      chartColor: '#38bdf8',
+      clickable: true,
+      historySource: 'alpha-holder-rank',
+      historyId: String(currentNetuid),
+      latestValue: integer(currentRankingRow.rank_num),
+      rawValue: integer(currentRankingRow.rank_num),
+      sourceText: 'Local alpha-holder ranking across all stored subnets',
+      displayValue: integer(currentRankingRow.rank_num),
+    },
+  }) : '';
+  const rankingBody = visibleRankingEntries.length
+    ? visibleRankingEntries.map((row) => {
+        const isCurrent = currentNetuid !== null && Number(row.netuid) === Number(currentNetuid);
+        return `
+          <tr${isCurrent ? ' class="current"' : ''}>
+            <td>${escapeHtml(integer(row.rank_num))}</td>
+            <td>${escapeHtml(`SN${row.netuid}`)}${isCurrent ? ' <span class="ranking-current-tag">Current</span>' : ''}</td>
+            <td>${escapeHtml(integer(row.alpha_holders_num))}</td>
+            <td>${escapeHtml(formatIso(row.captured_at))}</td>
+          </tr>
+        `;
+      }).join('')
+    : '<tr><td colspan="4" class="empty">No ranking rows are available yet.</td></tr>';
   const body = entries.length
     ? entries.map((row, index) => {
         const address = row.coldkey_ss58 || row.wallet_address_ss58 || '—';
@@ -876,6 +1097,30 @@ function renderAlphaHolderSection(rows, { latestCaptureAt = null, totalRowCount 
           </div>
         </div>
       </details>
+      <div class="panel alpha-holder-ranking-panel">
+        <div class="alpha-holder-ranking-head">
+          <div>
+            <h3>Alpha-holder ranking across subnets</h3>
+            <p class="muted">This view compares the latest local alpha-holder snapshot for every subnet stored in SQLite. It starts from the first collection point, so the ranking history only grows as the database collects more samples.</p>
+          </div>
+          ${rankMetricCard ? `<div class="alpha-holder-ranking-card">${rankMetricCard}</div>` : ''}
+        </div>
+        ${rankingChart}
+        <div class="table-wrap alpha-holder-ranking-table-wrap">
+          <table class="data-table alpha-holder-ranking-table">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Subnet</th>
+                <th>Alpha holders</th>
+                <th>Latest local capture</th>
+              </tr>
+            </thead>
+            <tbody>${rankingBody}</tbody>
+          </table>
+        </div>
+        <p class="muted alpha-holder-ranking-note">Historical rank charts begin with the first locally collected alpha-holder snapshot, so the early window can be sparse until more subnets have been collected.</p>
+      </div>
     </section>
   `;
 }
@@ -2022,6 +2267,57 @@ function buildComparisons(history, latest) {
   });
 }
 
+function buildAlphaHolderRanking(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => ({
+      rank: index + 1,
+      netuid: Number(row.netuid),
+      captured_at: row.captured_at,
+      alpha_holders_num: Number(row.alpha_holders_num ?? 0),
+    }))
+    .filter((row) => Number.isFinite(row.netuid) && row.netuid > 0)
+    .map((row) => ({
+      ...row,
+      label: `SN${row.netuid}`,
+    }));
+}
+
+function buildAlphaHolderRankHistory(rows, netuid) {
+  const targetNetuid = Number(netuid);
+  const days = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const rowNetuid = Number(row.netuid);
+    const dayKey = String(row.day || row.captured_at || '').slice(0, 10);
+    const capturedAt = row.captured_at || `${dayKey}T00:00:00.000Z`;
+    if (!Number.isFinite(rowNetuid) || rowNetuid <= 0 || !dayKey) continue;
+    const bucket = days.get(dayKey) || [];
+    bucket.push({
+      netuid: rowNetuid,
+      captured_at: capturedAt,
+      alpha_holders_num: Number(row.alpha_holders_num ?? 0),
+    });
+    days.set(dayKey, bucket);
+  }
+
+  const history = [];
+  for (const [dayKey, bucket] of [...days.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const ordered = bucket
+      .slice()
+      .sort((left, right) => right.alpha_holders_num - left.alpha_holders_num || left.netuid - right.netuid);
+    const entry = ordered.find((row) => row.netuid === targetNetuid);
+    if (!entry) continue;
+    history.push({
+      captured_at: entry.captured_at,
+      day: dayKey,
+      netuid: targetNetuid,
+      alpha_holders_num: entry.alpha_holders_num,
+      alpha_holder_rank: ordered.findIndex((row) => row.netuid === targetNetuid) + 1,
+      subnet_count: ordered.length,
+    });
+  }
+  return history.sort((left, right) => new Date(left.captured_at).getTime() - new Date(right.captured_at).getTime());
+}
+
 function buildPageModel({ db, config, netuid }) {
   const latest = getLatestSnapshot(db, netuid);
   const recent = getRecentSnapshots(db, netuid, 12);
@@ -2054,6 +2350,9 @@ function buildPageModel({ db, config, netuid }) {
   }));
   const latestWalletActivityRun = getLatestIngestRunBySource(db, 'wallet-activity');
   const latestAlphaHolderRows = latest ? getLatestAlphaHolderSnapshots(db, netuid, 20) : [];
+  const alphaHolderRankingRows = latest ? fetchAlphaHolderCurrentRanking(db, netuid) : [];
+  const alphaHolderCurrentRankRow = alphaHolderRankingRows.find((row) => Number(row.netuid) === Number(netuid)) || null;
+  const alphaHolderRankHistory = latest ? fetchAlphaHolderRankHistory(db, netuid, sinceIso) : [];
   const comparisons = latestWithPrice ? buildComparisons(historyWithAlphaHolders, latestWithPrice) : [];
 
   return {
@@ -2076,6 +2375,10 @@ function buildPageModel({ db, config, netuid }) {
     },
     alphaHolderRows: latestAlphaHolderRows,
     alphaHolderRowCount: Number.isFinite(latestAlphaHolderCount) ? latestAlphaHolderCount : 0,
+    alphaHolderRankingRows,
+    alphaHolderCurrentRankRow,
+    alphaHolderRankHistory,
+    alphaHolderRankHistoryStartAt: alphaHolderRankHistory[0]?.captured_at ?? null,
     totalWalletSnapshots,
     nextPollAtIso: config.nextPollAtIso ?? null,
     hasApiKey: Boolean(config.taostatsAuthHeader),
@@ -4563,6 +4866,12 @@ function renderDashboardClientScript({ netuid, config }) {
         return key.startsWith('net_flow_') || String(metric.label || '').toLowerCase().includes('money in/out');
       }
 
+      function isAlphaHolderRankMetric(metric) {
+        if (!metric) return false;
+        const key = String(metric.key || metric.historyField || '');
+        return metric.kind === 'alpha-holder-rank' || key === 'rank_num' || String(metric.label || '').toLowerCase().includes('alpha-holder rank');
+      }
+
       function priceMoveLookbackMs(metric) {
         const key = String(metric?.key || metric?.historyField || '');
         if (key.includes('_1_hour')) return 60 * 60 * 1000;
@@ -4712,6 +5021,22 @@ function renderDashboardClientScript({ netuid, config }) {
           }
           if (visiblePoints.length < Math.max(5, Math.min(rangeDays, 10))) {
             return 'Money In/Out is derived from the historical subnet snapshots and can look sparse if the local database does not yet have enough earlier samples.';
+          }
+        }
+        if (metric?.kind === 'alpha-holder' || String(metric?.key || '') === 'alpha_holders_num') {
+          if (!visiblePoints.length) {
+            return 'Alpha-holder history starts at the first locally collected snapshot and grows from there, so the chart may be sparse until collection has run for a while.';
+          }
+          if (visiblePoints.length < Math.max(5, Math.min(rangeDays, 10))) {
+            return 'Alpha-holder history starts when local collection begins, so early windows can be sparse until more snapshots are stored.';
+          }
+        }
+        if (isAlphaHolderRankMetric(metric)) {
+          if (!visiblePoints.length) {
+            return 'SN110 rank is computed from local alpha-holder snapshots across all stored subnets, so the chart starts at the first collection point.';
+          }
+          if (visiblePoints.length < Math.max(5, Math.min(rangeDays, 10))) {
+            return 'SN110 rank starts from the first locally collected alpha-holder snapshot, so the early chart may still be sparse.';
           }
         }
         if (isSentimentMetric(metric)) {
@@ -4955,6 +5280,8 @@ function renderDashboardClientScript({ netuid, config }) {
             ? 'wallet'
           : isTaoFlowMetric(metric)
             ? 'tao-flow'
+            : isAlphaHolderRankMetric(metric)
+              ? 'alpha-holder-rank'
             : 'subnet');
         const fetchDays = modalHistoryFetchDays(metric, days);
         let history = [];
@@ -5559,7 +5886,25 @@ function renderDashboardClientScript({ netuid, config }) {
 }
 
 function renderPage(model) {
-  const { latest, recent, ingestRun, totalSnapshots, totalWalletSnapshots, comparisons, config, netuid, latestTaoPriceUsd, nextPollAtIso, walletEntries, walletActivityStatus, alphaHolderRows, alphaHolderRowCount } = model;
+  const {
+    latest,
+    recent,
+    ingestRun,
+    totalSnapshots,
+    totalWalletSnapshots,
+    comparisons,
+    config,
+    netuid,
+    latestTaoPriceUsd,
+    nextPollAtIso,
+    walletEntries,
+    walletActivityStatus,
+    alphaHolderRows,
+    alphaHolderRowCount,
+    alphaHolderRankingRows,
+    alphaHolderCurrentRankRow,
+    alphaHolderRankHistoryStartAt,
+  } = model;
   const latestMetricDefs = getLatestMetricDefs();
   const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
   const insight = buildInsightSummary(latest, comparisons, signal);
@@ -6340,6 +6685,71 @@ function renderPage(model) {
       .alpha-holder-details[open] > summary::before {
         transform: rotate(90deg);
       }
+      .alpha-holder-ranking-panel {
+        margin-top: 14px;
+        display: grid;
+        gap: 14px;
+      }
+      .alpha-holder-ranking-head {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+        align-items: start;
+      }
+      .alpha-holder-ranking-head h3 {
+        margin: 0;
+      }
+      .alpha-holder-ranking-head p {
+        margin: 6px 0 0;
+      }
+      .alpha-holder-ranking-card .card {
+        margin: 0;
+      }
+      .alpha-holder-ranking-chart {
+        border: 1px solid rgba(143, 163, 184, 0.12);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.02);
+        padding: 10px;
+        overflow-x: auto;
+      }
+      .alpha-holder-ranking-chart svg {
+        display: block;
+        width: 100%;
+        min-width: 680px;
+        height: auto;
+      }
+      .alpha-holder-ranking-chart-label,
+      .alpha-holder-ranking-chart-value {
+        fill: var(--text);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .alpha-holder-ranking-chart-value {
+        fill: #bffbf1;
+      }
+      .alpha-holder-ranking-chart-bar {
+        fill: rgba(0, 219, 188, 0.55);
+      }
+      .alpha-holder-ranking-chart-bar.current {
+        fill: rgba(0, 219, 188, 0.95);
+      }
+      .alpha-holder-ranking-table tr.current {
+        background: rgba(0, 219, 188, 0.06);
+      }
+      .ranking-current-tag {
+        display: inline-flex;
+        align-items: center;
+        margin-left: 6px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(0, 219, 188, 0.12);
+        color: #bffbf1;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        vertical-align: middle;
+      }
       .wallet-attribution-history {
         margin-top: 14px;
       }
@@ -7036,6 +7446,9 @@ function renderPage(model) {
           flex-direction: column;
           align-items: stretch;
         }
+        .alpha-holder-ranking-head {
+          grid-template-columns: 1fr;
+        }
         .modal-header .button {
           align-self: flex-start;
         }
@@ -7217,7 +7630,14 @@ function renderPage(model) {
         <div class="grid stats">${latest ? renderSubnetDataCards(latest) : ''}</div>
       </section>
 
-      ${latest ? renderAlphaHolderSection(alphaHolderRows, { latestCaptureAt: alphaHolderRows?.[0]?.captured_at ?? null, totalRowCount: alphaHolderRowCount }) : ''}
+      ${latest ? renderAlphaHolderSection(alphaHolderRows, {
+        latestCaptureAt: alphaHolderRows?.[0]?.captured_at ?? null,
+        totalRowCount: alphaHolderRowCount,
+        rankingRows: alphaHolderRankingRows,
+        currentRankingRow: alphaHolderCurrentRankRow,
+        currentNetuid: netuid,
+        rankHistoryStartAt: alphaHolderRankHistoryStartAt,
+      }) : ''}
 
       <section class="section">
         <h2>What changed in the last 24h</h2>
@@ -7473,7 +7893,40 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
         const history = getAlphaHolderSnapshotHistory(db, netuid, sinceIso);
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ netuid, days, history }, null, 2));
+        res.end(JSON.stringify({
+          netuid,
+          days,
+          history,
+          collectionStartedAt: history[0]?.captured_at ?? null,
+        }, null, 2));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === `/api/subnets/${netuid}/alpha-holder-ranking`) {
+        const ranking = fetchAlphaHolderCurrentRanking(db, netuid);
+        const current = ranking.find((row) => Number(row.netuid) === Number(netuid)) || null;
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          netuid,
+          ranking,
+          current,
+          currentRank: current?.rank_num ?? null,
+          collectionStartedAt: current?.captured_at ?? ranking[0]?.captured_at ?? null,
+        }, null, 2));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === `/api/subnets/${netuid}/alpha-holder-rank-history`) {
+        const days = parseDays(url.searchParams);
+        const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        const history = fetchAlphaHolderRankHistory(db, netuid, sinceIso);
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          netuid,
+          days,
+          history,
+          collectionStartedAt: history[0]?.captured_at ?? null,
+        }, null, 2));
         return;
       }
 

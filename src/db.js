@@ -1294,6 +1294,192 @@ function getLatestAlphaHolderCount(db, netuid) {
   return Number(row?.count ?? 0);
 }
 
+function getLatestAlphaHolderCountsBySubnet(db) {
+  const rows = db.prepare(`
+    WITH latest_capture AS (
+      SELECT netuid, MAX(captured_at) AS captured_at
+      FROM alpha_holder_snapshots
+      GROUP BY netuid
+    )
+    SELECT
+      a.netuid,
+      l.captured_at,
+      COUNT(*) AS alpha_holders_num
+    FROM alpha_holder_snapshots a
+    JOIN latest_capture l
+      ON a.netuid = l.netuid
+     AND a.captured_at = l.captured_at
+    WHERE COALESCE(a.balance_as_tao_num, 0) > 0
+    GROUP BY a.netuid, l.captured_at
+    ORDER BY alpha_holders_num DESC, l.captured_at DESC, a.netuid ASC
+  `).all();
+
+  return rows.map((row) => ({
+    netuid: Number(row.netuid),
+    captured_at: row.captured_at ?? null,
+    alpha_holders_num: Number(row.alpha_holders_num ?? 0),
+  }));
+}
+
+function getAlphaHolderLatestRanking(db, limit = 100) {
+  const rows = db.prepare(`
+    WITH latest_capture AS (
+      SELECT
+        netuid,
+        MAX(captured_at) AS captured_at
+      FROM alpha_holder_snapshots
+      GROUP BY netuid
+    ),
+    latest_counts AS (
+      SELECT
+        a.netuid,
+        l.captured_at,
+        COUNT(*) AS alpha_holders_num
+      FROM alpha_holder_snapshots a
+      JOIN latest_capture l
+        ON a.netuid = l.netuid
+       AND a.captured_at = l.captured_at
+      WHERE COALESCE(a.balance_as_tao_num, 0) > 0
+      GROUP BY a.netuid, l.captured_at
+    )
+    SELECT
+      netuid,
+      captured_at,
+      alpha_holders_num
+    FROM latest_counts
+    ORDER BY alpha_holders_num DESC, netuid ASC
+    LIMIT ?
+  `).all(limit).map((row) => ({
+    netuid: Number(row.netuid),
+    captured_at: row.captured_at ?? null,
+    alpha_holders_num: Number(row.alpha_holders_num ?? 0),
+  }));
+
+  let previousCount = null;
+  let previousRank = 0;
+  return rows.map((row, index) => {
+    const count = Number(row.alpha_holders_num ?? 0);
+    const rankNum = count !== previousCount ? index + 1 : previousRank;
+    previousCount = count;
+    previousRank = rankNum;
+    return {
+      ...row,
+      rank_num: rankNum,
+    };
+  });
+}
+
+function getAlphaHolderRankSeries(db, netuid, sinceIso = null) {
+  const stmt = db.prepare(sinceIso ? `
+    WITH daily_latest AS (
+      SELECT
+        netuid,
+        substr(captured_at, 1, 10) AS day,
+        MAX(captured_at) AS captured_at
+      FROM alpha_holder_snapshots
+      WHERE captured_at >= ?
+      GROUP BY netuid, substr(captured_at, 1, 10)
+    ),
+    daily_counts AS (
+      SELECT
+        a.netuid,
+        l.day,
+        l.captured_at,
+        COUNT(*) AS alpha_holders_num
+      FROM alpha_holder_snapshots a
+      JOIN daily_latest l
+        ON a.netuid = l.netuid
+       AND substr(a.captured_at, 1, 10) = l.day
+       AND a.captured_at = l.captured_at
+      WHERE COALESCE(a.balance_as_tao_num, 0) > 0
+      GROUP BY a.netuid, l.day, l.captured_at
+      ORDER BY l.day ASC, alpha_holders_num DESC, a.netuid ASC
+    )
+    SELECT
+      netuid,
+      day,
+      captured_at,
+      alpha_holders_num
+    FROM daily_counts
+    ORDER BY day ASC, alpha_holders_num DESC, netuid ASC
+  ` : `
+    WITH daily_latest AS (
+      SELECT
+        netuid,
+        substr(captured_at, 1, 10) AS day,
+        MAX(captured_at) AS captured_at
+      FROM alpha_holder_snapshots
+      GROUP BY netuid, substr(captured_at, 1, 10)
+    ),
+    daily_counts AS (
+      SELECT
+        a.netuid,
+        l.day,
+        l.captured_at,
+        COUNT(*) AS alpha_holders_num
+      FROM alpha_holder_snapshots a
+      JOIN daily_latest l
+        ON a.netuid = l.netuid
+       AND substr(a.captured_at, 1, 10) = l.day
+       AND a.captured_at = l.captured_at
+      WHERE COALESCE(a.balance_as_tao_num, 0) > 0
+      GROUP BY a.netuid, l.day, l.captured_at
+      ORDER BY l.day ASC, alpha_holders_num DESC, a.netuid ASC
+    )
+    SELECT
+      netuid,
+      day,
+      captured_at,
+      alpha_holders_num
+    FROM daily_counts
+    ORDER BY day ASC, alpha_holders_num DESC, netuid ASC
+  `);
+  const rows = sinceIso ? stmt.all(sinceIso) : stmt.all();
+
+  const groupedByDay = new Map();
+  for (const row of rows) {
+    if (!row || !row.day || !Number.isFinite(Number(row.netuid))) continue;
+    if (!groupedByDay.has(row.day)) groupedByDay.set(row.day, []);
+    groupedByDay.get(row.day).push({
+      netuid: Number(row.netuid),
+      captured_at: row.captured_at || null,
+      alpha_holders_num: Number(row.alpha_holders_num ?? 0),
+    });
+  }
+
+  const history = [];
+  for (const [day, dayRows] of groupedByDay.entries()) {
+    const sortedRows = dayRows
+      .slice()
+      .sort((a, b) => {
+        const countDelta = Number(b.alpha_holders_num ?? 0) - Number(a.alpha_holders_num ?? 0);
+        if (countDelta !== 0) return countDelta;
+        const captureDelta = new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime();
+        if (captureDelta !== 0) return captureDelta;
+        return Number(a.netuid) - Number(b.netuid);
+      });
+    let previousCount = null;
+    let previousRank = 0;
+    for (const [index, row] of sortedRows.entries()) {
+      const count = Number(row.alpha_holders_num ?? 0);
+      const rankNum = count !== previousCount ? index + 1 : previousRank;
+      previousCount = count;
+      previousRank = rankNum;
+      if (Number(row.netuid) !== Number(netuid)) continue;
+      history.push({
+        netuid: Number(row.netuid),
+        captured_at: row.captured_at || `${day}T00:00:00.000Z`,
+        alpha_holders_num: count,
+        rank_num: rankNum,
+        subnet_count_num: sortedRows.length,
+      });
+      break;
+    }
+  }
+
+  return history;
+}
+
 function getAlphaHolderSnapshotLatestCapturedAt(db, netuid) {
   const stmt = db.prepare(`
     SELECT MAX(captured_at) AS captured_at
@@ -1711,7 +1897,10 @@ module.exports = {
   getLatestWalletStakePositions,
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
+  getLatestAlphaHolderCountsBySubnet,
+  getAlphaHolderLatestRanking,
   getAlphaHolderSnapshotLatestCapturedAt,
+  getAlphaHolderRankSeries,
   getAlphaHolderSnapshotHistory,
   getAlphaHolderSnapshotCounts,
   getWalletStakePositionsHistory,

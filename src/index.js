@@ -50,8 +50,12 @@ async function main() {
     const nextRunMs = msUntilNextUtcMidnight();
     config.nextAlphaHolderSnapshotAtIso = new Date(Date.now() + nextRunMs).toISOString();
     alphaHolderTimer = setTimeout(() => {
-      void ingestService.syncAlphaHolderSnapshot({ netuid: config.netuid }).catch((error) => {
-        console.error('Scheduled alpha-holder snapshot failed:', error);
+      if (ingestService.isActive()) {
+        scheduleAlphaHolderSnapshot();
+        return;
+      }
+      void ingestService.syncAllAlphaHolderSnapshots({ capturedAt: new Date().toISOString() }).catch((error) => {
+        console.error('Scheduled alpha-holder snapshot batch failed:', error);
       }).finally(() => {
         scheduleAlphaHolderSnapshot();
       });
@@ -137,7 +141,7 @@ async function main() {
     console.log(`Wallet activity sync: every ${config.taostatsWalletActivitySyncIntervalMinutes} minute${config.taostatsWalletActivitySyncIntervalMinutes === 1 ? '' : 's'} (recent ${config.taostatsWalletActivitySyncDays} days)`);
   }
   if (config.taostatsAuthHeader) {
-    console.log('Alpha-holder snapshots: daily at UTC midnight');
+    console.log('Alpha-holder snapshots: all subnets daily at UTC midnight');
   }
   if (config.taostatsBackfillOnStartup && config.taostatsBackfillDays > 0) {
     console.log(`Historical backfill: enabled (${config.taostatsBackfillDays} days, ${config.taostatsBackfillFrequency})`);

@@ -430,6 +430,65 @@ test('sqlite persistence stores and retrieves alpha holder snapshots', () => {
   db.close();
 });
 
+test('buildPageModel ranks subnets by the latest local alpha-holder counts', () => {
+  const db = openDatabase(':memory:');
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 110,
+    block_number: 9001,
+    timestamp: '2026-05-01T00:00:00Z',
+    price: '1.0',
+    market_cap: '100',
+    liquidity: '50',
+    emission: '10',
+    projected_emission: '0.1',
+    recycled_24_hours: '500000',
+    neuron_registration_cost: '500000',
+    active_keys: 256,
+    max_neurons: 256,
+    root_sell: 'NO',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 }));
+
+  const captures = [
+    { netuid: 110, count: 2 },
+    { netuid: 111, count: 5 },
+    { netuid: 112, count: 3 },
+  ];
+  for (const { netuid, count } of captures) {
+    for (let index = 0; index < count; index += 1) {
+      insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+        block_number: 9100000 + netuid,
+        timestamp: '2026-05-01T00:00:00Z',
+        netuid,
+        subnet_rank: index + 1,
+        subnet_total_holders: 10,
+        balance: String(1_000_000_000 - index),
+        balance_as_tao: String(500_000_000 - index),
+        coldkey: { ss58: `5Alpha${netuid}${index}`, hex: `0x${netuid}${index}` },
+        hotkey: { ss58: `5Val${netuid}${index}`, hex: `0xval${netuid}${index}` },
+        hotkey_name: `Validator ${netuid}-${index}`,
+      }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-01T00:00:00.000Z' }));
+    }
+  }
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [],
+    },
+    netuid: 110,
+  });
+
+  assert.equal(model.alphaHolderRankingRows.length, 3);
+  assert.deepEqual(model.alphaHolderRankingRows.map((row) => row.netuid), [111, 112, 110]);
+  assert.deepEqual(model.alphaHolderRankingRows.map((row) => row.rank_num), [1, 2, 3]);
+  assert.equal(model.alphaHolderCurrentRankRow?.rank_num, 3);
+  assert.equal(model.alphaHolderCurrentRankRow?.alpha_holders_num, 2);
+  db.close();
+});
+
 test('sqlite persistence stores and retrieves wallet transactions', () => {
   const db = openDatabase(':memory:');
   const walletConfig = { name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [] };
@@ -806,6 +865,54 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     hotkey: { ss58: '5taobotValidator123456789ABCDE', hex: '0xval2' },
     hotkey_name: 'tao.bot',
   }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: null, address: null, capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 111,
+    subnet_rank: 1,
+    subnet_total_holders: 39,
+    balance: '492569440000000',
+    balance_as_tao: '2487790000000',
+    coldkey: { ss58: '5OtherSubnetOne123456789ABCDEFG', hex: '0xholder3' },
+    hotkey: { ss58: '5OtherSubnetOneVal123456789ABC', hex: '0xval3' },
+    hotkey_name: 'Other Validator One',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: null, address: null, capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 111,
+    subnet_rank: 2,
+    subnet_total_holders: 39,
+    balance: '392569440000000',
+    balance_as_tao: '1487790000000',
+    coldkey: { ss58: '5OtherSubnetTwo123456789ABCDEFG', hex: '0xholder4' },
+    hotkey: { ss58: '5OtherSubnetTwoVal123456789ABC', hex: '0xval4' },
+    hotkey_name: 'Other Validator Two',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: null, address: null, capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 111,
+    subnet_rank: 3,
+    subnet_total_holders: 39,
+    balance: '292569440000000',
+    balance_as_tao: '487790000000',
+    coldkey: { ss58: '5OtherSubnetThree123456789ABCDEFG', hex: '0xholder5' },
+    hotkey: { ss58: '5OtherSubnetThreeVal123456789ABC', hex: '0xval5' },
+    hotkey_name: 'Other Validator Three',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: null, address: null, capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 112,
+    subnet_rank: 1,
+    subnet_total_holders: 39,
+    balance: '192569440000000',
+    balance_as_tao: '987790000000',
+    coldkey: { ss58: '5ThirdSubnetOne123456789ABCDEFG', hex: '0xholder6' },
+    hotkey: { ss58: '5ThirdSubnetOneVal123456789ABCD', hex: '0xval6' },
+    hotkey_name: 'Third Validator One',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: null, address: null, capturedAt: '2026-04-30T00:00:00.000Z' }));
   insertWalletSnapshot(db, normalizeAccountSnapshot({
     address: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
     network: 'finney',
@@ -868,9 +975,15 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('class="alpha-holder-details"'), true);
   assert.equal(html.includes('Alpha Holders'), true);
   assert.equal(html.includes('Alpha holder addresses'), true);
+  assert.equal(html.includes('Alpha-holder ranking across subnets'), true);
+  assert.equal(html.includes('SN110 alpha-holder rank'), true);
+  assert.equal(html.includes('History starts at'), true);
+  assert.equal(html.includes('SN111'), true);
+  assert.equal(html.includes('SN112'), true);
   assert.equal(html.includes('5Ebftb…CDEFGH'), true);
   assert.equal(html.includes('Green Compute'), true);
   assert.equal(model.latest.alpha_holders_num, 2);
+  assert.equal(model.alphaHolderCurrentRankRow?.rank_num, 2);
   const dom = new JSDOM(html);
   const alphaHolderDetails = dom.window.document.querySelector('.alpha-holder-details');
   assert.equal(alphaHolderDetails?.hasAttribute('open'), false);
@@ -883,6 +996,15 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   });
   assert.equal(alphaHoldersButton?.tagName, 'BUTTON');
   assert.equal(alphaHoldersButton?.querySelector('.card-value')?.textContent?.trim(), '2');
+  const rankButton = [...dom.window.document.querySelectorAll('[data-metric]')].find((element) => {
+    try {
+      return JSON.parse(element.getAttribute('data-metric') || '{}').label === 'SN110 alpha-holder rank';
+    } catch {
+      return false;
+    }
+  });
+  assert.equal(rankButton?.tagName, 'BUTTON');
+  assert.equal(rankButton?.querySelector('.card-value')?.textContent?.trim(), '2');
   assert.equal(html.includes('id="wallet-activity-topbar-badge"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-badge"'), true);
   assert.equal(html.includes('status-badge status-badge-neutral'), true);
@@ -1459,6 +1581,58 @@ test('alpha holder history endpoint returns daily holder rows from local snapsho
   assert.equal(payload.history.length, 2);
   assert.equal(payload.history[0].alpha_holders_num, 1);
   assert.equal(payload.history[1].alpha_holders_num, 2);
+  assert.equal(payload.collectionStartedAt, '2026-04-30T00:00:00.000Z');
+  await app.close();
+  db.close();
+});
+
+test('alpha holder rank history endpoint returns local ranks across subnets and starts at first collection', async () => {
+  const db = openDatabase(':memory:');
+  const day1 = '2026-04-30T00:00:00.000Z';
+  const day2 = '2026-05-01T00:00:00.000Z';
+  const scenarios = [
+    { netuid: 110, day: day1, count: 1 },
+    { netuid: 111, day: day1, count: 3 },
+    { netuid: 112, day: day1, count: 2 },
+    { netuid: 110, day: day2, count: 4 },
+    { netuid: 111, day: day2, count: 2 },
+    { netuid: 112, day: day2, count: 5 },
+  ];
+
+  for (const { netuid, day, count } of scenarios) {
+    for (let index = 0; index < count; index += 1) {
+      insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+        block_number: 8200000 + netuid + (day === day2 ? 1000 : 0),
+        timestamp: day,
+        netuid,
+        subnet_rank: index + 1,
+        subnet_total_holders: 10,
+        balance: String(1_000_000_000 + index),
+        balance_as_tao: String(500_000_000 + index),
+        coldkey: { ss58: `5Rank${netuid}${day}${index}`, hex: `0xrank${netuid}${index}` },
+        hotkey: { ss58: `5RankVal${netuid}${day}${index}`, hex: `0xrankval${netuid}${index}` },
+        hotkey_name: `Validator ${netuid}-${index}`,
+      }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: day }));
+    }
+  }
+
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: { netuid: 110, taostatsAuthHeader: '', pollIntervalMinutes: 60, nextPollAtIso: null },
+  });
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/alpha-holder-rank-history?days=30`);
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.days, 30);
+  assert.equal(payload.collectionStartedAt, day1);
+  assert.equal(payload.history.length, 2);
+  assert.equal(payload.history[0].alpha_holders_num, 1);
+  assert.equal(payload.history[0].rank_num, 3);
+  assert.equal(payload.history[1].alpha_holders_num, 4);
+  assert.equal(payload.history[1].rank_num, 2);
   await app.close();
   db.close();
 });

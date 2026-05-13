@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-11T00:00:00Z",
+  "updated_at": "2026-05-13T00:00:00Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -10,6 +10,7 @@
     "The financial perspective area now also includes a watchlist panel that keeps the core alerts (price vs flow, sentiment watch, supply watch) visible in a stable beginner-friendly format.",
     "The dashboard can now track multiple configured wallet balances from Taostats account latest/history endpoints using coldkeys, optional hotkeys, optional hotkey ROLE tags for validator/owner attribution, and wallet names from .env, and the wallet modal now also shows a compact wallet profile with rank, created-on date, hotkey summary, estimated income sources, current subnet stake positions, and a collapsible hotkey history section backed by historical stake snapshots with delta color-coding.",
     "The subnet stats section now includes an Alpha Holders card that derives the live holder-row count from the local alpha_holder_snapshots table, stores the latest holder addresses from Taostats stake-balance data, opens a historical trend from the locally stored snapshot history, is fed by a dedicated daily alpha-holder snapshot job at UTC midnight, and keeps the Alpha holder addresses section collapsed by default.",
+    "The dashboard now also includes an all-subnet alpha-holder ranking panel that compares every locally stored subnet by latest holder-row count, highlights SN110 in the table, and exposes a clickable SN110 rank card that opens the historical rank chart built from the same local alpha_holder_snapshots table.",
     "The wallet modal previously regressed because renderWalletDetails referenced a nonexistent walletStakeHistory variable; keep the browser modal using state.modalStakeHistory and guard wallet-specific rendering so a hotkey-history issue cannot blank the main wallet chart.",
     "The dashboard now includes a standalone Pool growth estimator section directly underneath the wallet section; it uses the latest local subnet pool snapshot, simulates TAO injection locally, and must fail closed if the pool reserves or price are missing.",
     "The pool growth estimator now also shows implied projected subnet market cap plus reserve impact alongside the alpha and price estimates; those market-cap figures are derived from the current snapshot and should be treated as estimates.",
@@ -23,6 +24,7 @@
     "When TAOSTATS_ADMIN_API_KEY is configured, the POST admin routes (/api/subnets/:netuid/ingest, /api/subnets/:netuid/backfill, and /api/settings/poll-interval) must receive the matching X-Admin-API-Key header; the browser admin controls already send it.",
     "The admin panel also exposes a browser-triggered backfill form that posts to /api/subnets/:netuid/backfill, plus a wallet activity backfill control that posts to /api/subnets/:netuid/wallet-backfill.",
     "Backfill mode imports subnet history, TAO price history, Tao Flow history, configured wallet balance history, historical hotkey stake snapshots, and alpha-holder address snapshots, then refreshes the live snapshot.",
+    "A dedicated alpha-holder backfill command can snapshot the current holder rows for every discovered subnet so the ranking and SN110 rank-history views start from a local baseline, and the daily UTC snapshot job keeps those all-subnet samples growing after the initial collection starts.",
     "Wallet activity uses a dedicated SQLite cache table for extrinsics, transfers, and derived stake-delta events, a separate wallet-backfill command, and a rolling scheduled sync window so overlapping runs dedupe safely.",
     "TAO-denominated values can be toggled between TAO and USD using the stored TAO price history.",
     "Missing metric values must remain null in charts and render as gaps, not zeroes.",
