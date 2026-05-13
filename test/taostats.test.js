@@ -766,6 +766,57 @@ test('stake-balance latest fetch emits page-level progress updates', async () =>
   }
 });
 
+test('stake-balance latest fetch retries 429 once and emits wait prompts', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  const progress = [];
+  global.fetch = async (url) => {
+    calls.push(String(url));
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 429,
+        text: async () => JSON.stringify({ error: 'rate limited' }),
+      };
+    }
+    const rows = [{
+      block_number: 601,
+      netuid: 110,
+      subnet_rank: 1,
+      subnet_total_holders: 1,
+      balance: '1000000000',
+      balance_as_tao: '1000000000',
+      coldkey: { ss58: '5RetryHolder', hex: '0xretry' },
+      hotkey: { ss58: '5RetryHotkey', hex: '0xretryhot' },
+      hotkey_name: 'Retry Validator',
+    }];
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(rows),
+    };
+  };
+
+  try {
+    const rows = await fetchStakeBalanceLatest({
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      limit: 200,
+      retryDelayMs: 0,
+      onProgress: (event) => progress.push(event),
+    });
+
+    assert.equal(rows.length, 1);
+    assert.equal(calls.length, 2);
+    assert.equal(progress.some((event) => event.phase === 'retry-wait' && event.page === 1), true);
+    assert.equal(progress.some((event) => event.phase === 'retrying' && event.page === 1), true);
+    assert.equal(progress.some((event) => event.phase === 'page' && event.page === 1 && event.pageRows === 1), true);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('alpha holder snapshot backfill does not depend on stake-balance history', async () => {
   const db = openDatabase(':memory:');
   const capturedAt = '2026-05-11T00:00:00.000Z';

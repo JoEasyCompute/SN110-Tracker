@@ -12,6 +12,20 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function formatDurationShort(ms) {
+  const value = Math.max(0, Math.round(Number(ms) || 0));
+  const seconds = Math.floor(value / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds}s`;
+}
+
 function createRateLimiter({ maxRequests = 5, intervalMs = 60_000 } = {}) {
   if (!Number.isFinite(maxRequests) || maxRequests < 1) {
     throw new Error('maxRequests must be a positive number');
@@ -945,6 +959,8 @@ async function fetchStakeBalanceLatest({
   capturedAt = nowIso(),
   limit = 200,
   onProgress = null,
+  retryDelayMs = 60_000,
+  maxRetries = 1,
 }) {
   if (!taostatsAuthHeader) {
     return [];
@@ -980,8 +996,47 @@ async function fetchStakeBalanceLatest({
       ok: true,
       message: `fetching page ${page}`,
     });
-    const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
-    const pageRows = extractRecords(json);
+    let pageRows = [];
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      try {
+        const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
+        pageRows = extractRecords(json);
+        break;
+      } catch (error) {
+        if (Number(error?.status) === 429 && attempt < maxRetries) {
+          const delayMs = Math.max(0, Number(retryDelayMs) || 0);
+          emitProgress({
+            phase: 'retry-wait',
+            operation: 'stake-balance-latest',
+            page,
+            pageSize,
+            netuid: netuid ?? null,
+            coldkey: coldkey ?? null,
+            hotkey: hotkey ?? null,
+            retryAfterMs: delayMs,
+            attempt: attempt + 1,
+            ok: false,
+            message: `rate limited on page ${page}; sleeping ${formatDurationShort(delayMs)} before retry`,
+          });
+          await waitMs(delayMs);
+          emitProgress({
+            phase: 'retrying',
+            operation: 'stake-balance-latest',
+            page,
+            pageSize,
+            netuid: netuid ?? null,
+            coldkey: coldkey ?? null,
+            hotkey: hotkey ?? null,
+            retryAfterMs: delayMs,
+            attempt: attempt + 1,
+            ok: true,
+            message: `retrying page ${page} after ${formatDurationShort(delayMs)}`,
+          });
+          continue;
+        }
+        throw error;
+      }
+    }
     emitProgress({
       phase: 'page',
       operation: 'stake-balance-latest',
