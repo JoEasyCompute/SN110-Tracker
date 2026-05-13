@@ -1079,7 +1079,9 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="backfill-frequency"'), true);
   assert.equal(html.includes('id="backfill-overwrite"'), true);
   assert.equal(html.includes('id="backfill-btn"'), true);
+  assert.equal(html.includes('id="backfill-progress"'), true);
   assert.equal(html.includes('id="wallet-backfill-btn"'), true);
+  assert.equal(html.includes('id="wallet-backfill-progress"'), true);
   assert.equal(html.includes('history-modal-wallet-details'), true);
   assert.equal(html.includes('data-history-range="1"'), true);
   assert.equal(html.includes('data-history-range="7" aria-pressed="true"'), true);

@@ -2586,6 +2586,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               <div class="admin-actions">
                 <button class="button primary" type="button" id="backfill-btn">Run backfill</button>
               </div>
+              <progress class="admin-progress" id="backfill-progress" hidden></progress>
               <p class="empty" id="backfill-status" hidden></p>
             </div>
           </div>
@@ -2602,6 +2603,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               <div class="admin-actions">
                 <button class="button primary" type="button" id="wallet-backfill-btn">Backfill wallet activity</button>
               </div>
+              <progress class="admin-progress" id="wallet-backfill-progress" hidden></progress>
               <p class="empty" id="wallet-backfill-status" hidden></p>
             </div>
           </div>
@@ -2864,9 +2866,11 @@ function renderDashboardClientScript({ netuid, config }) {
       const backfillOverwriteInput = document.getElementById('backfill-overwrite');
       const backfillButton = document.getElementById('backfill-btn');
       const backfillStatus = document.getElementById('backfill-status');
+      const backfillProgress = document.getElementById('backfill-progress');
       const walletBackfillDaysInput = document.getElementById('wallet-backfill-days');
       const walletBackfillButton = document.getElementById('wallet-backfill-btn');
       const walletBackfillStatus = document.getElementById('wallet-backfill-status');
+      const walletBackfillProgress = document.getElementById('wallet-backfill-progress');
 
       const chartConfigs = ${JSON.stringify(getChartMetricConfigs())};
 
@@ -4463,6 +4467,16 @@ function renderDashboardClientScript({ netuid, config }) {
         backfillStatus.dataset.status = kind;
       }
 
+      function setProgressVisible(progressElement, visible) {
+        if (!progressElement) return;
+        progressElement.hidden = !visible;
+        if (visible) {
+          progressElement.removeAttribute('value');
+          progressElement.removeAttribute('max');
+          progressElement.max = 100;
+        }
+      }
+
       function readBackfillOptions() {
         return {
           days: Number.parseInt(String(backfillDaysInput?.value || ''), 10),
@@ -4485,7 +4499,8 @@ function renderDashboardClientScript({ netuid, config }) {
           return;
         }
         backfillButton.disabled = true;
-        updateBackfillStatus('Backfill is running… this may take a while.', 'info');
+        setProgressVisible(backfillProgress, true);
+        updateBackfillStatus('Backfilling subnet history, TAO price, Tao Flow, wallet history, and alpha-holder snapshots…', 'info');
         try {
           const response = await fetch('/api/subnets/' + netuid + '/backfill', {
             method: 'POST',
@@ -4510,6 +4525,7 @@ function renderDashboardClientScript({ netuid, config }) {
           updateBackfillStatus(error?.message || 'Backfill failed', 'error');
           console.error(error);
         } finally {
+          setProgressVisible(backfillProgress, false);
           backfillButton.disabled = false;
         }
       }
@@ -4526,6 +4542,7 @@ function renderDashboardClientScript({ netuid, config }) {
           return;
         }
         walletBackfillButton.disabled = true;
+        setProgressVisible(walletBackfillProgress, true);
         if (walletBackfillStatus) {
           walletBackfillStatus.hidden = false;
           walletBackfillStatus.dataset.status = 'info';
@@ -4564,6 +4581,7 @@ function renderDashboardClientScript({ netuid, config }) {
           }
           console.error(error);
         } finally {
+          setProgressVisible(walletBackfillProgress, false);
           walletBackfillButton.disabled = false;
         }
       }
@@ -6749,6 +6767,27 @@ function renderPage(model) {
         letter-spacing: 0.06em;
         text-transform: uppercase;
         vertical-align: middle;
+      }
+      .admin-progress {
+        width: 100%;
+        height: 10px;
+        border: 0;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(143, 163, 184, 0.12);
+        margin: 10px 0 8px;
+      }
+      .admin-progress::-webkit-progress-bar {
+        background: rgba(143, 163, 184, 0.12);
+        border-radius: 999px;
+      }
+      .admin-progress::-webkit-progress-value {
+        background: linear-gradient(90deg, #00dbbc, #38bdf8);
+        border-radius: 999px;
+      }
+      .admin-progress::-moz-progress-bar {
+        background: linear-gradient(90deg, #00dbbc, #38bdf8);
+        border-radius: 999px;
       }
       .wallet-attribution-history {
         margin-top: 14px;
