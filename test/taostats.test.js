@@ -19,6 +19,7 @@ const {
   countAlphaHolders,
   extractSubnetHoldersCountFromHtml,
   createRateLimiter,
+  fetchStakeBalanceLatest,
 } = require('../src/taostats');
 const {
   estimatePoolGrowth,
@@ -714,6 +715,54 @@ test('alpha holder backfill reports CLI-friendly progress updates with eta field
   assert.equal(historyEvents.some((event) => Object.prototype.hasOwnProperty.call(event, 'etaIso')), true);
 
   db.close();
+});
+
+test('stake-balance latest fetch emits page-level progress updates', async () => {
+  const originalFetch = global.fetch;
+  const calls = [];
+  const progress = [];
+  global.fetch = async (url) => {
+    calls.push(String(url));
+    const page = Number(new URL(url).searchParams.get('page'));
+    const rows = page === 1
+      ? [{
+        block_number: 501,
+        netuid: 110,
+        subnet_rank: 1,
+        subnet_total_holders: 2,
+        balance: '1000000000',
+        balance_as_tao: '1000000000',
+        coldkey: { ss58: '5AlphaHolder1', hex: '0xholder1' },
+        hotkey: { ss58: '5Val1', hex: '0xval1' },
+        hotkey_name: 'Validator 1',
+      }]
+      : [];
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(rows),
+    };
+  };
+
+  try {
+    const rows = await fetchStakeBalanceLatest({
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      limit: 1,
+      onProgress: (event) => progress.push(event),
+    });
+
+    assert.equal(rows.length, 1);
+    assert.equal(calls.length, 2);
+    assert.equal(progress.filter((event) => event.phase === 'page-start').length, 2);
+    assert.equal(progress.filter((event) => event.phase === 'page').length, 2);
+    assert.equal(progress.some((event) => event.phase === 'page-start' && event.page === 1), true);
+    assert.equal(progress.some((event) => event.phase === 'page' && event.page === 1 && event.pageRows === 1), true);
+    assert.equal(progress.some((event) => event.phase === 'page' && event.page === 2 && event.pageRows === 0), true);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test('alpha holder snapshot backfill does not depend on stake-balance history', async () => {

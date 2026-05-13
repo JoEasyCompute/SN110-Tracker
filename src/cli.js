@@ -77,9 +77,12 @@ function createProgressPrinter(label) {
       : '[░░░░░░░░░░░░░░░░░░]';
     const netuidValue = progress.netuid !== null && progress.netuid !== undefined ? Number(progress.netuid) : null;
     const netuidLabel = Number.isFinite(netuidValue) && netuidValue > 0 ? ` SN${netuidValue}` : '';
+    const pageValue = progress.page !== null && progress.page !== undefined ? Number(progress.page) : null;
+    const pageLabel = Number.isFinite(pageValue) && pageValue > 0 ? ` p${pageValue}` : '';
     const counts = [];
     if (Number.isFinite(Number(progress.fetched))) counts.push(`fetched ${Number(progress.fetched).toLocaleString('en-US')}`);
     if (Number.isFinite(Number(progress.inserted))) counts.push(`inserted ${Number(progress.inserted).toLocaleString('en-US')}`);
+    if (Number.isFinite(Number(progress.pageRows))) counts.push(`page rows ${Number(progress.pageRows).toLocaleString('en-US')}`);
     if (Number.isFinite(Number(progress.deleted)) && Number(progress.deleted) > 0) counts.push(`deleted ${Number(progress.deleted).toLocaleString('en-US')}`);
     if (Number.isFinite(Number(progress.skipped)) && Number(progress.skipped) > 0) counts.push(`skipped ${Number(progress.skipped).toLocaleString('en-US')}`);
     const countsText = counts.length ? ` • ${counts.join(' • ')}` : '';
@@ -87,12 +90,16 @@ function createProgressPrinter(label) {
       ? 'done'
       : progress.phase === 'item-start'
         ? 'starting'
+        : progress.phase === 'page-start'
+          ? `fetching page ${Number.isFinite(pageValue) ? pageValue : '?' }`
+          : progress.phase === 'page'
+            ? `page ${Number.isFinite(pageValue) ? pageValue : '?'} complete`
       : progress.error
         ? `error: ${progress.error}`
         : progress.message || 'running';
     const line = total > 0
-      ? `[${label}] ${completed}/${total}${remaining > 0 ? ` (${remaining} remaining)` : ''}${netuidLabel} ${bar} ${etaText} • ${elapsedText}${countsText} • ${status}`
-      : `[${label}] ${netuidLabel ? `${netuidLabel} ` : ''}${status}`;
+      ? `[${label}] ${completed}/${total}${remaining > 0 ? ` (${remaining} remaining)` : ''}${netuidLabel}${pageLabel} ${bar} ${etaText} • ${elapsedText}${countsText} • ${status}`
+      : `[${label}] ${netuidLabel || pageLabel ? `${netuidLabel}${pageLabel} ` : ''}${status}`;
     write(line, progress.phase === 'done');
   };
 }

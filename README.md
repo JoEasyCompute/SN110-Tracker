@@ -99,6 +99,7 @@ Use `npm run wallet-backfill -- --days 60` to prefill wallet activity rows for e
 That command uses the same wallet activity sync flow as the admin-panel trigger and the scheduled refresh, so overlapping windows dedupe safely in SQLite.
 Use `npm run alpha-holder-backfill` or `npm run alpha-holder-history-backfill` to snapshot the current holder rows for every discovered subnet. Those commands seed the local alpha-holder ranking/history views with a baseline, and the daily UTC snapshot job keeps those charts growing after the initial collection starts.
 The `alpha-holder-history-backfill` alias now reuses the supported snapshot path instead of calling an unsupported Taostats subnet-history endpoint; both CLI commands stream per-subnet progress to stderr and include a live ETA so long fills are easier to monitor from the terminal.
+While each subnet is loading, the CLI also prints page-level heartbeat lines so you can tell whether the fetch is still active before the subnet finishes.
 
 ### Backfill command options
 
@@ -194,9 +195,9 @@ Implementation notes:
 - `npm run ingest -- --once` - fetch one snapshot and exit
 - `npm run backfill -- --days 30 --frequency by_hour` - backfill historical API data, then refresh the live snapshot
 - `npm run wallet-backfill -- --days 60` - backfill wallet activity for all configured coldkeys
-- `npm run alpha-holder-backfill` - snapshot the current alpha-holder row set for every discovered subnet so the ranking/history views start with a local baseline; prints live progress and ETA to stderr
-- `npm run alpha-holder-history-backfill` - alias for the alpha-holder backfill command; reuses the supported snapshot path and prints live progress and ETA to stderr
-- `npm run alpha-holder-sync` - refresh the latest alpha-holder snapshot rows for every discovered subnet; prints live progress and ETA to stderr
+- `npm run alpha-holder-backfill` - snapshot the current alpha-holder row set for every discovered subnet so the ranking/history views start with a local baseline; prints live progress, page heartbeats, and ETA to stderr
+- `npm run alpha-holder-history-backfill` - alias for the alpha-holder backfill command; reuses the supported snapshot path and prints live progress, page heartbeats, and ETA to stderr
+- `npm run alpha-holder-sync` - refresh the latest alpha-holder snapshot rows for every discovered subnet; prints live progress, page heartbeats, and ETA to stderr
 - `npm test` - run tests
 
 ## Endpoints

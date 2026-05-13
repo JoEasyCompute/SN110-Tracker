@@ -102,6 +102,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = true,
     limit = 1024,
+    onProgress = null,
   } = {}) {
     if (!config.taostatsAuthHeader) {
       return {
@@ -138,6 +139,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       rateLimiter: config.taostatsRateLimiter || null,
       capturedAt,
       limit,
+      onProgress,
     });
     const inserted = await storeAlphaHolderRows({
       rows,

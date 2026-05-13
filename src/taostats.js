@@ -944,6 +944,7 @@ async function fetchStakeBalanceLatest({
   rateLimiter = null,
   capturedAt = nowIso(),
   limit = 200,
+  onProgress = null,
 }) {
   if (!taostatsAuthHeader) {
     return [];
@@ -951,6 +952,11 @@ async function fetchStakeBalanceLatest({
 
   const headers = { authorization: taostatsAuthHeader };
   const rows = [];
+  const emitProgress = (payload) => {
+    if (typeof onProgress === 'function') {
+      onProgress(payload);
+    }
+  };
 
   for (let page = 1; page <= 100; page += 1) {
     const url = new URL('/api/dtao/stake_balance/latest/v1', taostatsBaseUrl);
@@ -960,8 +966,35 @@ async function fetchStakeBalanceLatest({
     url.searchParams.set('order', 'balance_as_tao_desc');
     url.searchParams.set('limit', String(limit));
     url.searchParams.set('page', String(page));
+    emitProgress({
+      phase: 'page-start',
+      operation: 'stake-balance-latest',
+      page,
+      pageSize: limit,
+      netuid: netuid ?? null,
+      coldkey: coldkey ?? null,
+      hotkey: hotkey ?? null,
+      fetched: rows.length,
+      rowsFetched: rows.length,
+      ok: true,
+      message: `fetching page ${page}`,
+    });
     const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
     const pageRows = extractRecords(json);
+    emitProgress({
+      phase: 'page',
+      operation: 'stake-balance-latest',
+      page,
+      pageSize: limit,
+      pageRows: pageRows.length,
+      fetched: rows.length + pageRows.length,
+      rowsFetched: rows.length + pageRows.length,
+      netuid: netuid ?? null,
+      coldkey: coldkey ?? null,
+      hotkey: hotkey ?? null,
+      ok: true,
+      message: `page ${page} fetched ${pageRows.length} rows`,
+    });
     if (!pageRows.length) break;
     rows.push(...pageRows);
     if (pageRows.length < limit) break;
