@@ -192,6 +192,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = true,
     limit = 1024,
+    onProgress = null,
   } = {}) {
     if (!config.taostatsAuthHeader) {
       return {
@@ -206,13 +207,36 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     }
 
     const subnets = await resolveAlphaHolderNetuids({ limit });
+    const startedAtMs = Date.now();
+    const emitProgress = (payload) => {
+      if (typeof onProgress === 'function') {
+        onProgress(payload);
+      }
+    };
+
+    emitProgress({
+      phase: 'start',
+      operation: 'alpha-holder-sync',
+      total: subnets.length,
+      completed: 0,
+      remaining: subnets.length,
+      elapsedMs: 0,
+      etaMs: null,
+      etaIso: null,
+      netuid: null,
+      fetched: 0,
+      inserted: 0,
+      skipped: false,
+      ok: true,
+      capturedAt,
+    });
 
     let fetched = 0;
     let inserted = 0;
     let ok = true;
     const results = [];
 
-    for (const netuid of subnets) {
+    for (const [index, netuid] of subnets.entries()) {
       try {
         const snapshot = await syncAlphaHolderSnapshot({
           netuid,
@@ -232,6 +256,27 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           inserted: Number(snapshot.inserted || 0),
           reason: snapshot.reason || null,
         });
+        const completed = index + 1;
+        const elapsedMs = Date.now() - startedAtMs;
+        const etaMs = completed > 0 && completed < subnets.length
+          ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
+          : 0;
+        emitProgress({
+          phase: 'item',
+          operation: 'alpha-holder-sync',
+          total: subnets.length,
+          completed,
+          remaining: Math.max(0, subnets.length - completed),
+          elapsedMs,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          netuid,
+          fetched: Number(snapshot.fetched || 0),
+          inserted: Number(snapshot.inserted || 0),
+          skipped: Boolean(snapshot.skipped),
+          ok: snapshot.ok !== false && !snapshot.error,
+          message: `SN${netuid}`,
+        });
       } catch (error) {
         ok = false;
         results.push({
@@ -242,8 +287,48 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           inserted: 0,
           reason: error instanceof Error ? error.message : String(error),
         });
+        const completed = index + 1;
+        const elapsedMs = Date.now() - startedAtMs;
+        const etaMs = completed > 0 && completed < subnets.length
+          ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
+          : 0;
+        emitProgress({
+          phase: 'item',
+          operation: 'alpha-holder-sync',
+          total: subnets.length,
+          completed,
+          remaining: Math.max(0, subnets.length - completed),
+          elapsedMs,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          netuid,
+          fetched: 0,
+          inserted: 0,
+          skipped: false,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          message: `SN${netuid}`,
+        });
       }
     }
+
+    emitProgress({
+      phase: 'done',
+      operation: 'alpha-holder-sync',
+      total: subnets.length,
+      completed: subnets.length,
+      remaining: 0,
+      elapsedMs: Date.now() - startedAtMs,
+      etaMs: 0,
+      etaIso: null,
+      netuid: null,
+      fetched,
+      inserted,
+      skipped: false,
+      ok,
+      results,
+      capturedAt,
+    });
 
     return {
       ok,
@@ -467,11 +552,13 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = false,
     limit = 1024,
+    onProgress = null,
   } = {}) {
     return syncAllAlphaHolderSnapshots({
       capturedAt,
       skipIfAlreadyCapturedToday,
       limit,
+      onProgress,
     });
   }
 
@@ -558,6 +645,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     days = config.taostatsBackfillDays ?? 30,
     overwrite = config.taostatsBackfillOverwrite ?? true,
     limit = 1024,
+    onProgress = null,
   } = {}) {
     if (!config.taostatsAuthHeader) {
       return {
@@ -573,6 +661,32 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     }
 
     const subnets = await resolveAlphaHolderNetuids({ netuid, limit });
+    const startedAtMs = Date.now();
+    const emitProgress = (payload) => {
+      if (typeof onProgress === 'function') {
+        onProgress(payload);
+      }
+    };
+
+    emitProgress({
+      phase: 'start',
+      operation: 'alpha-holder-history-backfill',
+      total: subnets.length,
+      completed: 0,
+      remaining: subnets.length,
+      elapsedMs: 0,
+      etaMs: null,
+      etaIso: null,
+      netuid: null,
+      fetched: 0,
+      inserted: 0,
+      deleted: 0,
+      skipped: 0,
+      ok: true,
+      days,
+      overwrite: Boolean(overwrite),
+    });
+
     let fetched = 0;
     let inserted = 0;
     let deleted = 0;
@@ -580,7 +694,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     let ok = true;
     const results = [];
 
-    for (const subnetNetuid of subnets) {
+    for (const [index, subnetNetuid] of subnets.entries()) {
       try {
         const result = await backfillAlphaHolderHistoryForNetuid({
           netuid: subnetNetuid,
@@ -598,6 +712,28 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           ...result,
           ok: result.ok !== false && !result.error,
         });
+        const completed = index + 1;
+        const elapsedMs = Date.now() - startedAtMs;
+        const etaMs = completed > 0 && completed < subnets.length
+          ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
+          : 0;
+        emitProgress({
+          phase: 'item',
+          operation: 'alpha-holder-history-backfill',
+          total: subnets.length,
+          completed,
+          remaining: Math.max(0, subnets.length - completed),
+          elapsedMs,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          netuid: subnetNetuid,
+          fetched: Number(result.fetched || 0),
+          inserted: Number(result.inserted || 0),
+          deleted: Number(result.deleted || 0),
+          skipped: Number(result.skipped || 0),
+          ok: result.ok !== false && !result.error,
+          message: `SN${subnetNetuid}`,
+        });
       } catch (error) {
         results.push({
           ok: false,
@@ -609,8 +745,51 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           reason: error instanceof Error ? error.message : String(error),
         });
         ok = false;
+        const completed = index + 1;
+        const elapsedMs = Date.now() - startedAtMs;
+        const etaMs = completed > 0 && completed < subnets.length
+          ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
+          : 0;
+        emitProgress({
+          phase: 'item',
+          operation: 'alpha-holder-history-backfill',
+          total: subnets.length,
+          completed,
+          remaining: Math.max(0, subnets.length - completed),
+          elapsedMs,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          netuid: subnetNetuid,
+          fetched: 0,
+          inserted: 0,
+          deleted: 0,
+          skipped: 0,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          message: `SN${subnetNetuid}`,
+        });
       }
     }
+
+    emitProgress({
+      phase: 'done',
+      operation: 'alpha-holder-history-backfill',
+      total: subnets.length,
+      completed: subnets.length,
+      remaining: 0,
+      elapsedMs: Date.now() - startedAtMs,
+      etaMs: 0,
+      etaIso: null,
+      netuid: null,
+      fetched,
+      inserted,
+      deleted,
+      skipped,
+      ok,
+      results,
+      days,
+      overwrite: Boolean(overwrite),
+    });
 
     return {
       ok,

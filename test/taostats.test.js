@@ -663,6 +663,59 @@ test('alpha holder snapshot job stores one daily capture and skips same-day dupl
   db.close();
 });
 
+test('alpha holder backfill reports CLI-friendly progress updates with eta fields', async () => {
+  const db = openDatabase(':memory:');
+  const makeStakeRows = (netuid, capturedAt) => [normalizeStakeBalanceSnapshot({
+    block_number: 300 + netuid,
+    timestamp: capturedAt,
+    netuid,
+    subnet_rank: 1,
+    subnet_total_holders: 2,
+    balance: '1000000000',
+    balance_as_tao: '1000000000',
+    coldkey: { ss58: `5AlphaHolder${netuid}`, hex: `0xholder${netuid}` },
+    hotkey: { ss58: `5Val${netuid}`, hex: `0xval${netuid}` },
+    hotkey_name: `Validator ${netuid}`,
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt })];
+  const capturedAt = '2026-05-11T00:00:00.000Z';
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => [{ netuid: 110 }, { netuid: 111 }],
+    fetchStakeBalanceLatest: async ({ netuid, capturedAt: rowCapturedAt }) => makeStakeRows(netuid, rowCapturedAt),
+    fetchHistoricalStakeBalance: async ({ netuid }) => makeStakeRows(netuid, capturedAt),
+  };
+  const config = {
+    netuid: 110,
+    taostatsBaseUrl: 'https://example.invalid',
+    taostatsAuthHeader: 'secret',
+    taostatsRateLimiter: null,
+  };
+  const service = createIngestService({ db, config, taostats });
+
+  const syncEvents = [];
+  const syncResult = await service.backfillAlphaHolderSnapshots({
+    capturedAt,
+    onProgress: (event) => syncEvents.push(event),
+  });
+  const historyEvents = [];
+  const historyResult = await service.backfillAlphaHolderHistory({
+    days: 7,
+    onProgress: (event) => historyEvents.push(event),
+  });
+
+  assert.equal(syncResult.ok, true);
+  assert.equal(historyResult.ok, true);
+  assert.equal(syncEvents[0].phase, 'start');
+  assert.equal(syncEvents.at(-1).phase, 'done');
+  assert.equal(historyEvents[0].phase, 'start');
+  assert.equal(historyEvents.at(-1).phase, 'done');
+  assert.equal(syncEvents.some((event) => event.phase === 'item' && event.total === 2), true);
+  assert.equal(historyEvents.some((event) => event.phase === 'item' && event.total === 2), true);
+  assert.equal(syncEvents.some((event) => Object.prototype.hasOwnProperty.call(event, 'etaIso')), true);
+  assert.equal(historyEvents.some((event) => Object.prototype.hasOwnProperty.call(event, 'etaIso')), true);
+
+  db.close();
+});
+
 test('sqlite app settings persist key/value pairs', () => {
   const db = openDatabase(':memory:');
   assert.equal(getSetting(db, 'poll_interval_minutes'), null);
