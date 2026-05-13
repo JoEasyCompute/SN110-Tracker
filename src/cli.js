@@ -75,7 +75,8 @@ function createProgressPrinter(label) {
     const bar = total > 0
       ? `[${'█'.repeat(filled)}${'░'.repeat(Math.max(0, barWidth - filled))}]`
       : '[░░░░░░░░░░░░░░░░░░]';
-    const netuidLabel = Number.isFinite(Number(progress.netuid)) ? ` SN${Number(progress.netuid)}` : '';
+    const netuidValue = progress.netuid !== null && progress.netuid !== undefined ? Number(progress.netuid) : null;
+    const netuidLabel = Number.isFinite(netuidValue) && netuidValue > 0 ? ` SN${netuidValue}` : '';
     const counts = [];
     if (Number.isFinite(Number(progress.fetched))) counts.push(`fetched ${Number(progress.fetched).toLocaleString('en-US')}`);
     if (Number.isFinite(Number(progress.inserted))) counts.push(`inserted ${Number(progress.inserted).toLocaleString('en-US')}`);
@@ -84,6 +85,8 @@ function createProgressPrinter(label) {
     const countsText = counts.length ? ` • ${counts.join(' • ')}` : '';
     const status = progress.phase === 'done'
       ? 'done'
+      : progress.phase === 'item-start'
+        ? 'starting'
       : progress.error
         ? `error: ${progress.error}`
         : progress.message || 'running';

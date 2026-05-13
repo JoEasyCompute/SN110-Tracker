@@ -238,6 +238,27 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
     for (const [index, netuid] of subnets.entries()) {
       try {
+        const startedCompleted = index;
+        const startedElapsedMs = Date.now() - startedAtMs;
+        const startedEtaMs = startedCompleted > 0 && startedCompleted < subnets.length
+          ? Math.max(0, Math.round((startedElapsedMs / startedCompleted) * (subnets.length - startedCompleted)))
+          : 0;
+        emitProgress({
+          phase: 'item-start',
+          operation: 'alpha-holder-sync',
+          total: subnets.length,
+          completed: startedCompleted,
+          remaining: Math.max(0, subnets.length - startedCompleted),
+          elapsedMs: startedElapsedMs,
+          etaMs: startedEtaMs,
+          etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
+          netuid,
+          fetched: 0,
+          inserted: 0,
+          skipped: false,
+          ok: true,
+          message: `SN${netuid}`,
+        });
         const snapshot = await syncAlphaHolderSnapshot({
           netuid,
           capturedAt,
@@ -696,6 +717,28 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
     for (const [index, subnetNetuid] of subnets.entries()) {
       try {
+        const startedCompleted = index;
+        const startedElapsedMs = Date.now() - startedAtMs;
+        const startedEtaMs = startedCompleted > 0 && startedCompleted < subnets.length
+          ? Math.max(0, Math.round((startedElapsedMs / startedCompleted) * (subnets.length - startedCompleted)))
+          : 0;
+        emitProgress({
+          phase: 'item-start',
+          operation: 'alpha-holder-history-backfill',
+          total: subnets.length,
+          completed: startedCompleted,
+          remaining: Math.max(0, subnets.length - startedCompleted),
+          elapsedMs: startedElapsedMs,
+          etaMs: startedEtaMs,
+          etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
+          netuid: subnetNetuid,
+          fetched: 0,
+          inserted: 0,
+          deleted: 0,
+          skipped: 0,
+          ok: true,
+          message: `SN${subnetNetuid}`,
+        });
         const result = await backfillAlphaHolderHistoryForNetuid({
           netuid: subnetNetuid,
           days,
