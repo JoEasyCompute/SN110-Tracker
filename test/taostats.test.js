@@ -716,6 +716,46 @@ test('alpha holder backfill reports CLI-friendly progress updates with eta field
   db.close();
 });
 
+test('alpha holder snapshot backfill does not depend on stake-balance history', async () => {
+  const db = openDatabase(':memory:');
+  const capturedAt = '2026-05-11T00:00:00.000Z';
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => [{ netuid: 110 }, { netuid: 111 }],
+    fetchStakeBalanceLatest: async ({ netuid, capturedAt: rowCapturedAt }) => [normalizeStakeBalanceSnapshot({
+      block_number: 400 + netuid,
+      timestamp: rowCapturedAt,
+      netuid,
+      subnet_rank: 1,
+      subnet_total_holders: 1,
+      balance: '1000000000',
+      balance_as_tao: '1000000000',
+      coldkey: { ss58: `5AlphaHolder${netuid}`, hex: `0xholder${netuid}` },
+      hotkey: { ss58: `5Val${netuid}`, hex: `0xval${netuid}` },
+      hotkey_name: `Validator ${netuid}`,
+    }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: rowCapturedAt })],
+    fetchHistoricalStakeBalance: async () => {
+      throw new Error('history endpoint should not be used for alpha-holder snapshot backfill');
+    },
+  };
+  const config = {
+    netuid: 110,
+    taostatsBaseUrl: 'https://example.invalid',
+    taostatsAuthHeader: 'secret',
+    taostatsRateLimiter: null,
+  };
+  const service = createIngestService({ db, config, taostats });
+
+  const result = await service.backfillAlphaHolderSnapshots({
+    capturedAt,
+    skipIfAlreadyCapturedToday: false,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.fetched, 2);
+  assert.equal(result.inserted, 2);
+  db.close();
+});
+
 test('sqlite app settings persist key/value pairs', () => {
   const db = openDatabase(':memory:');
   assert.equal(getSetting(db, 'poll_interval_minutes'), null);
