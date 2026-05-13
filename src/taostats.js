@@ -597,7 +597,7 @@ async function fetchLatestSubnets({
     const pageRows = extractRecords(json);
     if (!pageRows.length) break;
     rows.push(...pageRows);
-    if (pageRows.length < limit) break;
+    if (pageRows.length < pageSize) break;
   }
 
   return rows.map((row) => normalizeSnapshot(row, {
@@ -730,7 +730,7 @@ async function fetchTaoPriceHistory({
     const pageRows = extractRecords(json);
     if (!pageRows.length) break;
     rows.push(...pageRows);
-    if (pageRows.length < limit) break;
+    if (pageRows.length < pageSize) break;
   }
 
   return rows.map((row) => normalizeTaoPriceSnapshot(row, {
@@ -771,7 +771,7 @@ async function fetchTaoFlowHistory({
     const pageRows = extractRecords(json);
     if (!pageRows.length) break;
     rows.push(...pageRows);
-    if (pageRows.length < limit) break;
+    if (pageRows.length < pageSize) break;
   }
 
   return rows.map((row) => normalizeTaoFlowSnapshot(row, {
@@ -842,7 +842,7 @@ async function fetchAccountHistory({
     const pageRows = extractRecords(json);
     if (!pageRows.length) break;
     rows.push(...pageRows);
-    if (pageRows.length < limit) break;
+    if (pageRows.length < pageSize) break;
   }
 
   return rows.map((row) => normalizeAccountSnapshot(row, {
@@ -952,6 +952,7 @@ async function fetchStakeBalanceLatest({
 
   const headers = { authorization: taostatsAuthHeader };
   const rows = [];
+  const pageSize = Math.max(1, Math.min(Number.isFinite(Number(limit)) ? Number(limit) : 200, 200));
   const emitProgress = (payload) => {
     if (typeof onProgress === 'function') {
       onProgress(payload);
@@ -964,13 +965,13 @@ async function fetchStakeBalanceLatest({
     if (hotkey) url.searchParams.set('hotkey', hotkey);
     if (netuid !== null && netuid !== undefined) url.searchParams.set('netuid', String(netuid));
     url.searchParams.set('order', 'balance_as_tao_desc');
-    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('limit', String(pageSize));
     url.searchParams.set('page', String(page));
     emitProgress({
       phase: 'page-start',
       operation: 'stake-balance-latest',
       page,
-      pageSize: limit,
+      pageSize,
       netuid: netuid ?? null,
       coldkey: coldkey ?? null,
       hotkey: hotkey ?? null,
@@ -985,7 +986,7 @@ async function fetchStakeBalanceLatest({
       phase: 'page',
       operation: 'stake-balance-latest',
       page,
-      pageSize: limit,
+      pageSize,
       pageRows: pageRows.length,
       fetched: rows.length + pageRows.length,
       rowsFetched: rows.length + pageRows.length,
@@ -997,7 +998,7 @@ async function fetchStakeBalanceLatest({
     });
     if (!pageRows.length) break;
     rows.push(...pageRows);
-    if (pageRows.length < limit) break;
+    if (pageRows.length < pageSize) break;
   }
 
   return rows.map((row) => normalizeStakeBalanceSnapshot(row, {

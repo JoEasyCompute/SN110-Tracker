@@ -725,17 +725,17 @@ test('stake-balance latest fetch emits page-level progress updates', async () =>
     calls.push(String(url));
     const page = Number(new URL(url).searchParams.get('page'));
     const rows = page === 1
-      ? [{
-        block_number: 501,
+      ? Array.from({ length: 200 }, (_, index) => ({
+        block_number: 501 + index,
         netuid: 110,
-        subnet_rank: 1,
-        subnet_total_holders: 2,
-        balance: '1000000000',
-        balance_as_tao: '1000000000',
-        coldkey: { ss58: '5AlphaHolder1', hex: '0xholder1' },
-        hotkey: { ss58: '5Val1', hex: '0xval1' },
-        hotkey_name: 'Validator 1',
-      }]
+        subnet_rank: index + 1,
+        subnet_total_holders: 200,
+        balance: String(1000000000 - index),
+        balance_as_tao: String(1000000000 - index),
+        coldkey: { ss58: `5AlphaHolder${index + 1}`, hex: `0xholder${index + 1}` },
+        hotkey: { ss58: `5Val${index + 1}`, hex: `0xval${index + 1}` },
+        hotkey_name: `Validator ${index + 1}`,
+      }))
       : [];
     return {
       ok: true,
@@ -749,16 +749,17 @@ test('stake-balance latest fetch emits page-level progress updates', async () =>
       netuid: 110,
       taostatsBaseUrl: 'https://example.invalid',
       taostatsAuthHeader: 'secret',
-      limit: 1,
+      limit: 1024,
       onProgress: (event) => progress.push(event),
     });
 
-    assert.equal(rows.length, 1);
+    assert.equal(rows.length, 200);
     assert.equal(calls.length, 2);
+    assert.equal(Number(new URL(calls[0]).searchParams.get('limit')), 200);
     assert.equal(progress.filter((event) => event.phase === 'page-start').length, 2);
     assert.equal(progress.filter((event) => event.phase === 'page').length, 2);
     assert.equal(progress.some((event) => event.phase === 'page-start' && event.page === 1), true);
-    assert.equal(progress.some((event) => event.phase === 'page' && event.page === 1 && event.pageRows === 1), true);
+    assert.equal(progress.some((event) => event.phase === 'page' && event.page === 1 && event.pageRows === 200), true);
     assert.equal(progress.some((event) => event.phase === 'page' && event.page === 2 && event.pageRows === 0), true);
   } finally {
     global.fetch = originalFetch;
