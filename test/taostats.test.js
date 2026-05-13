@@ -719,9 +719,12 @@ test('alpha holder backfill reports CLI-friendly progress updates with eta field
 test('alpha holder snapshot backfill does not depend on stake-balance history', async () => {
   const db = openDatabase(':memory:');
   const capturedAt = '2026-05-11T00:00:00.000Z';
+  const latestCalls = [];
   const taostats = {
     fetchSubnetLatestCatalog: async () => [{ netuid: 110 }, { netuid: 111 }],
-    fetchStakeBalanceLatest: async ({ netuid, capturedAt: rowCapturedAt }) => [normalizeStakeBalanceSnapshot({
+    fetchStakeBalanceLatest: async ({ netuid, capturedAt: rowCapturedAt, limit }) => {
+      latestCalls.push({ netuid, limit });
+      return [normalizeStakeBalanceSnapshot({
       block_number: 400 + netuid,
       timestamp: rowCapturedAt,
       netuid,
@@ -732,7 +735,8 @@ test('alpha holder snapshot backfill does not depend on stake-balance history', 
       coldkey: { ss58: `5AlphaHolder${netuid}`, hex: `0xholder${netuid}` },
       hotkey: { ss58: `5Val${netuid}`, hex: `0xval${netuid}` },
       hotkey_name: `Validator ${netuid}`,
-    }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: rowCapturedAt })],
+    }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: rowCapturedAt })];
+    },
     fetchHistoricalStakeBalance: async () => {
       throw new Error('history endpoint should not be used for alpha-holder snapshot backfill');
     },
@@ -753,6 +757,8 @@ test('alpha holder snapshot backfill does not depend on stake-balance history', 
   assert.equal(result.ok, true);
   assert.equal(result.fetched, 2);
   assert.equal(result.inserted, 2);
+  assert.equal(latestCalls.length, 2);
+  assert.equal(latestCalls.every((call) => call.limit === 1024), true);
   db.close();
 });
 

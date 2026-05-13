@@ -101,6 +101,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     netuid = config.netuid,
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = true,
+    limit = 1024,
   } = {}) {
     if (!config.taostatsAuthHeader) {
       return {
@@ -136,6 +137,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       taostatsAuthHeader: config.taostatsAuthHeader,
       rateLimiter: config.taostatsRateLimiter || null,
       capturedAt,
+      limit,
     });
     const inserted = await storeAlphaHolderRows({
       rows,
@@ -263,6 +265,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           netuid,
           capturedAt,
           skipIfAlreadyCapturedToday,
+          limit,
         });
         fetched += Number(snapshot.fetched || 0);
         inserted += Number(snapshot.inserted || 0);
