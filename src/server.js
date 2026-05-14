@@ -6821,21 +6821,26 @@ function renderPage(model) {
         transform: rotate(90deg);
       }
       .alpha-holder-ranking-panel {
-        margin-top: 14px;
+        margin-top: 10px;
         display: grid;
-        gap: 14px;
+        gap: 10px;
       }
       .alpha-holder-ranking-head {
         display: grid;
-        gap: 12px;
-        grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
         align-items: start;
       }
       .alpha-holder-ranking-head h3 {
         margin: 0;
+        font-size: 16px;
+        letter-spacing: 0.01em;
       }
       .alpha-holder-ranking-head p {
-        margin: 6px 0 0;
+        margin: 5px 0 0;
+        max-width: 64ch;
+        font-size: 13px;
+        line-height: 1.45;
       }
       .alpha-holder-ranking-card .card {
         margin: 0;
@@ -6868,8 +6873,50 @@ function renderPage(model) {
       .alpha-holder-ranking-chart-bar.current {
         fill: rgba(0, 219, 188, 0.95);
       }
+      table.alpha-holder-ranking-table {
+        min-width: 920px;
+      }
+      .alpha-holder-ranking-table th,
+      .alpha-holder-ranking-table td {
+        padding-top: 10px;
+        padding-bottom: 10px;
+      }
+      .alpha-holder-ranking-table thead th {
+        font-size: 11px;
+        color: #94a9bb;
+      }
       .alpha-holder-ranking-table tr.current {
-        background: rgba(0, 219, 188, 0.06);
+        box-shadow: inset 0 0 0 1px rgba(0, 219, 188, 0.18);
+      }
+      .alpha-holder-ranking-table tr.current td {
+        background: linear-gradient(90deg, rgba(0, 219, 188, 0.10), rgba(0, 219, 188, 0.03));
+      }
+      .alpha-holder-ranking-table tr.current td:first-child {
+        color: #fff;
+        font-weight: 700;
+      }
+      .alpha-holder-ranking-table tr.current td:nth-child(2) {
+        font-weight: 700;
+      }
+      .alpha-holder-ranking-table tbody tr:hover td {
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .alpha-holder-ranking-table td:first-child,
+      .alpha-holder-ranking-table th:first-child {
+        width: 72px;
+        text-align: center;
+      }
+      .alpha-holder-ranking-table td:nth-child(3),
+      .alpha-holder-ranking-table th:nth-child(3) {
+        text-align: right;
+      }
+      .alpha-holder-ranking-table td:nth-child(4),
+      .alpha-holder-ranking-table th:nth-child(4) {
+        text-align: center;
+      }
+      .alpha-holder-ranking-table td:nth-child(5),
+      .alpha-holder-ranking-table th:nth-child(5) {
+        text-align: left;
       }
       .alpha-holder-ranking-change,
       .alpha-holder-ranking-sparkline-cell {
@@ -6890,25 +6937,25 @@ function renderPage(model) {
       .alpha-holder-sparkline {
         display: inline-flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
       }
       .alpha-holder-sparkline svg {
         display: block;
-        width: 88px;
-        height: 28px;
+        width: 84px;
+        height: 24px;
         overflow: visible;
       }
       .alpha-holder-sparkline-line {
         fill: none;
-        stroke: rgba(0, 219, 188, 0.95);
-        stroke-width: 2;
+        stroke: rgba(0, 219, 188, 0.88);
+        stroke-width: 1.8;
         stroke-linecap: round;
         stroke-linejoin: round;
       }
       .alpha-holder-sparkline-value {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 700;
-        color: var(--text);
+        color: rgba(255, 255, 255, 0.82);
       }
       .alpha-holder-sparkline-empty {
         color: var(--muted);
@@ -6916,11 +6963,15 @@ function renderPage(model) {
       .alpha-holder-ranking-trend-details {
         margin-top: 0;
       }
+      .alpha-holder-ranking-note {
+        margin: 0;
+        font-size: 12px;
+      }
       .ranking-current-tag {
         display: inline-flex;
         align-items: center;
         margin-left: 6px;
-        padding: 2px 8px;
+        padding: 1px 7px;
         border-radius: 999px;
         background: rgba(0, 219, 188, 0.12);
         color: #bffbf1;
