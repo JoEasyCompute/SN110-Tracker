@@ -22,7 +22,6 @@ const {
   getAlphaHolderLatestRanking,
   getAlphaHolderSnapshotHistory,
   getAlphaHolderSnapshotCounts,
-  getAlphaHolderSnapshotCountsByDay,
   countSnapshots,
   countWalletSnapshots,
   countWalletTransactions,
@@ -514,7 +513,48 @@ function formatSubnetLabel(name, netuid) {
   return cleanName ? `${cleanName} (${subnetLabel})` : subnetLabel;
 }
 
-function buildAlphaHolderRankingRows(rows, currentNetuid = null) {
+function buildSparklinePath(values, width = 88, height = 28) {
+  const series = Array.isArray(values)
+    ? values.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+    : [];
+  if (!series.length) return '';
+  if (series.length === 1) {
+    const midpoint = Math.round(height / 2);
+    return `M 0 ${midpoint} L ${width} ${midpoint}`;
+  }
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const range = Math.max(1, max - min);
+  const step = series.length > 1 ? width / (series.length - 1) : width;
+  return series.map((value, index) => {
+    const x = index * step;
+    const y = height - ((value - min) / range) * (height - 4) - 2;
+    return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }).join(' ');
+}
+
+function renderMiniSparkline(values) {
+  const series = Array.isArray(values)
+    ? values.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+    : [];
+  if (!series.length) {
+    return '<span class="alpha-holder-sparkline-empty">—</span>';
+  }
+  const path = buildSparklinePath(series);
+  const current = series.at(-1);
+  const previous = series.length > 1 ? series.at(-2) : null;
+  const change = Number.isFinite(current) && Number.isFinite(previous) ? current - previous : null;
+  return `
+    <span class="alpha-holder-sparkline">
+      <svg viewBox="0 0 88 28" role="img" aria-label="Alpha holder trend sparkline">
+        <path d="${path}" class="alpha-holder-sparkline-line"></path>
+      </svg>
+      <span class="alpha-holder-sparkline-value">${change === null ? '—' : `${change >= 0 ? '+' : ''}${integer(change)}`}</span>
+    </span>
+  `;
+}
+
+function buildAlphaHolderRankingRows(rows, currentNetuid = null, trendByNetuid = new Map()) {
   const sortedRows = Array.isArray(rows)
     ? rows
         .filter((row) => row && Number.isFinite(Number(row.netuid)))
@@ -543,6 +583,7 @@ function buildAlphaHolderRankingRows(rows, currentNetuid = null) {
       current: currentNetuid !== null && Number(row.netuid) === Number(currentNetuid),
       subnet_name: row.subnet_name || row.name || null,
       subnet_label: formatSubnetLabel(row.subnet_name || row.name, row.netuid),
+      trend: trendByNetuid.get(Number(row.netuid)) || null,
     };
   });
 
@@ -599,7 +640,27 @@ function fetchAlphaHolderCurrentRanking(db, currentNetuid = null) {
       ON mn.netuid = lc.netuid
     ORDER BY lc.alpha_holders_num DESC, lc.captured_at DESC, lc.netuid ASC
   `).all();
-  return buildAlphaHolderRankingRows(rows, currentNetuid);
+  const sinceIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const trendByNetuid = new Map();
+  for (const row of rows) {
+    const netuid = Number(row.netuid);
+    if (!Number.isFinite(netuid) || netuid <= 0 || trendByNetuid.has(netuid)) continue;
+    const history = getAlphaHolderSnapshotHistory(db, netuid, sinceIso);
+    const points = history
+      .map((point) => Number(point.alpha_holders_num ?? 0))
+      .filter((value) => Number.isFinite(value));
+    const latest = points.length ? points.at(-1) : null;
+    const previous = points.length > 1 ? points.at(-2) : null;
+    trendByNetuid.set(netuid, {
+      points,
+      latest,
+      previous,
+      change_num: Number.isFinite(latest) && Number.isFinite(previous) ? latest - previous : null,
+      captured_at: history.at(-1)?.captured_at || null,
+      series_length: points.length,
+    });
+  }
+  return buildAlphaHolderRankingRows(rows, currentNetuid, trendByNetuid);
 }
 
 function fetchAlphaHolderRankHistory(db, netuid, sinceIso) {
@@ -1084,16 +1145,25 @@ function renderAlphaHolderSection(rows, {
   const rankingBody = visibleRankingEntries.length
     ? visibleRankingEntries.map((row) => {
         const isCurrent = currentNetuid !== null && Number(row.netuid) === Number(currentNetuid);
+        const change = Number(row.trend?.change_num ?? NaN);
+        const changeClass = Number.isFinite(change)
+          ? (change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral')
+          : 'muted';
+        const changeLabel = Number.isFinite(change)
+          ? `${change >= 0 ? '+' : ''}${integer(change)}`
+          : '—';
+        const sparkline = renderMiniSparkline(row.trend?.points || []);
         return `
           <tr${isCurrent ? ' class="current"' : ''}>
             <td>${escapeHtml(integer(row.rank_num))}</td>
             <td>${escapeHtml(row.subnet_label || formatSubnetLabel(row.subnet_name, row.netuid))}${isCurrent ? ' <span class="ranking-current-tag">Current</span>' : ''}</td>
             <td>${escapeHtml(integer(row.alpha_holders_num))}</td>
-            <td>${escapeHtml(formatIso(row.captured_at))}</td>
+            <td class="alpha-holder-ranking-change ${changeClass}">${escapeHtml(changeLabel)}</td>
+            <td class="alpha-holder-ranking-sparkline-cell">${sparkline}</td>
           </tr>
         `;
       }).join('')
-    : '<tr><td colspan="4" class="empty">No ranking rows are available yet.</td></tr>';
+    : '<tr><td colspan="5" class="empty">No ranking rows are available yet.</td></tr>';
   const body = entries.length
     ? entries.map((row, index) => {
         const address = row.coldkey_ss58 || row.wallet_address_ss58 || '—';
@@ -1136,11 +1206,10 @@ function renderAlphaHolderSection(rows, {
         <div class="alpha-holder-ranking-head">
           <div>
             <h3>Alpha-holder ranking across subnets</h3>
-            <p class="muted">This view compares the latest local alpha-holder snapshot for every subnet stored in SQLite. It starts from the first collection point, so the ranking history only grows as the database collects more samples.</p>
+            <p class="muted">This table is the primary view. It compares the latest local alpha-holder snapshot for every subnet stored in SQLite and adds a small trend sparkline per row. The secondary chart stays collapsed below it.</p>
           </div>
           ${rankMetricCard ? `<div class="alpha-holder-ranking-card">${rankMetricCard}</div>` : ''}
         </div>
-        ${rankingChart}
         <div class="table-wrap alpha-holder-ranking-table-wrap">
           <table class="data-table alpha-holder-ranking-table">
             <thead>
@@ -1148,13 +1217,18 @@ function renderAlphaHolderSection(rows, {
                 <th>Rank</th>
                 <th>Subnet</th>
                 <th>Alpha holders</th>
-                <th>Latest local capture</th>
+                <th>Change</th>
+                <th>Trend</th>
               </tr>
             </thead>
             <tbody>${rankingBody}</tbody>
           </table>
         </div>
-        <p class="muted alpha-holder-ranking-note">Historical rank charts begin with the first locally collected alpha-holder snapshot, so the early window can be sparse until more subnets have been collected.</p>
+        <details class="alpha-holder-details alpha-holder-ranking-trend-details">
+          <summary>Show compact trend overview</summary>
+          <p class="muted">The sparkline column shows the last seven local daily alpha-holder samples per subnet. Open the compact chart for a wider overview.</p>
+          ${rankingChart}
+        </details>
       </div>
     </section>
   `;
@@ -6421,6 +6495,7 @@ function renderPage(model) {
       .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 16px; }
       table { width: 100%; border-collapse: collapse; min-width: 900px; background: rgba(16, 23, 34, 0.88); }
       table.alpha-holder-table { min-width: 760px; }
+      table.alpha-holder-ranking-table { min-width: 860px; }
       th, td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; }
       th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
       .empty { color: var(--muted); padding: 16px; }
@@ -6795,6 +6870,51 @@ function renderPage(model) {
       }
       .alpha-holder-ranking-table tr.current {
         background: rgba(0, 219, 188, 0.06);
+      }
+      .alpha-holder-ranking-change,
+      .alpha-holder-ranking-sparkline-cell {
+        white-space: nowrap;
+      }
+      .alpha-holder-ranking-change.positive {
+        color: var(--success);
+      }
+      .alpha-holder-ranking-change.negative {
+        color: var(--warning);
+      }
+      .alpha-holder-ranking-change.neutral {
+        color: var(--text);
+      }
+      .alpha-holder-ranking-sparkline-cell {
+        min-width: 128px;
+      }
+      .alpha-holder-sparkline {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .alpha-holder-sparkline svg {
+        display: block;
+        width: 88px;
+        height: 28px;
+        overflow: visible;
+      }
+      .alpha-holder-sparkline-line {
+        fill: none;
+        stroke: rgba(0, 219, 188, 0.95);
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .alpha-holder-sparkline-value {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .alpha-holder-sparkline-empty {
+        color: var(--muted);
+      }
+      .alpha-holder-ranking-trend-details {
+        margin-top: 0;
       }
       .ranking-current-tag {
         display: inline-flex;

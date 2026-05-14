@@ -103,7 +103,7 @@ The `alpha-holder-history-backfill` alias now reuses the supported snapshot path
 The manual alpha-holder snapshot path uses a small 3-worker subnet queue for faster fills, while the scheduled UTC sync stays sequential.
 While each subnet is loading, the CLI also prints page-level heartbeat lines and worker ids so you can tell whether the fetch is still active before the subnet finishes.
 If Taostats returns a 429 during the alpha-holder fetch, the CLI now pauses for about a minute, prints a retry message, and tries that page again once before moving on.
-The alpha-holder ranking table and chart now use the latest stored subnet name when it is available, so labels read like `Chutes (SN64)` instead of plain `SN64`.
+The alpha-holder ranking view now uses a table-first layout: the leaderboard shows rank, subnet, alpha-holder count, change from the prior daily sample, and a tiny trend sparkline. It still uses the latest stored subnet name when available, so labels read like `Chutes (SN64)` instead of plain `SN64`.
 Those labels are backed by a small local subnet metadata cache, so the app can keep using the friendly name even when the current subnet snapshot is missing.
 
 ### Backfill command options

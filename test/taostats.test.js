@@ -492,6 +492,49 @@ test('buildPageModel ranks subnets by the latest local alpha-holder counts', () 
   db.close();
 });
 
+test('buildPageModel includes alpha-holder trend data for the leaderboard rows', () => {
+  const db = openDatabase(':memory:');
+  const day1 = '2026-05-10T00:00:00Z';
+  const day2 = '2026-05-11T00:00:00Z';
+  const makeStakeRows = (netuid, capturedAt, count, blockOffset) => Array.from({ length: count }, (_, index) => normalizeStakeBalanceSnapshot({
+    block_number: 800000 + blockOffset + index,
+    timestamp: capturedAt,
+    netuid,
+    subnet_rank: index + 1,
+    subnet_total_holders: count,
+    balance: String(1_000_000_000 - index),
+    balance_as_tao: String(1_000_000_000 - index),
+    coldkey: { ss58: `5Alpha${netuid}${index}`, hex: `0x${netuid}${index}` },
+    hotkey: { ss58: `5Val${netuid}${index}`, hex: `0xval${netuid}${index}` },
+    hotkey_name: `Validator ${netuid}-${index}`,
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt }));
+
+  for (const row of makeStakeRows(110, day1, 2, 11000)) insertAlphaHolderSnapshot(db, row);
+  for (const row of makeStakeRows(110, day2, 4, 12000)) insertAlphaHolderSnapshot(db, row);
+  for (const row of makeStakeRows(111, day1, 5, 21000)) insertAlphaHolderSnapshot(db, row);
+  for (const row of makeStakeRows(111, day2, 6, 22000)) insertAlphaHolderSnapshot(db, row);
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [],
+    },
+    netuid: 110,
+  });
+
+  const row110 = model.alphaHolderRankingRows.find((row) => Number(row.netuid) === 110);
+  const row111 = model.alphaHolderRankingRows.find((row) => Number(row.netuid) === 111);
+
+  assert.equal(row110?.trend?.series_length >= 2, true);
+  assert.equal(row110?.trend?.change_num, 2);
+  assert.equal(Array.isArray(row110?.trend?.points), true);
+  assert.equal(row111?.trend?.change_num, 1);
+  db.close();
+});
+
 test('renderPage uses cached subnet metadata when the latest subnet snapshot is missing', () => {
   const db = openDatabase(':memory:');
   upsertSubnetMetadata(db, {
@@ -544,6 +587,9 @@ test('renderPage uses cached subnet metadata when the latest subnet snapshot is 
   assert.equal(html.includes('Chutes (SN64) Tracker'), true);
   assert.equal(html.includes('Subnet Chutes (SN64)'), true);
   assert.equal(html.includes('Chutes (SN64) alpha-holder rank'), true);
+  assert.equal(html.includes('<th>Change</th>'), true);
+  assert.equal(html.includes('<th>Trend</th>'), true);
+  assert.equal(html.includes('alpha-holder-sparkline-line'), true);
   assert.equal(html.includes('Chutes (SN64)'), true);
   db.close();
 });
