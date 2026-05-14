@@ -1525,6 +1525,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Alpha-holder ranking across subnets'), true);
   assert.equal(html.includes('Green Compute (SN110) alpha-holder rank'), true);
   assert.equal(html.includes('History starts at'), true);
+  assert.equal(html.includes('Show compact trend overview'), false);
   assert.equal(html.includes('Other Compute (SN111)'), true);
   assert.equal(html.includes('Third Compute (SN112)'), true);
   assert.equal(html.includes('5Ebftb…CDEFGH'), true);

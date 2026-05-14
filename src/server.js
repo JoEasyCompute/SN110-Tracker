@@ -1092,29 +1092,6 @@ function renderAlphaHolderSection(rows, {
   if (currentVisibleRow) {
     visibleRankingEntries.push(currentVisibleRow);
   }
-  const chartEntries = rankingEntries.slice(0, 10);
-  if (currentVisibleRow && !chartEntries.some((row) => Number(row.netuid) === Number(currentVisibleRow.netuid))) {
-    chartEntries.push(currentVisibleRow);
-  }
-  const chartMax = Math.max(1, ...chartEntries.map((row) => Number(row.alpha_holders_num ?? 0)));
-  const rankingChart = chartEntries.length
-    ? `
-      <div class="alpha-holder-ranking-chart" aria-label="Alpha-holder ranking bar chart">
-        <svg viewBox="0 0 1000 ${chartEntries.length * 34 + 28}" role="img" aria-label="Alpha-holder ranking bar chart">
-          ${chartEntries.map((row, index) => {
-            const barWidth = Math.max(8, Math.round((Number(row.alpha_holders_num ?? 0) / chartMax) * 710));
-            const y = 24 + index * 34;
-            const isCurrent = currentNetuid !== null && Number(row.netuid) === Number(currentNetuid);
-            return `
-              <text x="0" y="${y + 13}" class="alpha-holder-ranking-chart-label">#${escapeHtml(integer(row.rank_num))} ${escapeHtml(row.subnet_label || formatSubnetLabel(row.subnet_name, row.netuid))}</text>
-              <rect x="210" y="${y}" width="${barWidth}" height="20" rx="10" class="alpha-holder-ranking-chart-bar${isCurrent ? ' current' : ''}"></rect>
-              <text x="${220 + barWidth}" y="${y + 13}" class="alpha-holder-ranking-chart-value">${escapeHtml(integer(row.alpha_holders_num))}</text>
-            `;
-          }).join('')}
-        </svg>
-      </div>
-    `
-    : '<p class="muted alpha-holder-ranking-chart-empty">No ranking data available yet.</p>';
   const rankMetricCard = currentRankingRow ? metricCard({
     label: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)} alpha-holder rank`,
     value: integer(currentRankingRow.rank_num),
@@ -1206,7 +1183,7 @@ function renderAlphaHolderSection(rows, {
         <div class="alpha-holder-ranking-head">
           <div>
             <h3>Alpha-holder ranking across subnets</h3>
-            <p class="muted">This table is the primary view. It compares the latest local alpha-holder snapshot for every subnet stored in SQLite and adds a small trend sparkline per row. The secondary chart stays collapsed below it.</p>
+            <p class="muted">This table is the primary view. It compares the latest local alpha-holder snapshot for every subnet stored in SQLite and adds a small trend sparkline per row.</p>
           </div>
           ${rankMetricCard ? `<div class="alpha-holder-ranking-card">${rankMetricCard}</div>` : ''}
         </div>
@@ -1224,11 +1201,6 @@ function renderAlphaHolderSection(rows, {
             <tbody>${rankingBody}</tbody>
           </table>
         </div>
-        <details class="alpha-holder-details alpha-holder-ranking-trend-details">
-          <summary>Show compact trend overview</summary>
-          <p class="muted">The sparkline column shows the last seven local daily alpha-holder samples per subnet. Open the compact chart for a wider overview.</p>
-          ${rankingChart}
-        </details>
       </div>
     </section>
   `;
@@ -6845,34 +6817,6 @@ function renderPage(model) {
       .alpha-holder-ranking-card .card {
         margin: 0;
       }
-      .alpha-holder-ranking-chart {
-        border: 1px solid rgba(143, 163, 184, 0.12);
-        border-radius: 12px;
-        background: rgba(255, 255, 255, 0.02);
-        padding: 10px;
-        overflow-x: auto;
-      }
-      .alpha-holder-ranking-chart svg {
-        display: block;
-        width: 100%;
-        min-width: 680px;
-        height: auto;
-      }
-      .alpha-holder-ranking-chart-label,
-      .alpha-holder-ranking-chart-value {
-        fill: var(--text);
-        font-size: 12px;
-        font-weight: 600;
-      }
-      .alpha-holder-ranking-chart-value {
-        fill: #bffbf1;
-      }
-      .alpha-holder-ranking-chart-bar {
-        fill: rgba(0, 219, 188, 0.55);
-      }
-      .alpha-holder-ranking-chart-bar.current {
-        fill: rgba(0, 219, 188, 0.95);
-      }
       table.alpha-holder-ranking-table {
         min-width: 920px;
       }
@@ -6959,9 +6903,6 @@ function renderPage(model) {
       }
       .alpha-holder-sparkline-empty {
         color: var(--muted);
-      }
-      .alpha-holder-ranking-trend-details {
-        margin-top: 0;
       }
       .alpha-holder-ranking-note {
         margin: 0;
