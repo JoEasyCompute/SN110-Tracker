@@ -112,6 +112,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
   async function syncSubnetMetadataCatalog({
     limit = 1024,
+    concurrency = 3,
     onProgress = null,
   } = {}) {
     if (!config.taostatsAuthHeader) {
@@ -135,8 +136,12 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     };
     const total = rows.length;
     const resolvedRows = [];
+    const skippedRows = [];
     let inserted = 0;
     let skipped = 0;
+    let completedCount = 0;
+    const parsedConcurrency = Number.parseInt(String(concurrency), 10);
+    const workersTotal = Math.max(1, Math.min(3, Number.isFinite(parsedConcurrency) && parsedConcurrency > 0 ? parsedConcurrency : 1));
 
     emitProgress({
       phase: 'start',
@@ -152,121 +157,99 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       inserted: 0,
       skipped: 0,
       ok: true,
+      workersTotal,
       message: total > 0 ? 'running' : 'no subnets discovered',
     });
 
-    try {
-      for (const [index, row] of rows.entries()) {
-        const netuid = Number.parseInt(String(row?.netuid), 10);
-        if (!Number.isFinite(netuid) || netuid <= 0) {
-          skipped += 1;
-          const completed = index + 1;
-          const elapsedMs = Date.now() - startedAtMs;
-          const etaMs = completed > 0 && completed < total
-            ? Math.max(0, Math.round((elapsedMs / completed) * (total - completed)))
-            : 0;
-          emitProgress({
-            phase: 'item',
-            operation: 'subnet-name-backfill',
-            total,
-            completed,
-            remaining: Math.max(0, total - completed),
-            elapsedMs,
-            etaMs,
-            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
-            netuid: null,
-            fetched: total,
-            inserted,
-            skipped,
-            ok: true,
-            message: 'skipped invalid subnet',
-          });
-          continue;
-        }
-        const itemStartedElapsedMs = Date.now() - startedAtMs;
-        const itemStartedEtaMs = index > 0 && index < total
-          ? Math.max(0, Math.round((itemStartedElapsedMs / index) * (total - index)))
+    const processRow = async (row, index, workerId = null) => {
+      const netuid = Number.parseInt(String(row?.netuid), 10);
+      const startedElapsedMs = Date.now() - startedAtMs;
+      const startedEtaMs = completedCount > 0 && completedCount < total
+        ? Math.max(0, Math.round((startedElapsedMs / completedCount) * (total - completedCount)))
+        : 0;
+      emitProgress({
+        phase: 'item-start',
+        operation: 'subnet-name-backfill',
+        total,
+        completed: completedCount,
+        remaining: Math.max(0, total - completedCount),
+        elapsedMs: startedElapsedMs,
+        etaMs: startedEtaMs,
+        etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
+        netuid: Number.isFinite(netuid) && netuid > 0 ? netuid : null,
+        fetched: total,
+        inserted,
+        skipped,
+        ok: true,
+        message: Number.isFinite(netuid) && netuid > 0 ? `SN${netuid}` : 'invalid subnet',
+        workerId,
+        workersTotal,
+      });
+
+      if (!Number.isFinite(netuid) || netuid <= 0) {
+        skipped += 1;
+        skippedRows.push({ netuid: null, reason: 'invalid subnet' });
+        completedCount += 1;
+        const completed = completedCount;
+        const elapsedMs = Date.now() - startedAtMs;
+        const etaMs = completed > 0 && completed < total
+          ? Math.max(0, Math.round((elapsedMs / completed) * (total - completed)))
           : 0;
         emitProgress({
-          phase: 'item-start',
+          phase: 'item',
           operation: 'subnet-name-backfill',
           total,
-          completed: index,
-          remaining: Math.max(0, total - index),
-          elapsedMs: itemStartedElapsedMs,
-          etaMs: itemStartedEtaMs,
-          etaIso: itemStartedEtaMs > 0 ? new Date(Date.now() + itemStartedEtaMs).toISOString() : null,
-          netuid,
+          completed,
+          remaining: Math.max(0, total - completed),
+          elapsedMs,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          netuid: null,
           fetched: total,
           inserted,
           skipped,
           ok: true,
-          message: `SN${netuid}`,
+          message: 'skipped invalid subnet',
+          workerId,
+          workersTotal,
         });
-        let name = String(row?.name ?? '').trim();
-        let symbol = row?.symbol ?? null;
-        let sourceUrl = `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/subnet/latest/v1`;
-        if (!name) {
-          const cached = cachedRows.get(netuid);
-          if (cached?.name) {
-            name = String(cached.name).trim();
-            symbol = cached.symbol ?? symbol;
-            sourceUrl = cached.source_url || sourceUrl;
-          } else {
-            try {
-              const snapshotResult = await fetchLatestSnapshot({
-                netuid,
-                taostatsBaseUrl: config.taostatsBaseUrl,
-                taostatsPublicBaseUrl: config.taostatsPublicBaseUrl,
-                taostatsAuthHeader: config.taostatsAuthHeader,
-                rateLimiter: config.taostatsRateLimiter || null,
-              });
-              if (snapshotResult?.snapshot?.name) {
-                name = String(snapshotResult.snapshot.name).trim();
-                symbol = snapshotResult.snapshot.symbol ?? symbol;
-                sourceUrl = snapshotResult.snapshot.source_url || sourceUrl;
-              }
-            } catch {
-              // Missing subnet name is non-fatal here; keep the cache additive and fall back elsewhere.
+        return;
+      }
+
+      let name = String(row?.name ?? '').trim();
+      let symbol = row?.symbol ?? null;
+      let sourceUrl = `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/subnet/latest/v1`;
+      if (!name) {
+        const cached = cachedRows.get(netuid);
+        if (cached?.name) {
+          name = String(cached.name).trim();
+          symbol = cached.symbol ?? symbol;
+          sourceUrl = cached.source_url || sourceUrl;
+        } else {
+          try {
+            const snapshotResult = await fetchLatestSnapshot({
+              netuid,
+              taostatsBaseUrl: config.taostatsBaseUrl,
+              taostatsPublicBaseUrl: config.taostatsPublicBaseUrl,
+              taostatsAuthHeader: config.taostatsAuthHeader,
+              rateLimiter: config.taostatsRateLimiter || null,
+            });
+            if (snapshotResult?.snapshot?.name) {
+              name = String(snapshotResult.snapshot.name).trim();
+              symbol = snapshotResult.snapshot.symbol ?? symbol;
+              sourceUrl = snapshotResult.snapshot.source_url || sourceUrl;
             }
+          } catch {
+            // Missing subnet name is non-fatal here; keep the cache additive and fall back elsewhere.
           }
         }
-        if (!name) {
-          skipped += 1;
-          const completed = index + 1;
-          const elapsedMs = Date.now() - startedAtMs;
-          const etaMs = completed > 0 && completed < total
-            ? Math.max(0, Math.round((elapsedMs / completed) * (total - completed)))
-            : 0;
-          emitProgress({
-            phase: 'item',
-            operation: 'subnet-name-backfill',
-            total,
-            completed,
-            remaining: Math.max(0, total - completed),
-            elapsedMs,
-            etaMs,
-            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
-            netuid,
-            fetched: total,
-            inserted,
-            skipped,
-            ok: true,
-            message: 'missing subnet name',
-          });
-          continue;
-        }
-        resolvedRows.push({
-          netuid,
-          name,
-          symbol,
-          source: 'api',
-          source_url: sourceUrl,
-          captured_at: row?.timestamp ?? row?.last_updated ?? row?.updated_at ?? row?.created_at ?? new Date().toISOString(),
-          raw_json: JSON.stringify(row),
-        });
-        inserted += 1;
-        const completed = index + 1;
+      }
+
+      if (!name) {
+        skipped += 1;
+        skippedRows.push({ netuid, reason: 'missing subnet name' });
+        completedCount += 1;
+        const completed = completedCount;
         const elapsedMs = Date.now() - startedAtMs;
         const etaMs = completed > 0 && completed < total
           ? Math.max(0, Math.round((elapsedMs / completed) * (total - completed)))
@@ -285,11 +268,69 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           inserted,
           skipped,
           ok: true,
-          message: name,
+          message: 'missing subnet name',
+          workerId,
+          workersTotal,
         });
+        return;
       }
-    } catch (error) {
-      throw error;
+
+      resolvedRows.push({
+        netuid,
+        name,
+        symbol,
+        source: 'api',
+        source_url: sourceUrl,
+        captured_at: row?.timestamp ?? row?.last_updated ?? row?.updated_at ?? row?.created_at ?? new Date().toISOString(),
+        raw_json: JSON.stringify(row),
+      });
+      inserted += 1;
+      completedCount += 1;
+      const completed = completedCount;
+      const elapsedMs = Date.now() - startedAtMs;
+      const etaMs = completed > 0 && completed < total
+        ? Math.max(0, Math.round((elapsedMs / completed) * (total - completed)))
+        : 0;
+      emitProgress({
+        phase: 'item',
+        operation: 'subnet-name-backfill',
+        total,
+        completed,
+        remaining: Math.max(0, total - completed),
+        elapsedMs,
+        etaMs,
+        etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+        netuid,
+        fetched: total,
+        inserted,
+        skipped,
+        ok: true,
+        message: name,
+        workerId,
+        workersTotal,
+      });
+    };
+
+    if (workersTotal <= 1 || rows.length <= 1) {
+      for (const [index, row] of rows.entries()) {
+        // eslint-disable-next-line no-await-in-loop
+        await processRow(row, index, 1);
+      }
+    } else {
+      let nextIndex = 0;
+      await Promise.all(Array.from({ length: workersTotal }, async (_, workerIndex) => {
+        const workerId = workerIndex + 1;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const currentIndex = nextIndex;
+          nextIndex += 1;
+          if (currentIndex >= rows.length) {
+            break;
+          }
+          // eslint-disable-next-line no-await-in-loop
+          await processRow(rows[currentIndex], currentIndex, workerId);
+        }
+      }));
     }
 
     if (resolvedRows.length > 0) {
@@ -328,15 +369,18 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       inserted,
       skipped,
       rows,
+      skippedRows,
     };
   }
 
   async function backfillSubnetNames({
     limit = 1024,
+    concurrency = 3,
     onProgress = null,
   } = {}) {
     return syncSubnetMetadataCatalog({
       limit,
+      concurrency,
       onProgress,
     });
   }

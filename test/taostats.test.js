@@ -551,13 +551,21 @@ test('renderPage uses cached subnet metadata when the latest subnet snapshot is 
 test('subnet name backfill caches catalog rows and falls back to latest snapshots for missing names', async () => {
   const db = openDatabase(':memory:');
   const snapshotCalls = [];
+  let activeSnapshots = 0;
+  let maxActiveSnapshots = 0;
   const taostats = {
     fetchSubnetLatestCatalog: async () => ([
       { netuid: 64, name: '', symbol: 'CHU', timestamp: '2026-05-14T00:00:00Z' },
-      { netuid: 65, name: 'Molecule', symbol: 'MOL', timestamp: '2026-05-14T00:00:00Z' },
+      { netuid: 65, name: '', symbol: 'MOL', timestamp: '2026-05-14T00:00:00Z' },
+      { netuid: 66, name: '', symbol: 'WAVE', timestamp: '2026-05-14T00:00:00Z' },
+      { netuid: null, name: '', symbol: null, timestamp: '2026-05-14T00:00:00Z' },
     ]),
     fetchLatestSnapshot: async ({ netuid }) => {
       snapshotCalls.push(netuid);
+      activeSnapshots += 1;
+      maxActiveSnapshots = Math.max(maxActiveSnapshots, activeSnapshots);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      activeSnapshots -= 1;
       return {
         snapshot: normalizeSnapshot({
           netuid,
@@ -596,18 +604,25 @@ test('subnet name backfill caches catalog rows and falls back to latest snapshot
   const progress = [];
 
   const result = await service.backfillSubnetNames({
+    concurrency: 3,
     onProgress: (event) => progress.push(event),
   });
 
-  assert.equal(result.fetched, 2);
-  assert.equal(result.inserted, 2);
-  assert.equal(result.skipped, 0);
-  assert.deepEqual(snapshotCalls, [64]);
+  assert.equal(result.fetched, 4);
+  assert.equal(result.inserted, 3);
+  assert.equal(result.skipped, 1);
+  assert.deepEqual(snapshotCalls.sort((a, b) => a - b), [64, 65, 66]);
+  assert.equal(maxActiveSnapshots, 3);
   assert.equal(getSubnetMetadata(db, 64)?.name, 'Chutes');
-  assert.equal(getSubnetMetadata(db, 65)?.name, 'Molecule');
+  assert.equal(getSubnetMetadata(db, 65)?.name, 'Chutes');
+  assert.equal(getSubnetMetadata(db, 66)?.name, 'Chutes');
+  assert.equal(result.skippedRows.some((row) => row.reason === 'invalid subnet'), true);
   assert.equal(progress[0]?.phase, 'start');
   assert.equal(progress.at(-1)?.phase, 'done');
   assert.equal(progress.some((event) => event.phase === 'item-start' && event.netuid === 64), true);
+  assert.equal(progress.some((event) => event.workerId === 1), true);
+  assert.equal(progress.some((event) => event.workerId === 2), true);
+  assert.equal(progress.some((event) => event.workerId === 3), true);
   db.close();
 });
 

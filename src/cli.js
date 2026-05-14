@@ -135,6 +135,7 @@ async function run() {
   } else if (subnetNameBackfill) {
     result = await ingestService.backfillSubnetNames({
       limit: intArg(readArg('limit', 1024), 1024),
+      concurrency: intArg(readArg('concurrency', 3), 3),
       onProgress: subnetNameProgress,
     });
   } else if (alphaHolderBackfill || alphaHolderHistoryBackfill) {
