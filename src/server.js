@@ -16,6 +16,7 @@ const {
   getWalletTransactions,
   getLatestIngestRun,
   getLatestIngestRunBySource,
+  getSubnetMetadata,
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
   getAlphaHolderLatestRanking,
@@ -579,15 +580,23 @@ function fetchAlphaHolderCurrentRanking(db, currentNetuid = null) {
       ) latest_snapshot
         ON s.netuid = latest_snapshot.netuid
        AND s.captured_at = latest_snapshot.captured_at
+    ),
+    metadata_names AS (
+      SELECT
+        m.netuid,
+        m.name AS metadata_name
+      FROM subnet_metadata m
     )
     SELECT
       lc.netuid,
       lc.captured_at,
       lc.alpha_holders_num,
-      ls.subnet_name
+      COALESCE(mn.metadata_name, ls.subnet_name) AS subnet_name
     FROM latest_counts lc
     LEFT JOIN latest_subnet_names ls
       ON ls.netuid = lc.netuid
+    LEFT JOIN metadata_names mn
+      ON mn.netuid = lc.netuid
     ORDER BY lc.alpha_holders_num DESC, lc.captured_at DESC, lc.netuid ASC
   `).all();
   return buildAlphaHolderRankingRows(rows, currentNetuid);
@@ -2359,6 +2368,7 @@ function buildPageModel({ db, config, netuid }) {
   const alphaHolderHistoryCounts = latest ? getAlphaHolderSnapshotCounts(db, netuid, sinceIso) : [];
   const latestAlphaHolderCount = latest ? getLatestAlphaHolderCount(db, netuid) : null;
   const historyWithAlphaHolders = attachAlphaHolderCounts(history, alphaHolderHistoryCounts);
+  const subnetMetadata = getSubnetMetadata(db, netuid);
   const latestWithPrice = latest
     ? {
         ...latest,
@@ -2368,7 +2378,7 @@ function buildPageModel({ db, config, netuid }) {
         tao_price_captured_at: latest.tao_price_captured_at ?? latestTaoPrice?.captured_at ?? null,
       }
     : null;
-  const subnetLabel = formatSubnetLabel(latest?.name ?? null, netuid);
+  const subnetLabel = formatSubnetLabel(latest?.name ?? subnetMetadata?.name ?? null, netuid);
   const walletEntries = (config.wallets || []).map((wallet) => ({
     wallet,
     latest: getLatestWalletSnapshot(db, wallet.ss58),
@@ -2376,10 +2386,10 @@ function buildPageModel({ db, config, netuid }) {
     hotkeys: Array.isArray(wallet.hotkeys) ? wallet.hotkeys : [],
   }));
   const latestWalletActivityRun = getLatestIngestRunBySource(db, 'wallet-activity');
-  const latestAlphaHolderRows = latest ? getLatestAlphaHolderSnapshots(db, netuid, 20) : [];
-  const alphaHolderRankingRows = latest ? fetchAlphaHolderCurrentRanking(db, netuid) : [];
+  const latestAlphaHolderRows = getLatestAlphaHolderSnapshots(db, netuid, 20);
+  const alphaHolderRankingRows = fetchAlphaHolderCurrentRanking(db, netuid);
   const alphaHolderCurrentRankRow = alphaHolderRankingRows.find((row) => Number(row.netuid) === Number(netuid)) || null;
-  const alphaHolderRankHistory = latest ? fetchAlphaHolderRankHistory(db, netuid, sinceIso) : [];
+  const alphaHolderRankHistory = fetchAlphaHolderRankHistory(db, netuid, sinceIso);
   const comparisons = latestWithPrice ? buildComparisons(historyWithAlphaHolders, latestWithPrice) : [];
 
   return {
@@ -7701,7 +7711,7 @@ function renderPage(model) {
         <div class="grid stats">${latest ? renderSubnetDataCards(latest, subnetLabel) : ''}</div>
       </section>
 
-      ${latest ? renderAlphaHolderSection(alphaHolderRows, {
+      ${(alphaHolderRows.length || alphaHolderRankingRows.length) ? renderAlphaHolderSection(alphaHolderRows, {
         latestCaptureAt: alphaHolderRows?.[0]?.captured_at ?? null,
         totalRowCount: alphaHolderRowCount,
         rankingRows: alphaHolderRankingRows,

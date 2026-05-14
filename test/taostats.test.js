@@ -35,6 +35,7 @@ const {
   insertWalletStakePosition,
   insertWalletTransaction,
   insertAlphaHolderSnapshot,
+  upsertSubnetMetadata,
   getLatestSnapshot,
   getRecentSnapshots,
   getHistory,
@@ -487,6 +488,62 @@ test('buildPageModel ranks subnets by the latest local alpha-holder counts', () 
   assert.deepEqual(model.alphaHolderRankingRows.map((row) => row.rank_num), [1, 2, 3]);
   assert.equal(model.alphaHolderCurrentRankRow?.rank_num, 3);
   assert.equal(model.alphaHolderCurrentRankRow?.alpha_holders_num, 2);
+  db.close();
+});
+
+test('renderPage uses cached subnet metadata when the latest subnet snapshot is missing', () => {
+  const db = openDatabase(':memory:');
+  upsertSubnetMetadata(db, {
+    netuid: 64,
+    name: 'Chutes',
+    symbol: 'CHU',
+    source: 'api',
+    source_url: 'https://example.invalid/api/subnet/latest/v1',
+    captured_at: '2026-05-14T00:00:00.000Z',
+    raw_json: JSON.stringify({ netuid: 64, name: 'Chutes' }),
+  });
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 640001,
+    timestamp: '2026-05-14T00:00:00Z',
+    netuid: 64,
+    subnet_rank: 1,
+    subnet_total_holders: 2,
+    balance: '1000000000',
+    balance_as_tao: '1000000000',
+    coldkey: { ss58: '5ChutesHolderOne', hex: '0xchutes1' },
+    hotkey: { ss58: '5ChutesValOne', hex: '0xchutesval1' },
+    hotkey_name: 'Chutes Validator',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-14T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 640002,
+    timestamp: '2026-05-14T00:00:00Z',
+    netuid: 64,
+    subnet_rank: 2,
+    subnet_total_holders: 2,
+    balance: '500000000',
+    balance_as_tao: '500000000',
+    coldkey: { ss58: '5ChutesHolderTwo', hex: '0xchutes2' },
+    hotkey: { ss58: '5ChutesValTwo', hex: '0xchutesval2' },
+    hotkey_name: 'Chutes Validator 2',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-14T00:00:00.000Z' }));
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 15,
+      wallets: [],
+    },
+    netuid: 64,
+  });
+  const html = renderPage(model);
+  assert.equal(model.latest, null);
+  assert.equal(model.subnetLabel, 'Chutes (SN64)');
+  assert.equal(html.includes('Chutes (SN64) Tracker'), true);
+  assert.equal(html.includes('Subnet Chutes (SN64)'), true);
+  assert.equal(html.includes('Chutes (SN64) alpha-holder rank'), true);
+  assert.equal(html.includes('Chutes (SN64)'), true);
   db.close();
 });
 

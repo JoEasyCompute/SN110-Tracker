@@ -15,6 +15,8 @@ const {
   insertAlphaHolderSnapshot,
   insertWalletTransaction,
   insertIngestRun,
+  upsertSubnetMetadata,
+  getSubnetMetadataMap,
   snapshotExists,
   taoFlowSnapshotExists,
   walletSnapshotExists,
@@ -108,6 +110,89 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     return inserted;
   }
 
+  async function syncSubnetMetadataCatalog({
+    limit = 1024,
+  } = {}) {
+    if (!config.taostatsAuthHeader) {
+      return { fetched: 0, inserted: 0, skipped: 0, rows: [] };
+    }
+
+    const catalog = await fetchSubnetLatestCatalog({
+      taostatsBaseUrl: config.taostatsBaseUrl,
+      taostatsAuthHeader: config.taostatsAuthHeader,
+      rateLimiter: config.taostatsRateLimiter || null,
+      limit,
+    });
+
+    let inserted = 0;
+    let skipped = 0;
+    const rows = Array.isArray(catalog) ? catalog : [];
+    const cachedRows = getSubnetMetadataMap(db, rows.map((row) => row?.netuid));
+    db.exec('BEGIN');
+    try {
+      for (const row of rows) {
+        const netuid = Number.parseInt(String(row?.netuid), 10);
+        if (!Number.isFinite(netuid) || netuid <= 0) {
+          skipped += 1;
+          continue;
+        }
+        let name = String(row?.name ?? '').trim();
+        let symbol = row?.symbol ?? null;
+        let sourceUrl = `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/subnet/latest/v1`;
+        if (!name) {
+          const cached = cachedRows.get(netuid);
+          if (cached?.name) {
+            name = String(cached.name).trim();
+            symbol = cached.symbol ?? symbol;
+            sourceUrl = cached.source_url || sourceUrl;
+          } else {
+            try {
+              const snapshotResult = await fetchLatestSnapshot({
+                netuid,
+                taostatsBaseUrl: config.taostatsBaseUrl,
+                taostatsPublicBaseUrl: config.taostatsPublicBaseUrl,
+                taostatsAuthHeader: config.taostatsAuthHeader,
+                rateLimiter: config.taostatsRateLimiter || null,
+              });
+              if (snapshotResult?.snapshot?.name) {
+                name = String(snapshotResult.snapshot.name).trim();
+                symbol = snapshotResult.snapshot.symbol ?? symbol;
+                sourceUrl = snapshotResult.snapshot.source_url || sourceUrl;
+              }
+            } catch {
+              // Missing subnet name is non-fatal here; keep the cache additive and fall back elsewhere.
+            }
+          }
+        }
+        if (!name) {
+          skipped += 1;
+          continue;
+        }
+        upsertSubnetMetadata(db, {
+          netuid,
+          name,
+          symbol,
+          source: 'api',
+          source_url: sourceUrl,
+          captured_at: row?.timestamp ?? row?.last_updated ?? row?.updated_at ?? row?.created_at ?? new Date().toISOString(),
+          raw_json: JSON.stringify(row),
+        });
+        inserted += 1;
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+
+    return {
+      fetched: rows.length,
+      inserted,
+      skipped,
+      rows,
+    };
+  }
+
   async function syncAlphaHolderSnapshot({
     netuid = config.netuid,
     capturedAt = new Date().toISOString(),
@@ -186,12 +271,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     }
 
     try {
-      const catalog = await fetchSubnetLatestCatalog({
-        taostatsBaseUrl: config.taostatsBaseUrl,
-        taostatsAuthHeader: config.taostatsAuthHeader,
-        rateLimiter: config.taostatsRateLimiter || null,
-        limit,
-      });
+      const { rows: catalog } = await syncSubnetMetadataCatalog({ limit });
       for (const subnet of Array.isArray(catalog) ? catalog : []) {
         const subnetNetuid = Number.parseInt(String(subnet?.netuid), 10);
         if (Number.isFinite(subnetNetuid) && subnetNetuid > 0) {
@@ -933,6 +1013,11 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     let alphaHolderInserted = 0;
 
     try {
+      try {
+        await syncSubnetMetadataCatalog({ limit });
+      } catch {
+        // Non-fatal metadata cache refresh: keep the ingest flowing even if the subnet catalog is temporarily unavailable.
+      }
       const result = await fetchLatestSnapshot({
         netuid,
         taostatsBaseUrl: config.taostatsBaseUrl,

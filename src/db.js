@@ -250,6 +250,20 @@ function openDatabase(filePath) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_stake_positions_address_netuid_hotkey
       ON wallet_stake_positions(wallet_address_ss58, netuid, hotkey_address_ss58, captured_at);
 
+    CREATE TABLE IF NOT EXISTS subnet_metadata (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      netuid INTEGER NOT NULL UNIQUE,
+      name TEXT,
+      symbol TEXT,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      captured_at TEXT NOT NULL,
+      raw_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_subnet_metadata_name
+      ON subnet_metadata(name);
+
     CREATE TABLE IF NOT EXISTS alpha_holder_snapshots (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       netuid INTEGER NOT NULL,
@@ -715,6 +729,40 @@ function insertSnapshot(db, snapshot) {
   });
 
   return Number(info.lastInsertRowid);
+}
+
+function upsertSubnetMetadata(db, metadata) {
+  const name = toDbValue(metadata.name);
+  if (!name) {
+    return null;
+  }
+
+  const stmt = db.prepare(`
+    INSERT INTO subnet_metadata (
+      netuid, name, symbol, source, source_url, captured_at, raw_json
+    ) VALUES (
+      @netuid, @name, @symbol, @source, @source_url, @captured_at, @raw_json
+    )
+    ON CONFLICT(netuid) DO UPDATE SET
+      name = excluded.name,
+      symbol = excluded.symbol,
+      source = excluded.source,
+      source_url = excluded.source_url,
+      captured_at = excluded.captured_at,
+      raw_json = excluded.raw_json
+  `);
+
+  const info = stmt.run({
+    netuid: toDbValue(metadata.netuid),
+    name,
+    symbol: toDbValue(metadata.symbol),
+    source: toDbValue(metadata.source) || 'api',
+    source_url: toDbValue(metadata.source_url),
+    captured_at: metadata.captured_at || new Date().toISOString(),
+    raw_json: metadata.raw_json || JSON.stringify(metadata),
+  });
+
+  return Number(info.lastInsertRowid || 0);
 }
 
 function insertTaoPriceSnapshot(db, snapshot) {
@@ -1262,6 +1310,17 @@ function getLatestWalletStakePositions(db, address) {
   return stmt.all(address, address);
 }
 
+function getSubnetMetadata(db, netuid) {
+  const stmt = db.prepare(`
+    SELECT *
+    FROM subnet_metadata
+    WHERE netuid = ?
+    ORDER BY captured_at DESC, id DESC
+    LIMIT 1
+  `);
+  return stmt.get(netuid) || null;
+}
+
 function getLatestAlphaHolderSnapshots(db, netuid, limit = 25) {
   const stmt = db.prepare(`
     SELECT *
@@ -1341,18 +1400,28 @@ function getAlphaHolderLatestRanking(db, limit = 100) {
        AND a.captured_at = l.captured_at
       WHERE COALESCE(a.balance_as_tao_num, 0) > 0
       GROUP BY a.netuid, l.captured_at
+    ),
+    latest_names AS (
+      SELECT
+        sm.netuid,
+        sm.name
+      FROM subnet_metadata sm
     )
     SELECT
-      netuid,
-      captured_at,
-      alpha_holders_num
-    FROM latest_counts
-    ORDER BY alpha_holders_num DESC, netuid ASC
+      lc.netuid,
+      lc.captured_at,
+      lc.alpha_holders_num,
+      ln.name AS subnet_name
+    FROM latest_counts lc
+    LEFT JOIN latest_names ln
+      ON ln.netuid = lc.netuid
+    ORDER BY lc.alpha_holders_num DESC, lc.netuid ASC
     LIMIT ?
   `).all(limit).map((row) => ({
     netuid: Number(row.netuid),
     captured_at: row.captured_at ?? null,
     alpha_holders_num: Number(row.alpha_holders_num ?? 0),
+    subnet_name: row.subnet_name ?? null,
   }));
 
   let previousCount = null;
@@ -1529,6 +1598,26 @@ function getAlphaHolderSnapshotCounts(db, netuid, sinceIso) {
     ORDER BY captured_at ASC
   `);
   return stmt.all(netuid, sinceIso);
+}
+
+function getSubnetMetadataMap(db, netuids = []) {
+  const ids = [...new Set((Array.isArray(netuids) ? netuids : []).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0))];
+  if (!ids.length) return new Map();
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT *
+    FROM subnet_metadata
+    WHERE netuid IN (${placeholders})
+    ORDER BY captured_at DESC, id DESC
+  `).all(...ids);
+  const map = new Map();
+  for (const row of rows) {
+    const netuid = Number(row.netuid);
+    if (!map.has(netuid)) {
+      map.set(netuid, row);
+    }
+  }
+  return map;
 }
 
 function countAlphaHolderSnapshots(db, netuid = null) {
@@ -1880,6 +1969,7 @@ function setSetting(db, key, value) {
 module.exports = {
   openDatabase,
   insertSnapshot,
+  upsertSubnetMetadata,
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
   insertWalletSnapshot,
@@ -1895,6 +1985,8 @@ module.exports = {
   getTaoFlowHistory,
   getLatestWalletSnapshot,
   getLatestWalletStakePositions,
+  getSubnetMetadata,
+  getSubnetMetadataMap,
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
   getLatestAlphaHolderCountsBySubnet,
