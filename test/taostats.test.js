@@ -713,7 +713,58 @@ test('alpha holder backfill reports CLI-friendly progress updates with eta field
   assert.equal(historyEvents.some((event) => event.phase === 'item' && event.total === 2), true);
   assert.equal(syncEvents.some((event) => Object.prototype.hasOwnProperty.call(event, 'etaIso')), true);
   assert.equal(historyEvents.some((event) => Object.prototype.hasOwnProperty.call(event, 'etaIso')), true);
+  assert.equal(syncEvents.some((event) => event.workerId === 1), true);
 
+  db.close();
+});
+
+test('alpha holder backfill runs up to three subnet workers in parallel', async () => {
+  const db = openDatabase(':memory:');
+  const capturedAt = '2026-05-11T00:00:00.000Z';
+  const active = new Set();
+  let maxActive = 0;
+  const progress = [];
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => [{ netuid: 110 }, { netuid: 111 }, { netuid: 112 }],
+    fetchStakeBalanceLatest: async ({ netuid, capturedAt: rowCapturedAt, workerId }) => {
+      active.add(netuid);
+      maxActive = Math.max(maxActive, active.size);
+      assert.equal(workerId >= 1 && workerId <= 3, true);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      active.delete(netuid);
+      return [normalizeStakeBalanceSnapshot({
+        block_number: 500 + netuid,
+        timestamp: rowCapturedAt,
+        netuid,
+        subnet_rank: 1,
+        subnet_total_holders: 1,
+        balance: '1000000000',
+        balance_as_tao: '1000000000',
+        coldkey: { ss58: `5AlphaHolder${netuid}`, hex: `0xholder${netuid}` },
+        hotkey: { ss58: `5Val${netuid}`, hex: `0xval${netuid}` },
+        hotkey_name: `Validator ${netuid}`,
+      }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: rowCapturedAt })];
+    },
+  };
+  const config = {
+    netuid: 110,
+    taostatsBaseUrl: 'https://example.invalid',
+    taostatsAuthHeader: 'secret',
+    taostatsRateLimiter: null,
+  };
+  const service = createIngestService({ db, config, taostats });
+
+  const result = await service.backfillAlphaHolderSnapshots({
+    capturedAt,
+    onProgress: (event) => progress.push(event),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.netuids, 3);
+  assert.equal(maxActive, 3);
+  assert.equal(progress.some((event) => event.phase === 'item-start' && event.workerId === 1), true);
+  assert.equal(progress.some((event) => event.phase === 'item-start' && event.workerId === 2), true);
+  assert.equal(progress.some((event) => event.phase === 'item-start' && event.workerId === 3), true);
   db.close();
 });
 

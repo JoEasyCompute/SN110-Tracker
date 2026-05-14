@@ -77,22 +77,33 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
   async function storeAlphaHolderRows({ rows, source = 'api', sourceUrl = null, capturedAt = null }) {
     let inserted = 0;
-    for (const row of Array.isArray(rows) ? rows : []) {
-      const blockNumber = row.block_number ?? null;
-      const dedupeKey = [
-        row.netuid ?? config.netuid ?? 'unknown',
-        blockNumber ?? row.remote_timestamp ?? row.captured_at ?? capturedAt ?? 'unknown',
-        row.wallet_address_ss58 ?? row.coldkey_ss58 ?? 'unknown',
-        row.hotkey_address_ss58 ?? 'unknown',
-      ].join(':');
-      insertAlphaHolderSnapshot(db, {
-        ...row,
-        source: row.source || source,
-        source_url: row.source_url || sourceUrl,
-        captured_at: row.captured_at || capturedAt || new Date().toISOString(),
-        dedupe_key: row.dedupe_key || dedupeKey,
-      });
-      inserted += 1;
+    const normalizedRows = Array.isArray(rows) ? rows : [];
+    if (!normalizedRows.length) {
+      return inserted;
+    }
+    db.exec('BEGIN');
+    try {
+      for (const row of normalizedRows) {
+        const blockNumber = row.block_number ?? null;
+        const dedupeKey = [
+          row.netuid ?? config.netuid ?? 'unknown',
+          blockNumber ?? row.remote_timestamp ?? row.captured_at ?? capturedAt ?? 'unknown',
+          row.wallet_address_ss58 ?? row.coldkey_ss58 ?? 'unknown',
+          row.hotkey_address_ss58 ?? 'unknown',
+        ].join(':');
+        insertAlphaHolderSnapshot(db, {
+          ...row,
+          source: row.source || source,
+          source_url: row.source_url || sourceUrl,
+          captured_at: row.captured_at || capturedAt || new Date().toISOString(),
+          dedupe_key: row.dedupe_key || dedupeKey,
+        });
+        inserted += 1;
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
     }
     return inserted;
   }
@@ -103,6 +114,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     skipIfAlreadyCapturedToday = true,
     limit = 1024,
     onProgress = null,
+    workerId = null,
   } = {}) {
     if (!config.taostatsAuthHeader) {
       return {
@@ -140,6 +152,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       capturedAt,
       limit,
       onProgress,
+      workerId,
     });
     const inserted = await storeAlphaHolderRows({
       rows,
@@ -196,6 +209,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = true,
     limit = 1024,
+    concurrency = 1,
     onProgress = null,
   } = {}) {
     if (!config.taostatsAuthHeader) {
@@ -212,6 +226,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
     const subnets = await resolveAlphaHolderNetuids({ limit });
     const startedAtMs = Date.now();
+    const parsedConcurrency = Number.parseInt(String(concurrency), 10);
+    const workersTotal = Math.max(1, Math.min(3, Number.isFinite(parsedConcurrency) && parsedConcurrency > 0 ? parsedConcurrency : 1));
     const emitProgress = (payload) => {
       if (typeof onProgress === 'function') {
         onProgress(payload);
@@ -233,56 +249,65 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       skipped: false,
       ok: true,
       capturedAt,
+      workersTotal,
+      message: workersTotal > 1 ? `running with ${workersTotal} workers` : 'running',
     });
 
     let fetched = 0;
     let inserted = 0;
     let ok = true;
     const results = [];
+    let completedCount = 0;
 
-    for (const [index, netuid] of subnets.entries()) {
+    const processSubnet = async (netuid, index, workerId = null) => {
+      const startedCompleted = completedCount;
+      const startedElapsedMs = Date.now() - startedAtMs;
+      const startedEtaMs = startedCompleted > 0 && startedCompleted < subnets.length
+        ? Math.max(0, Math.round((startedElapsedMs / startedCompleted) * (subnets.length - startedCompleted)))
+        : 0;
+      emitProgress({
+        phase: 'item-start',
+        operation: 'alpha-holder-sync',
+        total: subnets.length,
+        completed: startedCompleted,
+        remaining: Math.max(0, subnets.length - startedCompleted),
+        elapsedMs: startedElapsedMs,
+        etaMs: startedEtaMs,
+        etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
+        netuid,
+        fetched: 0,
+        inserted: 0,
+        skipped: false,
+        ok: true,
+        message: `SN${netuid}`,
+        workerId,
+        workersTotal,
+      });
+
       try {
-        const startedCompleted = index;
-        const startedElapsedMs = Date.now() - startedAtMs;
-        const startedEtaMs = startedCompleted > 0 && startedCompleted < subnets.length
-          ? Math.max(0, Math.round((startedElapsedMs / startedCompleted) * (subnets.length - startedCompleted)))
-          : 0;
-        emitProgress({
-          phase: 'item-start',
-          operation: 'alpha-holder-sync',
-          total: subnets.length,
-          completed: startedCompleted,
-          remaining: Math.max(0, subnets.length - startedCompleted),
-          elapsedMs: startedElapsedMs,
-          etaMs: startedEtaMs,
-          etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
-          netuid,
-          fetched: 0,
-          inserted: 0,
-          skipped: false,
-          ok: true,
-          message: `SN${netuid}`,
-        });
         const snapshot = await syncAlphaHolderSnapshot({
           netuid,
           capturedAt,
           skipIfAlreadyCapturedToday,
           limit,
+          onProgress,
+          workerId,
         });
         fetched += Number(snapshot.fetched || 0);
         inserted += Number(snapshot.inserted || 0);
         if (snapshot.ok === false || snapshot.error) {
           ok = false;
         }
-        results.push({
+        results[index] = {
           netuid,
           ok: snapshot.ok !== false && !snapshot.error,
           skipped: Boolean(snapshot.skipped),
           fetched: Number(snapshot.fetched || 0),
           inserted: Number(snapshot.inserted || 0),
           reason: snapshot.reason || null,
-        });
-        const completed = index + 1;
+        };
+        completedCount += 1;
+        const completed = completedCount;
         const elapsedMs = Date.now() - startedAtMs;
         const etaMs = completed > 0 && completed < subnets.length
           ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
@@ -302,18 +327,21 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           skipped: Boolean(snapshot.skipped),
           ok: snapshot.ok !== false && !snapshot.error,
           message: `SN${netuid}`,
+          workerId,
+          workersTotal,
         });
       } catch (error) {
         ok = false;
-        results.push({
+        results[index] = {
           netuid,
           ok: false,
           skipped: false,
           fetched: 0,
           inserted: 0,
           reason: error instanceof Error ? error.message : String(error),
-        });
-        const completed = index + 1;
+        };
+        completedCount += 1;
+        const completed = completedCount;
         const elapsedMs = Date.now() - startedAtMs;
         const etaMs = completed > 0 && completed < subnets.length
           ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
@@ -334,8 +362,32 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
           message: `SN${netuid}`,
+          workerId,
+          workersTotal,
         });
       }
+    };
+
+    if (workersTotal <= 1 || subnets.length <= 1) {
+      for (const [index, netuid] of subnets.entries()) {
+        // eslint-disable-next-line no-await-in-loop
+        await processSubnet(netuid, index, 1);
+      }
+    } else {
+      let nextIndex = 0;
+      await Promise.all(Array.from({ length: workersTotal }, async (_, workerIndex) => {
+        const workerId = workerIndex + 1;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const currentIndex = nextIndex;
+          nextIndex += 1;
+          if (currentIndex >= subnets.length) {
+            break;
+          }
+          // eslint-disable-next-line no-await-in-loop
+          await processSubnet(subnets[currentIndex], currentIndex, workerId);
+        }
+      }));
     }
 
     emitProgress({
@@ -354,6 +406,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       ok,
       results,
       capturedAt,
+      workersTotal,
     });
 
     return {
@@ -578,12 +631,14 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = false,
     limit = 1024,
+    concurrency = 3,
     onProgress = null,
   } = {}) {
     return syncAllAlphaHolderSnapshots({
       capturedAt,
       skipIfAlreadyCapturedToday,
       limit,
+      concurrency,
       onProgress,
     });
   }

@@ -77,6 +77,11 @@ function createProgressPrinter(label) {
       : '[░░░░░░░░░░░░░░░░░░]';
     const netuidValue = progress.netuid !== null && progress.netuid !== undefined ? Number(progress.netuid) : null;
     const netuidLabel = Number.isFinite(netuidValue) && netuidValue > 0 ? ` SN${netuidValue}` : '';
+    const workerValue = progress.workerId !== null && progress.workerId !== undefined ? Number(progress.workerId) : null;
+    const workersTotalValue = progress.workersTotal !== null && progress.workersTotal !== undefined ? Number(progress.workersTotal) : null;
+    const workerLabel = Number.isFinite(workerValue) && workerValue > 0 && Number.isFinite(workersTotalValue) && workersTotalValue > 0
+      ? ` w${workerValue}/${workersTotalValue}`
+      : '';
     const pageValue = progress.page !== null && progress.page !== undefined ? Number(progress.page) : null;
     const pageLabel = Number.isFinite(pageValue) && pageValue > 0 ? ` p${pageValue}` : '';
     const counts = [];
@@ -98,8 +103,8 @@ function createProgressPrinter(label) {
         ? `error: ${progress.error}`
         : progress.message || 'running';
     const line = total > 0
-      ? `[${label}] ${completed}/${total}${remaining > 0 ? ` (${remaining} remaining)` : ''}${netuidLabel}${pageLabel} ${bar} ${etaText} • ${elapsedText}${countsText} • ${status}`
-      : `[${label}] ${netuidLabel || pageLabel ? `${netuidLabel}${pageLabel} ` : ''}${status}`;
+      ? `[${label}] ${completed}/${total}${remaining > 0 ? ` (${remaining} remaining)` : ''}${workerLabel}${netuidLabel}${pageLabel} ${bar} ${etaText} • ${elapsedText}${countsText} • ${status}`
+      : `[${label}] ${workerLabel || netuidLabel || pageLabel ? `${workerLabel}${netuidLabel}${pageLabel} ` : ''}${status}`;
     write(line, progress.phase === 'done');
   };
 }

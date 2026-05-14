@@ -961,6 +961,7 @@ async function fetchStakeBalanceLatest({
   onProgress = null,
   retryDelayMs = 60_000,
   maxRetries = 1,
+  workerId = null,
 }) {
   if (!taostatsAuthHeader) {
     return [];
@@ -991,6 +992,7 @@ async function fetchStakeBalanceLatest({
       netuid: netuid ?? null,
       coldkey: coldkey ?? null,
       hotkey: hotkey ?? null,
+      workerId,
       fetched: rows.length,
       rowsFetched: rows.length,
       ok: true,
@@ -1008,30 +1010,32 @@ async function fetchStakeBalanceLatest({
           emitProgress({
             phase: 'retry-wait',
             operation: 'stake-balance-latest',
-            page,
-            pageSize,
-            netuid: netuid ?? null,
-            coldkey: coldkey ?? null,
-            hotkey: hotkey ?? null,
-            retryAfterMs: delayMs,
-            attempt: attempt + 1,
-            ok: false,
-            message: `rate limited on page ${page}; sleeping ${formatDurationShort(delayMs)} before retry`,
-          });
+          page,
+          pageSize,
+          netuid: netuid ?? null,
+          coldkey: coldkey ?? null,
+          hotkey: hotkey ?? null,
+          workerId,
+          retryAfterMs: delayMs,
+          attempt: attempt + 1,
+          ok: false,
+          message: `rate limited on page ${page}; sleeping ${formatDurationShort(delayMs)} before retry`,
+        });
           await waitMs(delayMs);
           emitProgress({
             phase: 'retrying',
             operation: 'stake-balance-latest',
-            page,
-            pageSize,
-            netuid: netuid ?? null,
-            coldkey: coldkey ?? null,
-            hotkey: hotkey ?? null,
-            retryAfterMs: delayMs,
-            attempt: attempt + 1,
-            ok: true,
-            message: `retrying page ${page} after ${formatDurationShort(delayMs)}`,
-          });
+          page,
+          pageSize,
+          netuid: netuid ?? null,
+          coldkey: coldkey ?? null,
+          hotkey: hotkey ?? null,
+          workerId,
+          retryAfterMs: delayMs,
+          attempt: attempt + 1,
+          ok: true,
+          message: `retrying page ${page} after ${formatDurationShort(delayMs)}`,
+        });
           continue;
         }
         throw error;
@@ -1048,6 +1052,7 @@ async function fetchStakeBalanceLatest({
       netuid: netuid ?? null,
       coldkey: coldkey ?? null,
       hotkey: hotkey ?? null,
+      workerId,
       ok: true,
       message: `page ${page} fetched ${pageRows.length} rows`,
     });
