@@ -585,7 +585,8 @@ test('renderPage uses cached subnet metadata when the latest subnet snapshot is 
   assert.equal(model.latest, null);
   assert.equal(model.subnetLabel, 'Chutes (SN64)');
   assert.equal(html.includes('Chutes (SN64) Tracker'), true);
-  assert.equal(html.includes('Subnet Chutes (SN64)'), true);
+  assert.equal(html.includes('class="subnet-header-link"'), true);
+  assert.equal(html.includes('class="subnet-title-link"'), true);
   assert.equal(html.includes('Chutes (SN64) alpha-holder rank'), true);
   assert.equal(html.includes('<th>Change</th>'), true);
   assert.equal(html.includes('<th>Trend</th>'), true);
@@ -1523,6 +1524,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Alpha Holders'), true);
   assert.equal(html.includes('Alpha holder addresses'), true);
   assert.equal(html.includes('Alpha-holder ranking across subnets'), true);
+  assert.equal(html.includes('class="subnet-header-link"'), true);
+  assert.equal(html.includes('class="subnet-title-link"'), true);
   assert.equal(html.includes('href="https://taostats.io/subnets/110"'), true);
   assert.equal(html.includes('target="_blank"'), true);
   assert.equal(html.includes('rel="noopener noreferrer"'), true);

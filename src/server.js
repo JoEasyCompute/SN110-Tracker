@@ -6032,6 +6032,15 @@ function renderPage(model) {
     ? `Latest snapshot captured ${formatRelativeIso(latest.captured_at)}`
     : 'No snapshots captured yet';
   const walletActivityText = formatWalletActivityStatusText(walletActivityStatus);
+  const taostatsSubnetUrl = buildTaostatsSubnetUrl(netuid, config.taostatsPublicBaseUrl);
+  const subnetHeaderLabel = subnetLabel || `SN${netuid}`;
+  const subnetHeaderTitle = escapeHtml(title);
+  const subnetHeaderLink = taostatsSubnetUrl
+    ? `<a class="subnet-header-link" href="${escapeHtml(taostatsSubnetUrl)}" target="_blank" rel="noopener noreferrer" title="Open ${escapeHtml(subnetHeaderLabel)} on Taostats">${escapeHtml(subnetHeaderLabel)}</a>`
+    : escapeHtml(subnetHeaderLabel);
+  const subnetHeaderTitleLink = taostatsSubnetUrl
+    ? `<a class="subnet-title-link" href="${escapeHtml(taostatsSubnetUrl)}" target="_blank" rel="noopener noreferrer" title="Open ${escapeHtml(subnetHeaderLabel)} on Taostats">${subnetHeaderTitle}</a>`
+    : subnetHeaderTitle;
 
   const cards = latest ? renderLatestSnapshotCards(latest, latestMetricDefs) : '';
   const pollIntervalButtons = POLL_INTERVAL_OPTIONS.map((minutes) => {
@@ -6058,8 +6067,8 @@ function renderPage(model) {
     ? `
       <section class="hero">
         <div class="hero-copy">
-          <div class="eyebrow">Subnet ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
-          <h1>${escapeHtml(title)}</h1>
+          <div class="eyebrow">Subnet ${subnetHeaderLink}</div>
+          <h1>${subnetHeaderTitleLink}</h1>
           <p>${escapeHtml(subtitle)}</p>
         </div>
         <div class="hero-meta">
@@ -6073,8 +6082,8 @@ function renderPage(model) {
     : `
       <section class="hero">
         <div class="hero-copy">
-          <div class="eyebrow">Subnet ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
-          <h1>${escapeHtml(title)}</h1>
+          <div class="eyebrow">Subnet ${subnetHeaderLink}</div>
+          <h1>${subnetHeaderTitleLink}</h1>
           <p>${escapeHtml(subtitle)}</p>
         </div>
         <div class="hero-meta">
@@ -6223,6 +6232,25 @@ function renderPage(model) {
       .eyebrow { color: var(--accent); letter-spacing: .18em; text-transform: uppercase; font-size: 12px; margin-bottom: 8px; }
       h1 { margin: 0; font-size: clamp(32px, 4vw, 48px); }
       .hero p { color: var(--muted); margin: 12px 0 0; }
+      .subnet-header-link,
+      .subnet-title-link {
+        color: inherit;
+        text-decoration: none;
+      }
+      .subnet-header-link:hover,
+      .subnet-header-link:focus-visible,
+      .subnet-title-link:hover,
+      .subnet-title-link:focus-visible {
+        color: #ffffff;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .subnet-header-link:focus-visible,
+      .subnet-title-link:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 6px;
+      }
       .hero-meta {
         display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
       }
