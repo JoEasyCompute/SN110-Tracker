@@ -1100,33 +1100,26 @@ function renderAlphaHolderSection(rows, {
   if (currentVisibleRow) {
     visibleRankingEntries.push(currentVisibleRow);
   }
-  const rankMetricCard = currentRankingRow ? metricCard({
-    label: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)} alpha-holder rank`,
-    value: integer(currentRankingRow.rank_num),
-    subtext: rankHistoryStartAt
-      ? `Current local rank among ${integer(rankingEntries.length)} tracked subnets. History starts at ${formatIso(rankHistoryStartAt)}. Click to open the local rank chart.`
-      : `Current local rank among ${integer(rankingEntries.length)} tracked subnets. Click to open the local rank chart.`,
-    tone: currentRankingRow.rank_num === 1 ? 'positive' : 'neutral',
-    clickable: true,
-    metricData: {
-      kind: 'alpha-holder-rank',
-      key: `alpha-holder-rank:${currentNetuid}`,
-      label: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)} alpha-holder rank`,
-      description: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)}’s place in the local alpha-holder ranking across all stored subnets. Lower numbers mean more alpha holders. The chart starts when local collection begins.`,
-      valueField: 'rank_num',
-      valueFormat: 'integer',
-      historyField: 'rank_num',
-      chartLabel: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)} Alpha-holder rank`,
-      chartColor: '#38bdf8',
-      clickable: true,
-      historySource: 'alpha-holder-rank',
-      historyId: String(currentNetuid),
-      latestValue: integer(currentRankingRow.rank_num),
-      rawValue: integer(currentRankingRow.rank_num),
-      sourceText: 'Local alpha-holder ranking across all stored subnets',
-      displayValue: integer(currentRankingRow.rank_num),
-    },
-  }) : '';
+  const currentRankLabel = currentRankingRow
+    ? (currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid))
+    : 'No current subnet ranking yet';
+  const currentRankValue = currentRankingRow ? `#${integer(currentRankingRow.rank_num)}` : '—';
+  const currentRankSubtext = currentRankingRow
+    ? [
+      `Current local rank among ${integer(rankingEntries.length)} tracked subnets`,
+      rankHistoryStartAt ? `History starts at ${formatIso(rankHistoryStartAt)}` : null,
+      'Click to expand the ranking table',
+    ].filter(Boolean).join(' • ')
+    : 'No ranking data is available yet.';
+  const rankingSummary = `
+    <summary class="alpha-holder-ranking-summary">
+      <span class="alpha-holder-ranking-summary-kicker">Alpha-holder ranking across subnets</span>
+      <span class="alpha-holder-ranking-summary-title">Current subnet alpha-holder rank</span>
+      <span class="alpha-holder-ranking-summary-label">${escapeHtml(currentRankLabel)}</span>
+      <span class="alpha-holder-ranking-summary-value">${escapeHtml(currentRankValue)}</span>
+      <span class="alpha-holder-ranking-summary-subtext">${escapeHtml(currentRankSubtext)}</span>
+    </summary>
+  `;
   const rankingBody = visibleRankingEntries.length
     ? visibleRankingEntries.map((row) => {
         const isCurrent = currentNetuid !== null && Number(row.netuid) === Number(currentNetuid);
@@ -1192,29 +1185,31 @@ function renderAlphaHolderSection(rows, {
           </div>
         </div>
       </details>
-      <div class="panel alpha-holder-ranking-panel">
-        <div class="alpha-holder-ranking-head">
-          <div>
-            <h3>Alpha-holder ranking across subnets</h3>
-            <p class="muted">This table is the primary view. It compares the latest local alpha-holder snapshot for every subnet stored in SQLite and adds a small trend sparkline per row.</p>
+      <details class="alpha-holder-ranking-details">
+        ${rankingSummary}
+        <div class="panel alpha-holder-ranking-panel">
+          <div class="alpha-holder-ranking-head">
+            <div>
+              <h3>Latest alpha-holder leaderboard</h3>
+              <p class="muted">This table compares the latest local alpha-holder snapshot for every subnet stored in SQLite and adds a small trend sparkline per row.</p>
+            </div>
           </div>
-          ${rankMetricCard ? `<div class="alpha-holder-ranking-card">${rankMetricCard}</div>` : ''}
+          <div class="table-wrap alpha-holder-ranking-table-wrap">
+            <table class="data-table alpha-holder-ranking-table">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Subnet</th>
+                  <th>Alpha holders</th>
+                  <th>Change</th>
+                  <th>Trend</th>
+                </tr>
+              </thead>
+              <tbody>${rankingBody}</tbody>
+            </table>
+          </div>
         </div>
-        <div class="table-wrap alpha-holder-ranking-table-wrap">
-          <table class="data-table alpha-holder-ranking-table">
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Subnet</th>
-                <th>Alpha holders</th>
-                <th>Change</th>
-                <th>Trend</th>
-              </tr>
-            </thead>
-            <tbody>${rankingBody}</tbody>
-          </table>
-        </div>
-      </div>
+      </details>
     </section>
   `;
 }
@@ -6833,6 +6828,73 @@ function renderPage(model) {
       .alpha-holder-details[open] > summary::before {
         transform: rotate(90deg);
       }
+      .alpha-holder-ranking-details {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid rgba(143, 163, 184, 0.14);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .alpha-holder-ranking-details > summary {
+        cursor: pointer;
+        list-style: none;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 4px 14px;
+        align-items: center;
+      }
+      .alpha-holder-ranking-details > summary::-webkit-details-marker {
+        display: none;
+      }
+      .alpha-holder-ranking-details > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+        grid-column: 2;
+        grid-row: 1 / span 2;
+        align-self: center;
+      }
+      .alpha-holder-ranking-details[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .alpha-holder-ranking-summary-kicker {
+        grid-column: 1 / -1;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+      }
+      .alpha-holder-ranking-summary-title {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .alpha-holder-ranking-summary-label {
+        font-size: 14px;
+        font-weight: 700;
+        color: #d9fffa;
+      }
+      .alpha-holder-ranking-summary-value {
+        grid-column: 2;
+        grid-row: 2 / span 2;
+        align-self: center;
+        font-size: 34px;
+        font-weight: 800;
+        line-height: 1;
+        color: #fff;
+      }
+      .alpha-holder-ranking-summary-subtext {
+        font-size: 13px;
+        line-height: 1.45;
+        color: var(--muted);
+      }
       .alpha-holder-ranking-panel {
         margin-top: 10px;
         display: grid;
@@ -6840,8 +6902,8 @@ function renderPage(model) {
       }
       .alpha-holder-ranking-head {
         display: grid;
-        gap: 10px;
-        grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+        gap: 8px;
+        grid-template-columns: minmax(0, 1fr);
         align-items: start;
       }
       .alpha-holder-ranking-head h3 {
@@ -6850,13 +6912,10 @@ function renderPage(model) {
         letter-spacing: 0.01em;
       }
       .alpha-holder-ranking-head p {
-        margin: 5px 0 0;
+        margin: 0;
         max-width: 64ch;
         font-size: 13px;
         line-height: 1.45;
-      }
-      .alpha-holder-ranking-card .card {
-        margin: 0;
       }
       table.alpha-holder-ranking-table {
         min-width: 920px;

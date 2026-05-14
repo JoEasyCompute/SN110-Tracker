@@ -103,7 +103,7 @@ The `alpha-holder-history-backfill` alias now reuses the supported snapshot path
 The manual alpha-holder snapshot path uses a small 3-worker subnet queue for faster fills, while the scheduled UTC sync stays sequential.
 While each subnet is loading, the CLI also prints page-level heartbeat lines and worker ids so you can tell whether the fetch is still active before the subnet finishes.
 If Taostats returns a 429 during the alpha-holder fetch, the CLI now pauses for about a minute, prints a retry message, and tries that page again once before moving on.
-The alpha-holder ranking view now uses a table-first layout: the leaderboard shows rank, subnet, alpha-holder count, change from the prior daily sample, and a tiny trend sparkline. It still uses the latest stored subnet name when available, so labels read like `Chutes (SN64)` instead of plain `SN64`.
+The alpha-holder ranking view now collapses by default into a current-subnet rank card. Opening it reveals the table-first leaderboard with rank, subnet, alpha-holder count, change from the prior daily sample, and a tiny trend sparkline. It still uses the latest stored subnet name when available, so labels read like `Chutes (SN64)` instead of plain `SN64`.
 Those labels are backed by a small local subnet metadata cache, so the app can keep using the friendly name even when the current subnet snapshot is missing.
 
 ### Backfill command options
@@ -132,7 +132,7 @@ It also backfills TAO price history so USD toggles keep working for historical v
 It also backfills Tao Flow history so the Money In/Out charts can render historical values from dedicated flow data.
 If wallets are configured, backfill also pulls Taostats account history for each configured coldkey and stores the daily wallet balance history locally.
 Alpha holder history is stored as snapshot rows in SQLite too, so the Alpha Holders card can chart previous days from the local `alpha_holder_snapshots` table. The new ranking panel also uses that table, so both the all-subnet ranking view and the SN110 rank chart only begin once local collection has stored its first alpha-holder samples.
-The ranking panel compares every stored subnet by latest local holder count, highlights SN110 in the table, and exposes a clickable SN110 rank card that opens the historical rank chart.
+The ranking panel compares every stored subnet by latest local holder count, highlights SN110 in the table, and collapses by default into a current-subnet card that expands into the leaderboard.
 Backfill also pulls historical hotkey stake snapshots for each configured coldkey, so the wallet modal can show a hotkey history section alongside the live current stake positions.
 Sentiment history will use SSI when Taostats provides it, with legacy Fear & Greed as a fallback for older live rows.
 

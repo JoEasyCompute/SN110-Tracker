@@ -587,7 +587,9 @@ test('renderPage uses cached subnet metadata when the latest subnet snapshot is 
   assert.equal(html.includes('Chutes (SN64) Tracker'), true);
   assert.equal(html.includes('class="subnet-header-link"'), true);
   assert.equal(html.includes('class="subnet-title-link"'), true);
-  assert.equal(html.includes('Chutes (SN64) alpha-holder rank'), true);
+  assert.equal(html.includes('class="alpha-holder-ranking-details"'), true);
+  assert.equal(html.includes('Current subnet alpha-holder rank'), true);
+  assert.equal(html.includes('Current local rank among'), true);
   assert.equal(html.includes('<th>Change</th>'), true);
   assert.equal(html.includes('<th>Trend</th>'), true);
   assert.equal(html.includes('alpha-holder-sparkline-line'), true);
@@ -1521,6 +1523,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="wallet-activity-topbar-status"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-status"'), true);
   assert.equal(html.includes('class="alpha-holder-details"'), true);
+  assert.equal(html.includes('class="alpha-holder-ranking-details"'), true);
   assert.equal(html.includes('Alpha Holders'), true);
   assert.equal(html.includes('Alpha holder addresses'), true);
   assert.equal(html.includes('Alpha-holder ranking across subnets'), true);
@@ -1529,8 +1532,9 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('href="https://taostats.io/subnets/110"'), true);
   assert.equal(html.includes('target="_blank"'), true);
   assert.equal(html.includes('rel="noopener noreferrer"'), true);
-  assert.equal(html.includes('Green Compute (SN110) alpha-holder rank'), true);
-  assert.equal(html.includes('History starts at'), true);
+  assert.equal(html.includes('Current subnet alpha-holder rank'), true);
+  assert.equal(html.includes('Green Compute (SN110)'), true);
+  assert.equal(html.includes('Click to expand the ranking table'), true);
   assert.equal(html.includes('Show compact trend overview'), false);
   assert.equal(html.includes('Other Compute (SN111)'), true);
   assert.equal(html.includes('Third Compute (SN112)'), true);
@@ -1550,15 +1554,9 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   });
   assert.equal(alphaHoldersButton?.tagName, 'BUTTON');
   assert.equal(alphaHoldersButton?.querySelector('.card-value')?.textContent?.trim(), '2');
-  const rankButton = [...dom.window.document.querySelectorAll('[data-metric]')].find((element) => {
-    try {
-      return JSON.parse(element.getAttribute('data-metric') || '{}').label === 'Green Compute (SN110) alpha-holder rank';
-    } catch {
-      return false;
-    }
-  });
-  assert.equal(rankButton?.tagName, 'BUTTON');
-  assert.equal(rankButton?.querySelector('.card-value')?.textContent?.trim(), '2');
+  const rankDetails = dom.window.document.querySelector('.alpha-holder-ranking-details');
+  assert.equal(rankDetails?.hasAttribute('open'), false);
+  assert.equal(rankDetails?.querySelector('.alpha-holder-ranking-summary-value')?.textContent?.trim(), '#2');
   assert.equal(html.includes('id="wallet-activity-topbar-badge"'), true);
   assert.equal(html.includes('id="wallet-activity-admin-badge"'), true);
   assert.equal(html.includes('status-badge status-badge-neutral'), true);
