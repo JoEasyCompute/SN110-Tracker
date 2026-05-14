@@ -506,6 +506,13 @@ function attachAlphaHolderCounts(rows, alphaHolderCounts) {
   });
 }
 
+function formatSubnetLabel(name, netuid) {
+  const subnetId = Number(netuid);
+  const subnetLabel = Number.isFinite(subnetId) && subnetId > 0 ? `SN${subnetId}` : 'SN?';
+  const cleanName = String(name ?? '').trim();
+  return cleanName ? `${cleanName} (${subnetLabel})` : subnetLabel;
+}
+
 function buildAlphaHolderRankingRows(rows, currentNetuid = null) {
   const sortedRows = Array.isArray(rows)
     ? rows
@@ -533,6 +540,8 @@ function buildAlphaHolderRankingRows(rows, currentNetuid = null) {
       alpha_holders_num: Number.isFinite(count) ? count : 0,
       rank_num: rank,
       current: currentNetuid !== null && Number(row.netuid) === Number(currentNetuid),
+      subnet_name: row.subnet_name || row.name || null,
+      subnet_label: formatSubnetLabel(row.subnet_name || row.name, row.netuid),
     };
   });
 
@@ -557,13 +566,29 @@ function fetchAlphaHolderCurrentRanking(db, currentNetuid = null) {
        AND a.captured_at = l.captured_at
       WHERE COALESCE(a.balance_as_tao_num, 0) > 0
       GROUP BY a.netuid, l.captured_at
+    ),
+    latest_subnet_names AS (
+      SELECT
+        s.netuid,
+        s.name AS subnet_name
+      FROM snapshots s
+      JOIN (
+        SELECT netuid, MAX(captured_at) AS captured_at
+        FROM snapshots
+        GROUP BY netuid
+      ) latest_snapshot
+        ON s.netuid = latest_snapshot.netuid
+       AND s.captured_at = latest_snapshot.captured_at
     )
     SELECT
-      netuid,
-      captured_at,
-      alpha_holders_num
-    FROM latest_counts
-    ORDER BY alpha_holders_num DESC, captured_at DESC, netuid ASC
+      lc.netuid,
+      lc.captured_at,
+      lc.alpha_holders_num,
+      ls.subnet_name
+    FROM latest_counts lc
+    LEFT JOIN latest_subnet_names ls
+      ON ls.netuid = lc.netuid
+    ORDER BY lc.alpha_holders_num DESC, lc.captured_at DESC, lc.netuid ASC
   `).all();
   return buildAlphaHolderRankingRows(rows, currentNetuid);
 }
@@ -722,7 +747,8 @@ function getLatestMetricDefs() {
   ];
 }
 
-function getSubnetDataMetricDefs() {
+function getSubnetDataMetricDefs(subnetLabel = null) {
+  const labelText = subnetLabel || 'this subnet';
   return [
     { key: 'emission_percent_num', label: 'Emission Rate', description: 'This is the share of TAO being released into the subnet pool each cycle, shown as a percentage.', valueField: 'emission_percent_num', valueFormat: 'percent', historyField: 'emission_percent_num', chartLabel: 'Emission Rate', chartColor: '#f59e0b', clickable: true },
     {
@@ -740,7 +766,7 @@ function getSubnetDataMetricDefs() {
     { key: 'owner_per_day_tao_num', label: 'Owner Share', description: 'This is the part of that daily TAO that goes to the subnet owner.', valueField: 'owner_per_day_tao_num', valueFormat: 'tao', historyField: 'owner_per_day_tao_num', chartLabel: 'Owner Share', chartColor: '#60a5fa', clickable: true },
     { key: 'miner_per_day_tao_num', label: 'Miner Share', description: 'This is the part of the daily TAO that goes to miners for doing the work that supports the subnet.', valueField: 'miner_per_day_tao_num', valueFormat: 'tao', historyField: 'miner_per_day_tao_num', chartLabel: 'Miner Share', chartColor: '#22c55e', clickable: true },
     { key: 'validator_per_day_tao_num', label: 'Validator Share', description: 'This is the part of the daily TAO that goes to validators for checking and confirming activity.', valueField: 'validator_per_day_tao_num', valueFormat: 'tao', historyField: 'validator_per_day_tao_num', chartLabel: 'Validator Share', chartColor: '#a855f7', clickable: true },
-    { key: 'alpha_holders_num', label: 'Alpha Holders', description: 'This is the number of holder rows in the latest subnet snapshot, derived from the stored holder snapshots. Click it to see the historical trend, and use the new all-subnet ranking view below to compare SN110 with the rest.', valueField: 'alpha_holders_num', valueFormat: 'integer', historyField: 'alpha_holders_num', chartLabel: 'Alpha Holders', chartColor: '#38bdf8', clickable: true, historySource: 'alpha-holder' },
+    { key: 'alpha_holders_num', label: 'Alpha Holders', description: `This is the number of holder rows in the latest subnet snapshot, derived from the stored holder snapshots. Click it to see the historical trend, and use the new all-subnet ranking view below to compare ${labelText} with the rest.`, valueField: 'alpha_holders_num', valueFormat: 'integer', historyField: 'alpha_holders_num', chartLabel: 'Alpha Holders', chartColor: '#38bdf8', clickable: true, historySource: 'alpha-holder' },
     { key: 'incentive_burn_num', label: 'Burn Rate', description: 'This shows how much reward is burned instead of being paid out. Higher values mean more gets removed from circulation.', valueField: 'incentive_burn_num', valueFormat: 'percent', historyField: 'incentive_burn_num', chartLabel: 'Burn Rate', chartColor: '#fb7185', clickable: true },
     { key: 'recycled_24_hours_num', label: 'Recycled TAO', description: 'This is the amount of TAO that got recycled in the last 24 hours. In plain English, it’s TAO that came back into use instead of staying spent.', valueField: 'recycled_24_hours_num', valueFormat: 'tao', historyField: 'recycled_24_hours_num', chartLabel: 'Recycled TAO', chartColor: '#38bdf8', clickable: true },
     { key: 'registration_cost_num', label: 'Registration Fee', description: 'This is the fee to register a new neuron. Think of it as the cost to get a seat at the table.', valueField: 'registration_cost_num', valueFormat: 'tao', historyField: 'registration_cost_num', chartLabel: 'Registration Fee', chartColor: '#c084fc', clickable: true },
@@ -969,8 +995,8 @@ function renderLatestSnapshotCards(latest, defs) {
   return renderMetricCards(latest, defs, { defaultSubtext: true });
 }
 
-function renderSubnetDataCards(latest) {
-  return renderMetricCards(latest, getSubnetDataMetricDefs(), { defaultSubtext: false });
+function renderSubnetDataCards(latest, subnetLabel = null) {
+  return renderMetricCards(latest, getSubnetDataMetricDefs(subnetLabel), { defaultSubtext: false });
 }
 
 function renderAlphaHolderSection(rows, {
@@ -1010,7 +1036,7 @@ function renderAlphaHolderSection(rows, {
             const y = 24 + index * 34;
             const isCurrent = currentNetuid !== null && Number(row.netuid) === Number(currentNetuid);
             return `
-              <text x="0" y="${y + 13}" class="alpha-holder-ranking-chart-label">#${escapeHtml(integer(row.rank_num))} SN${escapeHtml(row.netuid)}</text>
+              <text x="0" y="${y + 13}" class="alpha-holder-ranking-chart-label">#${escapeHtml(integer(row.rank_num))} ${escapeHtml(row.subnet_label || formatSubnetLabel(row.subnet_name, row.netuid))}</text>
               <rect x="210" y="${y}" width="${barWidth}" height="20" rx="10" class="alpha-holder-ranking-chart-bar${isCurrent ? ' current' : ''}"></rect>
               <text x="${220 + barWidth}" y="${y + 13}" class="alpha-holder-ranking-chart-value">${escapeHtml(integer(row.alpha_holders_num))}</text>
             `;
@@ -1020,7 +1046,7 @@ function renderAlphaHolderSection(rows, {
     `
     : '<p class="muted alpha-holder-ranking-chart-empty">No ranking data available yet.</p>';
   const rankMetricCard = currentRankingRow ? metricCard({
-    label: `SN${currentNetuid} alpha-holder rank`,
+    label: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)} alpha-holder rank`,
     value: integer(currentRankingRow.rank_num),
     subtext: rankHistoryStartAt
       ? `Current local rank among ${integer(rankingEntries.length)} tracked subnets. History starts at ${formatIso(rankHistoryStartAt)}. Click to open the local rank chart.`
@@ -1030,12 +1056,12 @@ function renderAlphaHolderSection(rows, {
     metricData: {
       kind: 'alpha-holder-rank',
       key: `alpha-holder-rank:${currentNetuid}`,
-      label: `SN${currentNetuid} alpha-holder rank`,
-      description: 'This is SN' + currentNetuid + '\'s place in the local alpha-holder ranking across all stored subnets. Lower numbers mean more alpha holders. The chart starts when local collection begins.',
+      label: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)} alpha-holder rank`,
+      description: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)}’s place in the local alpha-holder ranking across all stored subnets. Lower numbers mean more alpha holders. The chart starts when local collection begins.`,
       valueField: 'rank_num',
       valueFormat: 'integer',
       historyField: 'rank_num',
-      chartLabel: `SN${currentNetuid} Alpha-holder rank`,
+      chartLabel: `${currentRankingRow.subnet_label || formatSubnetLabel(currentRankingRow.subnet_name, currentNetuid)} Alpha-holder rank`,
       chartColor: '#38bdf8',
       clickable: true,
       historySource: 'alpha-holder-rank',
@@ -1052,7 +1078,7 @@ function renderAlphaHolderSection(rows, {
         return `
           <tr${isCurrent ? ' class="current"' : ''}>
             <td>${escapeHtml(integer(row.rank_num))}</td>
-            <td>${escapeHtml(`SN${row.netuid}`)}${isCurrent ? ' <span class="ranking-current-tag">Current</span>' : ''}</td>
+            <td>${escapeHtml(row.subnet_label || formatSubnetLabel(row.subnet_name, row.netuid))}${isCurrent ? ' <span class="ranking-current-tag">Current</span>' : ''}</td>
             <td>${escapeHtml(integer(row.alpha_holders_num))}</td>
             <td>${escapeHtml(formatIso(row.captured_at))}</td>
           </tr>
@@ -2278,7 +2304,7 @@ function buildAlphaHolderRanking(rows) {
     .filter((row) => Number.isFinite(row.netuid) && row.netuid > 0)
     .map((row) => ({
       ...row,
-      label: `SN${row.netuid}`,
+      label: formatSubnetLabel(row.subnet_name || row.name, row.netuid),
     }));
 }
 
@@ -2342,6 +2368,7 @@ function buildPageModel({ db, config, netuid }) {
         tao_price_captured_at: latest.tao_price_captured_at ?? latestTaoPrice?.captured_at ?? null,
       }
     : null;
+  const subnetLabel = formatSubnetLabel(latest?.name ?? null, netuid);
   const walletEntries = (config.wallets || []).map((wallet) => ({
     wallet,
     latest: getLatestWalletSnapshot(db, wallet.ss58),
@@ -2379,6 +2406,8 @@ function buildPageModel({ db, config, netuid }) {
     alphaHolderCurrentRankRow,
     alphaHolderRankHistory,
     alphaHolderRankHistoryStartAt: alphaHolderRankHistory[0]?.captured_at ?? null,
+    subnetLabel,
+    subnetName: latest?.name ?? null,
     totalWalletSnapshots,
     nextPollAtIso: config.nextPollAtIso ?? null,
     hasApiKey: Boolean(config.taostatsAuthHeader),
@@ -5019,6 +5048,8 @@ function renderDashboardClientScript({ netuid, config }) {
       }
 
       function metricHistoryNote(metric, visiblePoints, rangeDays) {
+        const subnetLabelText = String(metric?.label || 'This subnet');
+        const subnetSubject = subnetLabelText.replace(/\s+alpha-holder rank$/i, '').trim() || subnetLabelText;
         if (isPriceMoveMetric(metric)) {
           return 'Price Move is derived from historical Token Price, so it needs enough earlier price samples to calculate the window.';
         }
@@ -5051,10 +5082,10 @@ function renderDashboardClientScript({ netuid, config }) {
         }
         if (isAlphaHolderRankMetric(metric)) {
           if (!visiblePoints.length) {
-            return 'SN110 rank is computed from local alpha-holder snapshots across all stored subnets, so the chart starts at the first collection point.';
+            return subnetSubject + ' is computed from local alpha-holder snapshots across all stored subnets, so the chart starts at the first collection point.';
           }
           if (visiblePoints.length < Math.max(5, Math.min(rangeDays, 10))) {
-            return 'SN110 rank starts from the first locally collected alpha-holder snapshot, so the early chart may still be sparse.';
+            return subnetSubject + ' starts from the first locally collected alpha-holder snapshot, so the early chart may still be sparse.';
           }
         }
         if (isSentimentMetric(metric)) {
@@ -5922,11 +5953,12 @@ function renderPage(model) {
     alphaHolderRankingRows,
     alphaHolderCurrentRankRow,
     alphaHolderRankHistoryStartAt,
+    subnetLabel,
   } = model;
   const latestMetricDefs = getLatestMetricDefs();
   const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
   const insight = buildInsightSummary(latest, comparisons, signal);
-  const title = `SN${netuid} Tracker`;
+  const title = `${subnetLabel || `SN${netuid}`} Tracker`;
   const subtitle = latest
     ? `Latest snapshot captured ${formatRelativeIso(latest.captured_at)}`
     : 'No snapshots captured yet';
@@ -5957,7 +5989,7 @@ function renderPage(model) {
     ? `
       <section class="hero">
         <div class="hero-copy">
-          <div class="eyebrow">Subnet SN${netuid}</div>
+          <div class="eyebrow">Subnet ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
           <h1>${escapeHtml(title)}</h1>
           <p>${escapeHtml(subtitle)}</p>
         </div>
@@ -5972,7 +6004,7 @@ function renderPage(model) {
     : `
       <section class="hero">
         <div class="hero-copy">
-          <div class="eyebrow">Subnet SN${netuid}</div>
+          <div class="eyebrow">Subnet ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
           <h1>${escapeHtml(title)}</h1>
           <p>${escapeHtml(subtitle)}</p>
         </div>
@@ -7642,7 +7674,7 @@ function renderPage(model) {
   <body>
     <div class="shell" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" data-latest-snapshot-signature="${escapeHtml(latest?.captured_at ? `${latest.captured_at}|${latest.block_number ?? ''}|${latest.source ?? ''}` : '')}" data-latest-ingest-run-id="${escapeHtml(ingestRun?.id ?? '')}">
       <div class="topbar">
-        <div class="muted">Local Taostats tracker for SN${netuid}</div>
+        <div class="muted">Local Taostats tracker for ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
         <div class="actions">
           <button class="price-badge price-badge-button" id="tao-price-label" type="button" aria-live="polite" title="Click to view TAO price history">${escapeHtml(taoPriceText)}</button>
           <div class="price-badge next-poll-badge" id="next-poll-label" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" title="${escapeHtml(nextPollTitle)}">${escapeHtml(nextPollText)}</div>
@@ -7666,7 +7698,7 @@ function renderPage(model) {
 
       <section class="section">
         <h2>Subnet stats</h2>
-        <div class="grid stats">${latest ? renderSubnetDataCards(latest) : ''}</div>
+        <div class="grid stats">${latest ? renderSubnetDataCards(latest, subnetLabel) : ''}</div>
       </section>
 
       ${latest ? renderAlphaHolderSection(alphaHolderRows, {

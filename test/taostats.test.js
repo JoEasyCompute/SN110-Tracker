@@ -1092,6 +1092,54 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   snapshot.alpha_holders_num = 39;
   snapshot.alpha_holders_text = '39';
   insertSnapshot(db, snapshot);
+  const subnet111 = normalizeSnapshot({
+    netuid: 111,
+    block_number: 9001,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Other Compute',
+    symbol: 'OC',
+    price: '1.0',
+    market_cap: '100',
+    liquidity: '50',
+    emission: '10',
+    projected_emission: '0.1',
+    recycled_24_hours: '500000',
+    neuron_registration_cost: '500000',
+    active_keys: 256,
+    max_neurons: 256,
+    net_flow_1_day: '20',
+    net_flow_7_days: '30',
+    net_flow_30_days: '40',
+    root_prop: '0.25',
+    root_sell: 'NO',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 111 });
+  subnet111.alpha_holders_num = 3;
+  subnet111.alpha_holders_text = '3';
+  insertSnapshot(db, subnet111);
+  const subnet112 = normalizeSnapshot({
+    netuid: 112,
+    block_number: 9002,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Third Compute',
+    symbol: 'TC',
+    price: '1.0',
+    market_cap: '100',
+    liquidity: '50',
+    emission: '10',
+    projected_emission: '0.1',
+    recycled_24_hours: '500000',
+    neuron_registration_cost: '500000',
+    active_keys: 256,
+    max_neurons: 256,
+    net_flow_1_day: '20',
+    net_flow_7_days: '30',
+    net_flow_30_days: '40',
+    root_prop: '0.25',
+    root_sell: 'NO',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 112 });
+  subnet112.alpha_holders_num = 2;
+  subnet112.alpha_holders_text = '2';
+  insertSnapshot(db, subnet112);
   insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
     block_number: 8161001,
     timestamp: '2026-04-30T00:00:00Z',
@@ -1227,10 +1275,10 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Alpha Holders'), true);
   assert.equal(html.includes('Alpha holder addresses'), true);
   assert.equal(html.includes('Alpha-holder ranking across subnets'), true);
-  assert.equal(html.includes('SN110 alpha-holder rank'), true);
+  assert.equal(html.includes('Green Compute (SN110) alpha-holder rank'), true);
   assert.equal(html.includes('History starts at'), true);
-  assert.equal(html.includes('SN111'), true);
-  assert.equal(html.includes('SN112'), true);
+  assert.equal(html.includes('Other Compute (SN111)'), true);
+  assert.equal(html.includes('Third Compute (SN112)'), true);
   assert.equal(html.includes('5Ebftb…CDEFGH'), true);
   assert.equal(html.includes('Green Compute'), true);
   assert.equal(model.latest.alpha_holders_num, 2);
@@ -1249,7 +1297,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(alphaHoldersButton?.querySelector('.card-value')?.textContent?.trim(), '2');
   const rankButton = [...dom.window.document.querySelectorAll('[data-metric]')].find((element) => {
     try {
-      return JSON.parse(element.getAttribute('data-metric') || '{}').label === 'SN110 alpha-holder rank';
+      return JSON.parse(element.getAttribute('data-metric') || '{}').label === 'Green Compute (SN110) alpha-holder rank';
     } catch {
       return false;
     }
