@@ -112,6 +112,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
   async function syncSubnetMetadataCatalog({
     limit = 1024,
+    onProgress = null,
   } = {}) {
     if (!config.taostatsAuthHeader) {
       return { fetched: 0, inserted: 0, skipped: 0, rows: [] };
@@ -124,18 +125,84 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       limit,
     });
 
-    let inserted = 0;
-    let skipped = 0;
     const rows = Array.isArray(catalog) ? catalog : [];
     const cachedRows = getSubnetMetadataMap(db, rows.map((row) => row?.netuid));
-    db.exec('BEGIN');
+    const startedAtMs = Date.now();
+    const emitProgress = (payload) => {
+      if (typeof onProgress === 'function') {
+        onProgress(payload);
+      }
+    };
+    const total = rows.length;
+    const resolvedRows = [];
+    let inserted = 0;
+    let skipped = 0;
+
+    emitProgress({
+      phase: 'start',
+      operation: 'subnet-name-backfill',
+      total,
+      completed: 0,
+      remaining: total,
+      elapsedMs: 0,
+      etaMs: null,
+      etaIso: null,
+      netuid: null,
+      fetched: total,
+      inserted: 0,
+      skipped: 0,
+      ok: true,
+      message: total > 0 ? 'running' : 'no subnets discovered',
+    });
+
     try {
-      for (const row of rows) {
+      for (const [index, row] of rows.entries()) {
         const netuid = Number.parseInt(String(row?.netuid), 10);
         if (!Number.isFinite(netuid) || netuid <= 0) {
           skipped += 1;
+          const completed = index + 1;
+          const elapsedMs = Date.now() - startedAtMs;
+          const etaMs = completed > 0 && completed < total
+            ? Math.max(0, Math.round((elapsedMs / completed) * (total - completed)))
+            : 0;
+          emitProgress({
+            phase: 'item',
+            operation: 'subnet-name-backfill',
+            total,
+            completed,
+            remaining: Math.max(0, total - completed),
+            elapsedMs,
+            etaMs,
+            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+            netuid: null,
+            fetched: total,
+            inserted,
+            skipped,
+            ok: true,
+            message: 'skipped invalid subnet',
+          });
           continue;
         }
+        const itemStartedElapsedMs = Date.now() - startedAtMs;
+        const itemStartedEtaMs = index > 0 && index < total
+          ? Math.max(0, Math.round((itemStartedElapsedMs / index) * (total - index)))
+          : 0;
+        emitProgress({
+          phase: 'item-start',
+          operation: 'subnet-name-backfill',
+          total,
+          completed: index,
+          remaining: Math.max(0, total - index),
+          elapsedMs: itemStartedElapsedMs,
+          etaMs: itemStartedEtaMs,
+          etaIso: itemStartedEtaMs > 0 ? new Date(Date.now() + itemStartedEtaMs).toISOString() : null,
+          netuid,
+          fetched: total,
+          inserted,
+          skipped,
+          ok: true,
+          message: `SN${netuid}`,
+        });
         let name = String(row?.name ?? '').trim();
         let symbol = row?.symbol ?? null;
         let sourceUrl = `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/subnet/latest/v1`;
@@ -166,9 +233,30 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         }
         if (!name) {
           skipped += 1;
+          const completed = index + 1;
+          const elapsedMs = Date.now() - startedAtMs;
+          const etaMs = completed > 0 && completed < total
+            ? Math.max(0, Math.round((elapsedMs / completed) * (total - completed)))
+            : 0;
+          emitProgress({
+            phase: 'item',
+            operation: 'subnet-name-backfill',
+            total,
+            completed,
+            remaining: Math.max(0, total - completed),
+            elapsedMs,
+            etaMs,
+            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+            netuid,
+            fetched: total,
+            inserted,
+            skipped,
+            ok: true,
+            message: 'missing subnet name',
+          });
           continue;
         }
-        upsertSubnetMetadata(db, {
+        resolvedRows.push({
           netuid,
           name,
           symbol,
@@ -178,12 +266,62 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           raw_json: JSON.stringify(row),
         });
         inserted += 1;
+        const completed = index + 1;
+        const elapsedMs = Date.now() - startedAtMs;
+        const etaMs = completed > 0 && completed < total
+          ? Math.max(0, Math.round((elapsedMs / completed) * (total - completed)))
+          : 0;
+        emitProgress({
+          phase: 'item',
+          operation: 'subnet-name-backfill',
+          total,
+          completed,
+          remaining: Math.max(0, total - completed),
+          elapsedMs,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          netuid,
+          fetched: total,
+          inserted,
+          skipped,
+          ok: true,
+          message: name,
+        });
       }
-      db.exec('COMMIT');
     } catch (error) {
-      db.exec('ROLLBACK');
       throw error;
     }
+
+    if (resolvedRows.length > 0) {
+      db.exec('BEGIN');
+      try {
+        for (const row of resolvedRows) {
+          upsertSubnetMetadata(db, row);
+        }
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    }
+
+    const elapsedMs = Date.now() - startedAtMs;
+    emitProgress({
+      phase: 'done',
+      operation: 'subnet-name-backfill',
+      total,
+      completed: total,
+      remaining: 0,
+      elapsedMs,
+      etaMs: 0,
+      etaIso: null,
+      netuid: null,
+      fetched: total,
+      inserted,
+      skipped,
+      ok: true,
+      message: total > 0 ? 'done' : 'no subnets discovered',
+    });
 
     return {
       fetched: rows.length,
@@ -191,6 +329,16 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       skipped,
       rows,
     };
+  }
+
+  async function backfillSubnetNames({
+    limit = 1024,
+    onProgress = null,
+  } = {}) {
+    return syncSubnetMetadataCatalog({
+      limit,
+      onProgress,
+    });
   }
 
   async function syncAlphaHolderSnapshot({
@@ -1014,7 +1162,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
     try {
       try {
-        await syncSubnetMetadataCatalog({ limit });
+        await syncSubnetMetadataCatalog({ limit: 1024 });
       } catch {
         // Non-fatal metadata cache refresh: keep the ingest flowing even if the subnet catalog is temporarily unavailable.
       }
@@ -1570,6 +1718,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     syncAllAlphaHolderSnapshots,
     backfillAlphaHolderSnapshots,
     backfillAlphaHolderHistory,
+    backfillSubnetNames,
     syncWalletActivity,
     syncWalletActivityForWallet,
     backfillWalletActivity,

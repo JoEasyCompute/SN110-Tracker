@@ -12,6 +12,7 @@
     "ingest": "node src/cli.js --once",
     "backfill": "node src/cli.js --backfill",
     "wallet-backfill": "node src/cli.js --wallet-backfill",
+    "subnet-name-backfill": "node src/cli.js --subnet-name-backfill",
     "alpha-holder-backfill": "node src/cli.js --alpha-holder-backfill",
     "alpha-holder-history-backfill": "node src/cli.js --alpha-holder-history-backfill",
     "alpha-holder-sync": "node src/cli.js --alpha-holder-sync",

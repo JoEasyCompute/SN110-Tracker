@@ -118,17 +118,24 @@ async function run() {
   const ingestService = createIngestService({ db, config });
   const backfill = process.argv.includes('--backfill');
   const walletBackfill = process.argv.includes('--wallet-backfill') || process.argv.includes('--wallet-activity-backfill');
+  const subnetNameBackfill = process.argv.includes('--subnet-name-backfill');
   const alphaHolderBackfill = process.argv.includes('--alpha-holder-backfill');
   const alphaHolderHistoryBackfill = process.argv.includes('--alpha-holder-history-backfill');
   const alphaHolderSync = process.argv.includes('--alpha-holder-sync');
   const once = process.argv.includes('--once');
   const alphaHolderProgress = createProgressPrinter(alphaHolderHistoryBackfill ? 'alpha-holder-history-backfill' : (alphaHolderBackfill ? 'alpha-holder-backfill' : 'alpha-holder-sync'));
+  const subnetNameProgress = createProgressPrinter('subnet-name-backfill');
 
   let result;
   if (walletBackfill) {
     result = await ingestService.backfillWalletActivity({
       days: intArg(readArg('days', config.taostatsWalletActivityBackfillDays || 60), config.taostatsWalletActivityBackfillDays || 60),
       limit: intArg(readArg('limit', 200), 200),
+    });
+  } else if (subnetNameBackfill) {
+    result = await ingestService.backfillSubnetNames({
+      limit: intArg(readArg('limit', 1024), 1024),
+      onProgress: subnetNameProgress,
     });
   } else if (alphaHolderBackfill || alphaHolderHistoryBackfill) {
     result = await ingestService.backfillAlphaHolderSnapshots({

@@ -49,6 +49,7 @@ const {
   getAlphaHolderSnapshotLatestCapturedAt,
   getAlphaHolderSnapshotHistory,
   getAlphaHolderSnapshotCounts,
+  getSubnetMetadata,
   countAlphaHolderSnapshots,
   getWalletHistory,
   getWalletTransactions,
@@ -544,6 +545,135 @@ test('renderPage uses cached subnet metadata when the latest subnet snapshot is 
   assert.equal(html.includes('Subnet Chutes (SN64)'), true);
   assert.equal(html.includes('Chutes (SN64) alpha-holder rank'), true);
   assert.equal(html.includes('Chutes (SN64)'), true);
+  db.close();
+});
+
+test('subnet name backfill caches catalog rows and falls back to latest snapshots for missing names', async () => {
+  const db = openDatabase(':memory:');
+  const snapshotCalls = [];
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => ([
+      { netuid: 64, name: '', symbol: 'CHU', timestamp: '2026-05-14T00:00:00Z' },
+      { netuid: 65, name: 'Molecule', symbol: 'MOL', timestamp: '2026-05-14T00:00:00Z' },
+    ]),
+    fetchLatestSnapshot: async ({ netuid }) => {
+      snapshotCalls.push(netuid);
+      return {
+        snapshot: normalizeSnapshot({
+          netuid,
+          block_number: 640000 + netuid,
+          timestamp: '2026-05-14T00:00:00Z',
+          name: 'Chutes',
+          symbol: 'CHU',
+          price: '1.0',
+          market_cap: '1',
+          liquidity: '1',
+          emission: '1',
+          projected_emission: '1',
+          incentive_burn: '0',
+          recycled_24_hours: '1',
+          neuron_registration_cost: '500000',
+          active_keys: 1,
+          max_neurons: 1,
+          net_flow_1_day: '0',
+          net_flow_7_days: '0',
+          net_flow_30_days: '0',
+          root_sell: 'NO',
+        }, { source: 'api', sourceUrl: 'https://example.invalid', netuid }),
+        source: 'api',
+        fallbackUsed: false,
+        detail: { source: 'api' },
+      };
+    },
+  };
+  const config = {
+    netuid: 110,
+    taostatsBaseUrl: 'https://example.invalid',
+    taostatsAuthHeader: 'secret',
+    taostatsRateLimiter: null,
+  };
+  const service = createIngestService({ db, config, taostats });
+  const progress = [];
+
+  const result = await service.backfillSubnetNames({
+    onProgress: (event) => progress.push(event),
+  });
+
+  assert.equal(result.fetched, 2);
+  assert.equal(result.inserted, 2);
+  assert.equal(result.skipped, 0);
+  assert.deepEqual(snapshotCalls, [64]);
+  assert.equal(getSubnetMetadata(db, 64)?.name, 'Chutes');
+  assert.equal(getSubnetMetadata(db, 65)?.name, 'Molecule');
+  assert.equal(progress[0]?.phase, 'start');
+  assert.equal(progress.at(-1)?.phase, 'done');
+  assert.equal(progress.some((event) => event.phase === 'item-start' && event.netuid === 64), true);
+  db.close();
+});
+
+test('ingestOnce refreshes subnet metadata without tripping the catalog refresh path', async () => {
+  const db = openDatabase(':memory:');
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => ([
+      { netuid: 64, name: 'Chutes', symbol: 'CHU', timestamp: '2026-05-14T00:00:00Z' },
+    ]),
+    fetchLatestSnapshot: async ({ netuid }) => ({
+      snapshot: normalizeSnapshot({
+        netuid,
+        block_number: 110000 + netuid,
+        timestamp: '2026-05-14T00:00:00Z',
+        name: 'Green Compute',
+        symbol: 'Ѐ',
+        price: '1.0',
+        market_cap: '100',
+        liquidity: '50',
+        emission: '10',
+        projected_emission: '0.1',
+        incentive_burn: '0',
+        recycled_24_hours: '500000',
+        neuron_registration_cost: '500000',
+        active_keys: 256,
+        max_neurons: 256,
+        net_flow_1_day: '20',
+        net_flow_7_days: '30',
+        net_flow_30_days: '40',
+        root_sell: 'NO',
+      }, { source: 'api', sourceUrl: 'https://example.invalid', netuid }),
+      source: 'api',
+      fallbackUsed: false,
+      detail: { source: 'api' },
+    }),
+    fetchTaoPriceLatest: async () => null,
+    fetchStakeBalanceLatest: async ({ netuid, capturedAt }) => [normalizeStakeBalanceSnapshot({
+      block_number: 210000 + netuid,
+      timestamp: capturedAt,
+      netuid,
+      subnet_rank: 1,
+      subnet_total_holders: 1,
+      balance: '1000000000',
+      balance_as_tao: '1000000000',
+      coldkey: { ss58: `5AlphaHolder${netuid}`, hex: `0xholder${netuid}` },
+      hotkey: { ss58: `5Val${netuid}`, hex: `0xval${netuid}` },
+      hotkey_name: `Validator ${netuid}`,
+    }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt })],
+    fetchHistoricalStakeBalance: async () => [],
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+      wallets: [],
+    },
+    taostats,
+  });
+
+  const result = await service.ingestOnce({ netuid: 110 });
+
+  assert.equal(result.ok, true);
+  assert.equal(getSubnetMetadata(db, 64)?.name, 'Chutes');
   db.close();
 });
 

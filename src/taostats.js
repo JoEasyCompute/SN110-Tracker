@@ -1245,17 +1245,18 @@ async function fetchSubnetLatestCatalog({
   const headers = { authorization: taostatsAuthHeader };
   const rows = [];
   const seenNetuids = new Set();
+  const pageSize = Math.max(1, Math.min(Number.isFinite(Number(limit)) ? Number(limit) : 1024, 200));
 
   for (let page = 1; page <= 100; page += 1) {
     const url = new URL('/api/subnet/latest/v1', taostatsBaseUrl);
     url.searchParams.set('order', 'netuid_asc');
-    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('limit', String(pageSize));
     url.searchParams.set('page', String(page));
     const { json } = await fetchJson(url.toString(), { headers, rateLimiter });
     const pageRows = extractRecords(json);
     if (!pageRows.length) break;
     rows.push(...pageRows);
-    if (pageRows.length < limit) break;
+    if (pageRows.length < pageSize) break;
   }
 
   const catalog = [];
