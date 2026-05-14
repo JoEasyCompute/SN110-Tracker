@@ -1523,6 +1523,9 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Alpha Holders'), true);
   assert.equal(html.includes('Alpha holder addresses'), true);
   assert.equal(html.includes('Alpha-holder ranking across subnets'), true);
+  assert.equal(html.includes('href="https://taostats.io/subnets/110"'), true);
+  assert.equal(html.includes('target="_blank"'), true);
+  assert.equal(html.includes('rel="noopener noreferrer"'), true);
   assert.equal(html.includes('Green Compute (SN110) alpha-holder rank'), true);
   assert.equal(html.includes('History starts at'), true);
   assert.equal(html.includes('Show compact trend overview'), false);

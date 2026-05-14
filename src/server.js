@@ -513,6 +513,13 @@ function formatSubnetLabel(name, netuid) {
   return cleanName ? `${cleanName} (${subnetLabel})` : subnetLabel;
 }
 
+function buildTaostatsSubnetUrl(netuid, publicBaseUrl = 'https://taostats.io') {
+  const subnetId = Number(netuid);
+  if (!Number.isFinite(subnetId) || subnetId <= 0) return null;
+  const base = String(publicBaseUrl || 'https://taostats.io').replace(/\/+$/, '');
+  return `${base}/subnets/${subnetId}`;
+}
+
 function buildSparklinePath(values, width = 88, height = 28) {
   const series = Array.isArray(values)
     ? values.map((value) => Number(value)).filter((value) => Number.isFinite(value))
@@ -1076,6 +1083,7 @@ function renderAlphaHolderSection(rows, {
   currentRankingRow = null,
   currentNetuid = null,
   rankHistoryStartAt = null,
+  taostatsPublicBaseUrl = 'https://taostats.io',
 } = {}) {
   const entries = Array.isArray(rows) ? rows : [];
   const latestCapturedAt = latestCaptureAt || entries[0]?.captured_at || null;
@@ -1122,6 +1130,8 @@ function renderAlphaHolderSection(rows, {
   const rankingBody = visibleRankingEntries.length
     ? visibleRankingEntries.map((row) => {
         const isCurrent = currentNetuid !== null && Number(row.netuid) === Number(currentNetuid);
+        const subnetLabel = row.subnet_label || formatSubnetLabel(row.subnet_name, row.netuid);
+        const subnetUrl = buildTaostatsSubnetUrl(row.netuid, taostatsPublicBaseUrl);
         const change = Number(row.trend?.change_num ?? NaN);
         const changeClass = Number.isFinite(change)
           ? (change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral')
@@ -1133,7 +1143,10 @@ function renderAlphaHolderSection(rows, {
         return `
           <tr${isCurrent ? ' class="current"' : ''}>
             <td>${escapeHtml(integer(row.rank_num))}</td>
-            <td>${escapeHtml(row.subnet_label || formatSubnetLabel(row.subnet_name, row.netuid))}${isCurrent ? ' <span class="ranking-current-tag">Current</span>' : ''}</td>
+            <td>
+              ${subnetUrl ? `<a class="alpha-holder-subnet-link" href="${escapeHtml(subnetUrl)}" target="_blank" rel="noopener noreferrer" title="Open ${escapeHtml(subnetLabel)} on Taostats">${escapeHtml(subnetLabel)}</a>` : escapeHtml(subnetLabel)}
+              ${isCurrent ? ' <span class="ranking-current-tag">Current</span>' : ''}
+            </td>
             <td>${escapeHtml(integer(row.alpha_holders_num))}</td>
             <td class="alpha-holder-ranking-change ${changeClass}">${escapeHtml(changeLabel)}</td>
             <td class="alpha-holder-ranking-sparkline-cell">${sparkline}</td>
@@ -6862,6 +6875,17 @@ function renderPage(model) {
       .alpha-holder-ranking-table th:nth-child(5) {
         text-align: left;
       }
+      .alpha-holder-subnet-link {
+        color: #d9fffa;
+        text-decoration: none;
+        font-weight: 700;
+      }
+      .alpha-holder-subnet-link:hover,
+      .alpha-holder-subnet-link:focus-visible {
+        color: #ffffff;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
       .alpha-holder-ranking-change,
       .alpha-holder-ranking-sparkline-cell {
         white-space: nowrap;
@@ -7830,6 +7854,7 @@ function renderPage(model) {
         currentRankingRow: alphaHolderCurrentRankRow,
         currentNetuid: netuid,
         rankHistoryStartAt: alphaHolderRankHistoryStartAt,
+        taostatsPublicBaseUrl: config.taostatsPublicBaseUrl,
       }) : ''}
 
       <section class="section">
