@@ -251,6 +251,7 @@ function collectResultIssues(result) {
   pushIssue(detail.taoPriceError, 'TAO price: ');
   pushIssue(detail.priceError, 'TAO price history: ');
   pushIssue(detail.flowError, 'TAO flow history: ');
+  pushIssue(detail.alphaHolderError, 'Alpha holders: ');
   pushIssue(detail.walletStakeHistoryError, 'Wallet stake history: ');
   pushIssue(detail.walletError, 'Wallet: ');
   if (Array.isArray(detail.walletErrors)) {
@@ -261,6 +262,14 @@ function collectResultIssues(result) {
     }
   }
   return issues;
+}
+
+function summarizeResultFailure(label, result) {
+  const issues = collectResultIssues(result);
+  if (issues.length) return `${label}: ${issues.join(' | ')}`;
+  if (result?.reason) return `${label}: ${result.reason}`;
+  if (result?.message) return `${label}: ${result.message}`;
+  return label;
 }
 
 function summarizeBackfillOutcome(backfill, live) {
@@ -4850,6 +4859,49 @@ function renderDashboardClientScript({ netuid, config }) {
         }
       }
 
+      function collectAdminPayloadIssues(value, prefix = '') {
+        const issues = [];
+        const visit = (node, label = '') => {
+          if (!node || typeof node !== 'object') return;
+          const add = (message, messagePrefix = '') => {
+            if (message === null || message === undefined || message === '') return;
+            const text = String(message).trim();
+            if (!text) return;
+            issues.push((label || prefix || '') + messagePrefix + text);
+          };
+          add(node.error);
+          add(node.reason);
+          if (node.detail && typeof node.detail === 'object') {
+            add(node.detail.error);
+            add(node.detail.taoPriceError, 'TAO price: ');
+            add(node.detail.priceError, 'TAO price history: ');
+            add(node.detail.flowError, 'TAO flow history: ');
+            add(node.detail.alphaHolderError, 'Alpha holders: ');
+            add(node.detail.walletStakeHistoryError, 'Wallet stake history: ');
+            add(node.detail.walletError, 'Wallet: ');
+            if (Array.isArray(node.detail.walletErrors)) {
+              node.detail.walletErrors.forEach((walletError) => {
+                if (!walletError || typeof walletError !== 'object') return;
+                const walletLabel = walletError.name || walletError.ss58 || 'wallet';
+                add(walletError.error, walletLabel + ': ');
+              });
+            }
+          }
+        };
+        visit(value);
+        visit(value?.result, 'Result: ');
+        visit(value?.backfill, 'Backfill: ');
+        visit(value?.live, 'Live refresh: ');
+        return Array.from(new Set(issues));
+      }
+
+      function adminPayloadErrorMessage(payload, fallback) {
+        const issues = collectAdminPayloadIssues(payload);
+        if (issues.length) return issues.join(' | ');
+        if (payload?.message) return String(payload.message);
+        return fallback;
+      }
+
       function readBackfillOptions() {
         return {
           days: Number.parseInt(String(backfillDaysInput?.value || ''), 10),
@@ -4882,7 +4934,7 @@ function renderDashboardClientScript({ netuid, config }) {
           });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
-            throw new Error(payload.error || payload.message || 'Backfill failed');
+            throw new Error(adminPayloadErrorMessage(payload, 'Backfill failed'));
           }
           const snapshotCount = Number(payload.backfill?.inserted ?? 0);
           const flowCount = Number(payload.backfill?.flowInserted ?? 0);
@@ -6093,7 +6145,7 @@ function renderDashboardClientScript({ netuid, config }) {
           });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok || payload.result?.ok === false) {
-            const message = payload.error || payload.result?.error || payload.result?.message || 'Subnet ingest failed.';
+            const message = adminPayloadErrorMessage(payload, 'Subnet ingest failed.');
             throw new Error(message);
           }
           window.location.reload();
@@ -8758,8 +8810,9 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         }
         const result = await ingestService.ingestOnce({ netuid });
         const status = result.ok ? 200 : 500;
+        const error = result.ok ? null : summarizeResultFailure('Subnet ingest failed', result);
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ netuid, result }, null, 2));
+        res.end(JSON.stringify({ netuid, result, ...(error ? { error } : {}) }, null, 2));
         return;
       }
 

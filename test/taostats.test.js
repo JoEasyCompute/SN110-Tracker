@@ -2325,6 +2325,46 @@ test('dashboard admin panel requires an authenticated admin session', async () =
   }
 });
 
+test('admin ingest endpoint surfaces detailed failures', async () => {
+  const db = openDatabase(':memory:');
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      ingestOnce: async () => ({
+        ok: false,
+        error: 'Taostats subnet latest returned 502 Bad Gateway',
+        detail: {
+          alphaHolderError: 'Alpha holder snapshot returned 429 Too Many Requests',
+        },
+      }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+      nextPollAtIso: null,
+      wallets: [],
+    },
+  });
+  const server = await app.start(0);
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const response = await fetch(`${baseUrl}/api/subnets/110/ingest`, {
+      method: 'POST',
+      headers: { 'x-admin-api-key': 'admin-secret' },
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 500);
+    assert.equal(payload.error.includes('Subnet ingest failed'), true);
+    assert.equal(payload.error.includes('502 Bad Gateway'), true);
+    assert.equal(payload.error.includes('Alpha holders: Alpha holder snapshot returned 429 Too Many Requests'), true);
+  } finally {
+    await app.close();
+    db.close();
+  }
+});
+
 test('dashboard route renders without throwing', async () => {
   const db = openDatabase(':memory:');
   const snapshot = normalizeSnapshot({
