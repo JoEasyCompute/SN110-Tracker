@@ -1168,6 +1168,204 @@ test('alpha holder snapshot backfill does not depend on stake-balance history', 
   db.close();
 });
 
+test('alpha-holder backfill lock pauses background ingest and wallet sync', async () => {
+  const db = openDatabase(':memory:');
+  setSetting(db, 'alpha_holder_backfill_active', '1');
+  const callCounts = {
+    latest: 0,
+    wallet: 0,
+    alpha: 0,
+  };
+  const taostats = {
+    fetchLatestSnapshot: async () => {
+      callCounts.latest += 1;
+      throw new Error('should not be called');
+    },
+    fetchHistoricalSnapshots: async () => {
+      throw new Error('should not be called');
+    },
+    fetchSubnetLatestCatalog: async () => {
+      callCounts.alpha += 1;
+      throw new Error('should not be called');
+    },
+    fetchTaoPriceLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoPriceHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoFlowHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountLatest: async () => {
+      callCounts.wallet += 1;
+      throw new Error('should not be called');
+    },
+    fetchAccountHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchStakeBalanceLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchHistoricalStakeBalance: async () => {
+      throw new Error('should not be called');
+    },
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+      wallets: [{ name: 'Wallet', ss58: '5Wallet' }],
+    },
+    taostats,
+  });
+
+  const ingestResult = await service.ingestOnce({ netuid: 110 });
+  const walletResult = await service.syncWalletActivity({
+    wallets: [{ name: 'Wallet', ss58: '5Wallet' }],
+    days: 7,
+  });
+
+  assert.equal(ingestResult.skipped, true);
+  assert.equal(ingestResult.reason, 'alpha-holder backfill is running');
+  assert.equal(walletResult.skipped, true);
+  assert.equal(walletResult.reason, 'alpha-holder backfill is running');
+  assert.equal(callCounts.latest, 0);
+  assert.equal(callCounts.wallet, 0);
+  assert.equal(callCounts.alpha, 0);
+  db.close();
+});
+
+test('alpha-holder snapshot sync respects the backfill lock', async () => {
+  const db = openDatabase(':memory:');
+  setSetting(db, 'alpha_holder_backfill_active', '1');
+  let catalogCalls = 0;
+  const taostats = {
+    fetchLatestSnapshot: async () => {
+      throw new Error('should not be called');
+    },
+    fetchHistoricalSnapshots: async () => {
+      throw new Error('should not be called');
+    },
+    fetchSubnetLatestCatalog: async () => {
+      catalogCalls += 1;
+      throw new Error('should not be called');
+    },
+    fetchTaoPriceLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoPriceHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoFlowHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchStakeBalanceLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchHistoricalStakeBalance: async () => {
+      throw new Error('should not be called');
+    },
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+    },
+    taostats,
+  });
+
+  const result = await service.syncAllAlphaHolderSnapshots({
+    capturedAt: '2026-05-11T00:00:00.000Z',
+  });
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'Alpha-holder backfill is running');
+  assert.equal(catalogCalls, 0);
+  db.close();
+});
+
+test('alpha-holder snapshot backfill holds the pause lock while running', async () => {
+  const db = openDatabase(':memory:');
+  let sawActiveDuringRun = false;
+  const taostats = {
+    fetchLatestSnapshot: async () => {
+      throw new Error('should not be called');
+    },
+    fetchHistoricalSnapshots: async () => {
+      throw new Error('should not be called');
+    },
+    fetchSubnetLatestCatalog: async () => [{ netuid: 110 }],
+    fetchTaoPriceLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoPriceHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoFlowHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchStakeBalanceLatest: async ({ netuid, capturedAt: rowCapturedAt }) => {
+      sawActiveDuringRun = getSetting(db, 'alpha_holder_backfill_active') === '1';
+      return [normalizeStakeBalanceSnapshot({
+        block_number: 400 + netuid,
+        timestamp: rowCapturedAt,
+        netuid,
+        subnet_rank: 1,
+        subnet_total_holders: 1,
+        balance: '1000000000',
+        balance_as_tao: '1000000000',
+        coldkey: { ss58: `5AlphaHolder${netuid}`, hex: `0xholder${netuid}` },
+        hotkey: { ss58: `5Val${netuid}`, hex: `0xval${netuid}` },
+        hotkey_name: `Validator ${netuid}`,
+      }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: rowCapturedAt })];
+    },
+    fetchHistoricalStakeBalance: async () => {
+      throw new Error('should not be called');
+    },
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+    },
+    taostats,
+  });
+
+  const result = await service.backfillAlphaHolderSnapshots({
+    capturedAt: '2026-05-11T00:00:00.000Z',
+    skipIfAlreadyCapturedToday: false,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.fetched, 1);
+  assert.equal(result.inserted, 1);
+  assert.equal(sawActiveDuringRun, true);
+  assert.equal(getSetting(db, 'alpha_holder_backfill_active'), '0');
+  db.close();
+});
+
 test('sqlite app settings persist key/value pairs', () => {
   const db = openDatabase(':memory:');
   assert.equal(getSetting(db, 'poll_interval_minutes'), null);

@@ -24,6 +24,7 @@ async function main() {
   let timer = null;
   let walletActivityTimer = null;
   let alphaHolderTimer = null;
+  const isAlphaHolderBackfillActive = () => ingestService.isAlphaHolderBackfillActive();
 
   const msUntilNextUtcMidnight = (now = Date.now()) => {
     const current = new Date(now);
@@ -50,7 +51,7 @@ async function main() {
     const nextRunMs = msUntilNextUtcMidnight();
     config.nextAlphaHolderSnapshotAtIso = new Date(Date.now() + nextRunMs).toISOString();
     alphaHolderTimer = setTimeout(() => {
-      if (ingestService.isActive()) {
+      if (ingestService.isActive() || isAlphaHolderBackfillActive()) {
         scheduleAlphaHolderSnapshot();
         return;
       }
@@ -76,6 +77,9 @@ async function main() {
     }
     timer = setInterval(() => {
       config.nextPollAtIso = new Date(Date.now() + config.pollIntervalMs).toISOString();
+      if (isAlphaHolderBackfillActive()) {
+        return;
+      }
       void ingestService.ingestOnce({ netuid: config.netuid }).catch((error) => {
         console.error('Scheduled ingest failed:', error);
       });
@@ -101,6 +105,9 @@ async function main() {
     }
     walletActivityTimer = setInterval(() => {
       config.nextWalletActivitySyncAtIso = new Date(Date.now() + normalizedMinutes * 60 * 1000).toISOString();
+      if (isAlphaHolderBackfillActive()) {
+        return;
+      }
       void ingestService.syncWalletActivity({
         days: config.taostatsWalletActivitySyncDays,
       }).catch((error) => {
@@ -142,6 +149,9 @@ async function main() {
   }
   if (config.taostatsAuthHeader) {
     console.log('Alpha-holder snapshots: all subnets daily at UTC midnight');
+  }
+  if (isAlphaHolderBackfillActive()) {
+    console.log('Alpha-holder backfill is active; background polling and sync jobs are paused.');
   }
   if (config.taostatsBackfillOnStartup && config.taostatsBackfillDays > 0) {
     console.log(`Historical backfill: enabled (${config.taostatsBackfillDays} days, ${config.taostatsBackfillFrequency})`);

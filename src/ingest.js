@@ -28,7 +28,12 @@ const {
   deleteAlphaHolderSnapshotsInRange,
   getAlphaHolderSnapshotLatestCapturedAt,
   getWalletTransactions,
+  getSetting,
+  setSetting,
 } = require('./db');
+
+const ALPHA_HOLDER_BACKFILL_ACTIVE_KEY = 'alpha_holder_backfill_active';
+const ALPHA_HOLDER_BACKFILL_STARTED_AT_KEY = 'alpha_holder_backfill_started_at';
 
 function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
   const {
@@ -45,6 +50,18 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
   } = taostats;
 
   let active = false;
+
+  function isAlphaHolderBackfillActive() {
+    return String(getSetting(db, ALPHA_HOLDER_BACKFILL_ACTIVE_KEY) || '').trim() === '1';
+  }
+
+  function setAlphaHolderBackfillActive(activeState) {
+    setSetting(db, ALPHA_HOLDER_BACKFILL_ACTIVE_KEY, activeState ? '1' : '0');
+    if (activeState) {
+      setSetting(db, ALPHA_HOLDER_BACKFILL_STARTED_AT_KEY, new Date().toISOString());
+    }
+    return activeState;
+  }
 
   function resolveWalletConfig(address) {
     return (config.wallets || []).find((wallet) => String(wallet.ss58 || wallet.coldkey || '') === String(address || ''))
@@ -487,6 +504,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     limit = 1024,
     concurrency = 1,
     onProgress = null,
+    respectAlphaHolderBackfillLock = true,
   } = {}) {
     if (!config.taostatsAuthHeader) {
       return {
@@ -497,6 +515,19 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         inserted: 0,
         netuids: 0,
         reason: 'Taostats API auth header is required for alpha holder snapshots',
+      };
+    }
+
+    if (respectAlphaHolderBackfillLock && isAlphaHolderBackfillActive()) {
+      return {
+        ok: true,
+        skipped: true,
+        source: 'alpha-holder-snapshot-all',
+        fetched: 0,
+        inserted: 0,
+        netuids: 0,
+        capturedAt,
+        reason: 'Alpha-holder backfill is running',
       };
     }
 
@@ -788,6 +819,9 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     if (active) {
       return { skipped: true, reason: 'ingest already running' };
     }
+    if (isAlphaHolderBackfillActive()) {
+      return { skipped: true, reason: 'alpha-holder backfill is running' };
+    }
 
     active = true;
     const startedAt = new Date();
@@ -832,6 +866,9 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
   } = {}) {
     if (active) {
       return { skipped: true, reason: 'ingest already running' };
+    }
+    if (isAlphaHolderBackfillActive()) {
+      return { skipped: true, reason: 'alpha-holder backfill is running' };
     }
 
     active = true;
@@ -910,13 +947,19 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     concurrency = 3,
     onProgress = null,
   } = {}) {
-    return syncAllAlphaHolderSnapshots({
-      capturedAt,
-      skipIfAlreadyCapturedToday,
-      limit,
-      concurrency,
-      onProgress,
-    });
+    setAlphaHolderBackfillActive(true);
+    try {
+      return await syncAllAlphaHolderSnapshots({
+        capturedAt,
+        skipIfAlreadyCapturedToday,
+        limit,
+        concurrency,
+        onProgress,
+        respectAlphaHolderBackfillLock: false,
+      });
+    } finally {
+      setAlphaHolderBackfillActive(false);
+    }
   }
 
   async function backfillAlphaHolderHistoryForNetuid({
@@ -1016,178 +1059,185 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         reason: 'Taostats API auth header is required for alpha holder history backfill',
       };
     }
-
-    const subnets = await resolveAlphaHolderNetuids({ netuid, limit });
-    const startedAtMs = Date.now();
-    const emitProgress = (payload) => {
-      if (typeof onProgress === 'function') {
-        onProgress(payload);
-      }
-    };
-
-    emitProgress({
-      phase: 'start',
-      operation: 'alpha-holder-history-backfill',
-      total: subnets.length,
-      completed: 0,
-      remaining: subnets.length,
-      elapsedMs: 0,
-      etaMs: null,
-      etaIso: null,
-      netuid: null,
-      fetched: 0,
-      inserted: 0,
-      deleted: 0,
-      skipped: 0,
-      ok: true,
-      days,
-      overwrite: Boolean(overwrite),
-    });
-
-    let fetched = 0;
-    let inserted = 0;
-    let deleted = 0;
-    let skipped = 0;
-    let ok = true;
-    const results = [];
-
-    for (const [index, subnetNetuid] of subnets.entries()) {
-      try {
-        const startedCompleted = index;
-        const startedElapsedMs = Date.now() - startedAtMs;
-        const startedEtaMs = startedCompleted > 0 && startedCompleted < subnets.length
-          ? Math.max(0, Math.round((startedElapsedMs / startedCompleted) * (subnets.length - startedCompleted)))
-          : 0;
-        emitProgress({
-          phase: 'item-start',
-          operation: 'alpha-holder-history-backfill',
-          total: subnets.length,
-          completed: startedCompleted,
-          remaining: Math.max(0, subnets.length - startedCompleted),
-          elapsedMs: startedElapsedMs,
-          etaMs: startedEtaMs,
-          etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
-          netuid: subnetNetuid,
-          fetched: 0,
-          inserted: 0,
-          deleted: 0,
-          skipped: 0,
-          ok: true,
-          message: `SN${subnetNetuid}`,
-        });
-        const result = await backfillAlphaHolderHistoryForNetuid({
-          netuid: subnetNetuid,
-          days,
-          overwrite,
-        });
-        fetched += Number(result.fetched || 0);
-        inserted += Number(result.inserted || 0);
-        deleted += Number(result.deleted || 0);
-        skipped += Number(result.skipped || 0);
-        if (result.ok === false || result.error) {
-          ok = false;
+    setAlphaHolderBackfillActive(true);
+    try {
+      const subnets = await resolveAlphaHolderNetuids({ netuid, limit });
+      const startedAtMs = Date.now();
+      const emitProgress = (payload) => {
+        if (typeof onProgress === 'function') {
+          onProgress(payload);
         }
-        results.push({
-          ...result,
-          ok: result.ok !== false && !result.error,
-        });
-        const completed = index + 1;
-        const elapsedMs = Date.now() - startedAtMs;
-        const etaMs = completed > 0 && completed < subnets.length
-          ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
-          : 0;
-        emitProgress({
-          phase: 'item',
-          operation: 'alpha-holder-history-backfill',
-          total: subnets.length,
-          completed,
-          remaining: Math.max(0, subnets.length - completed),
-          elapsedMs,
-          etaMs,
-          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
-          netuid: subnetNetuid,
-          fetched: Number(result.fetched || 0),
-          inserted: Number(result.inserted || 0),
-          deleted: Number(result.deleted || 0),
-          skipped: Number(result.skipped || 0),
-          ok: result.ok !== false && !result.error,
-          message: `SN${subnetNetuid}`,
-        });
-      } catch (error) {
-        results.push({
-          ok: false,
-          netuid: subnetNetuid,
-          fetched: 0,
-          inserted: 0,
-          deleted: 0,
-          skipped: 0,
-          reason: error instanceof Error ? error.message : String(error),
-        });
-        ok = false;
-        const completed = index + 1;
-        const elapsedMs = Date.now() - startedAtMs;
-        const etaMs = completed > 0 && completed < subnets.length
-          ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
-          : 0;
-        emitProgress({
-          phase: 'item',
-          operation: 'alpha-holder-history-backfill',
-          total: subnets.length,
-          completed,
-          remaining: Math.max(0, subnets.length - completed),
-          elapsedMs,
-          etaMs,
-          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
-          netuid: subnetNetuid,
-          fetched: 0,
-          inserted: 0,
-          deleted: 0,
-          skipped: 0,
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          message: `SN${subnetNetuid}`,
-        });
+      };
+
+      emitProgress({
+        phase: 'start',
+        operation: 'alpha-holder-history-backfill',
+        total: subnets.length,
+        completed: 0,
+        remaining: subnets.length,
+        elapsedMs: 0,
+        etaMs: null,
+        etaIso: null,
+        netuid: null,
+        fetched: 0,
+        inserted: 0,
+        deleted: 0,
+        skipped: 0,
+        ok: true,
+        days,
+        overwrite: Boolean(overwrite),
+      });
+
+      let fetched = 0;
+      let inserted = 0;
+      let deleted = 0;
+      let skipped = 0;
+      let ok = true;
+      const results = [];
+
+      for (const [index, subnetNetuid] of subnets.entries()) {
+        try {
+          const startedCompleted = index;
+          const startedElapsedMs = Date.now() - startedAtMs;
+          const startedEtaMs = startedCompleted > 0 && startedCompleted < subnets.length
+            ? Math.max(0, Math.round((startedElapsedMs / startedCompleted) * (subnets.length - startedCompleted)))
+            : 0;
+          emitProgress({
+            phase: 'item-start',
+            operation: 'alpha-holder-history-backfill',
+            total: subnets.length,
+            completed: startedCompleted,
+            remaining: Math.max(0, subnets.length - startedCompleted),
+            elapsedMs: startedElapsedMs,
+            etaMs: startedEtaMs,
+            etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
+            netuid: subnetNetuid,
+            fetched: 0,
+            inserted: 0,
+            deleted: 0,
+            skipped: 0,
+            ok: true,
+            message: `SN${subnetNetuid}`,
+          });
+          const result = await backfillAlphaHolderHistoryForNetuid({
+            netuid: subnetNetuid,
+            days,
+            overwrite,
+          });
+          fetched += Number(result.fetched || 0);
+          inserted += Number(result.inserted || 0);
+          deleted += Number(result.deleted || 0);
+          skipped += Number(result.skipped || 0);
+          if (result.ok === false || result.error) {
+            ok = false;
+          }
+          results.push({
+            ...result,
+            ok: result.ok !== false && !result.error,
+          });
+          const completed = index + 1;
+          const elapsedMs = Date.now() - startedAtMs;
+          const etaMs = completed > 0 && completed < subnets.length
+            ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
+            : 0;
+          emitProgress({
+            phase: 'item',
+            operation: 'alpha-holder-history-backfill',
+            total: subnets.length,
+            completed,
+            remaining: Math.max(0, subnets.length - completed),
+            elapsedMs,
+            etaMs,
+            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+            netuid: subnetNetuid,
+            fetched: Number(result.fetched || 0),
+            inserted: Number(result.inserted || 0),
+            deleted: Number(result.deleted || 0),
+            skipped: Number(result.skipped || 0),
+            ok: result.ok !== false && !result.error,
+            message: `SN${subnetNetuid}`,
+          });
+        } catch (error) {
+          results.push({
+            ok: false,
+            netuid: subnetNetuid,
+            fetched: 0,
+            inserted: 0,
+            deleted: 0,
+            skipped: 0,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          ok = false;
+          const completed = index + 1;
+          const elapsedMs = Date.now() - startedAtMs;
+          const etaMs = completed > 0 && completed < subnets.length
+            ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
+            : 0;
+          emitProgress({
+            phase: 'item',
+            operation: 'alpha-holder-history-backfill',
+            total: subnets.length,
+            completed,
+            remaining: Math.max(0, subnets.length - completed),
+            elapsedMs,
+            etaMs,
+            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+            netuid: subnetNetuid,
+            fetched: 0,
+            inserted: 0,
+            deleted: 0,
+            skipped: 0,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            message: `SN${subnetNetuid}`,
+          });
+        }
       }
+
+      emitProgress({
+        phase: 'done',
+        operation: 'alpha-holder-history-backfill',
+        total: subnets.length,
+        completed: subnets.length,
+        remaining: 0,
+        elapsedMs: Date.now() - startedAtMs,
+        etaMs: 0,
+        etaIso: null,
+        netuid: null,
+        fetched,
+        inserted,
+        deleted,
+        skipped,
+        ok,
+        results,
+        days,
+        overwrite: Boolean(overwrite),
+      });
+
+      return {
+        ok,
+        skipped: false,
+        source: 'alpha-holder-history-backfill',
+        fetched,
+        inserted,
+        deleted,
+        skipped,
+        days,
+        overwrite: Boolean(overwrite),
+        netuids: subnets.length,
+        results,
+      };
+    } finally {
+      setAlphaHolderBackfillActive(false);
     }
-
-    emitProgress({
-      phase: 'done',
-      operation: 'alpha-holder-history-backfill',
-      total: subnets.length,
-      completed: subnets.length,
-      remaining: 0,
-      elapsedMs: Date.now() - startedAtMs,
-      etaMs: 0,
-      etaIso: null,
-      netuid: null,
-      fetched,
-      inserted,
-      deleted,
-      skipped,
-      ok,
-      results,
-      days,
-      overwrite: Boolean(overwrite),
-    });
-
-    return {
-      ok,
-      skipped: false,
-      source: 'alpha-holder-history-backfill',
-      fetched,
-      inserted,
-      deleted,
-      skipped,
-      days,
-      overwrite: Boolean(overwrite),
-      netuids: subnets.length,
-      results,
-    };
   }
 
   async function ingestOnce({ netuid = config.netuid } = {}) {
     if (active) {
       return { skipped: true, reason: 'ingest already running' };
+    }
+    if (isAlphaHolderBackfillActive()) {
+      return { skipped: true, reason: 'alpha-holder backfill is running' };
     }
 
     active = true;
@@ -1393,6 +1443,9 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
   } = {}) {
     if (active) {
       return { skipped: true, reason: 'ingest already running' };
+    }
+    if (isAlphaHolderBackfillActive()) {
+      return { skipped: true, reason: 'alpha-holder backfill is running' };
     }
 
     active = true;
@@ -1771,6 +1824,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     syncWalletActivityForWallet,
     backfillWalletActivity,
     isActive: () => active,
+    isAlphaHolderBackfillActive,
   };
 }
 

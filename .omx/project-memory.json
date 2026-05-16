@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-15T00:00:00Z",
+  "updated_at": "2026-05-16T00:00:00Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -16,6 +16,7 @@
     "The alpha-holder ranking view now collapses into a current-subnet rank card by default and expands into a table-first leaderboard with rank, subnet, alpha-holder count, daily change, and a tiny trend sparkline, while still using the latest stored subnet name when available so labels read like Chutes (SN64) instead of plain SN64.",
     "The dashboard now also includes an all-subnet alpha-holder ranking panel that compares every locally stored subnet by latest holder-row count, highlights SN110 in the table, and now presents the ranking as a collapsible current-subnet card that expands into the full table built from the same local alpha_holder_snapshots table.",
     "The alpha-holder CLI commands (--alpha-holder-backfill / --alpha-holder-history-backfill and --alpha-holder-sync) print live per-subnet progress, worker ids, elapsed time, remaining counts, and an ETA to stderr so long fills are observable in terminal runs.",
+    "While an alpha-holder backfill is running, the app stores a local pause flag in SQLite app_settings so scheduled polling, wallet sync, and scheduled alpha-holder snapshots skip their Taostats requests instead of competing with the manual fill.",
     "Alpha-holder backfill now also emits per-page heartbeat lines while each subnet's stake-balance snapshot fetch is in flight, and the manual backfill path uses a small 3-worker subnet queue while the scheduled sync stays sequential; the alpha-holder snapshot fetch path now also keeps a slightly higher retry budget for 429s so a transient Taostats throttle can be retried more than once before the run fails.",
     "The stake-balance latest fetcher now clamps its page size to 200 and continues paging using that actual page size, because Taostats returns capped pages and the previous limit comparison stopped after the first page for most subnets.",
     "If stake-balance latest returns HTTP 429 during alpha-holder backfill, the fetcher pauses for roughly a minute (or longer if Retry-After says so), emits a retry-wait message, and now retries the page more than once before surfacing the error.",
