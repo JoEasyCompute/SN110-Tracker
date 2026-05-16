@@ -63,6 +63,46 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     return activeState;
   }
 
+  function recordAlphaHolderSnapshotRun({ startedAt, capturedAt, result = null, error = null }) {
+    const finishedAt = new Date();
+    const allResults = Array.isArray(result?.results) ? result.results : [];
+    const notableResults = allResults
+      .filter((row) => row && (row.ok === false || row.reason || row.error))
+      .slice(0, 25);
+    const errorMessage = error instanceof Error
+      ? error.message
+      : (error ? String(error) : (result?.ok === false ? (result.reason || notableResults[0]?.reason || 'Alpha-holder snapshot batch failed') : null));
+    const detail = {
+      capturedAt,
+      fetched: Number(result?.fetched || 0),
+      inserted: Number(result?.inserted || 0),
+      netuids: Number(result?.netuids || allResults.length || 0),
+      skipped: Boolean(result?.skipped),
+      reason: result?.reason || null,
+      failedSubnets: allResults.filter((row) => row?.ok === false).length,
+      skippedSubnets: allResults.filter((row) => row?.skipped).length,
+      notableResults,
+    };
+    const message = errorMessage
+      ? 'Alpha-holder snapshot batch failed'
+      : result?.skipped
+        ? `Alpha-holder snapshot skipped: ${result.reason || 'not run'}`
+        : 'Alpha-holder snapshot batch completed';
+    insertIngestRun(db, {
+      netuid: config.netuid,
+      started_at: startedAt.toISOString(),
+      finished_at: finishedAt.toISOString(),
+      duration_ms: finishedAt.getTime() - startedAt.getTime(),
+      source: 'alpha-holder-snapshot-all',
+      fallback_used: false,
+      ok: !errorMessage,
+      snapshot_id: null,
+      message,
+      error: errorMessage,
+      detail_json: JSON.stringify(detail),
+    });
+  }
+
   function resolveWalletConfig(address) {
     return (config.wallets || []).find((wallet) => String(wallet.ss58 || wallet.coldkey || '') === String(address || ''))
       || {
@@ -506,8 +546,9 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     onProgress = null,
     respectAlphaHolderBackfillLock = true,
   } = {}) {
+    const startedAt = new Date();
     if (!config.taostatsAuthHeader) {
-      return {
+      const result = {
         ok: false,
         skipped: true,
         source: 'alpha-holder-snapshot-all',
@@ -516,10 +557,12 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         netuids: 0,
         reason: 'Taostats API auth header is required for alpha holder snapshots',
       };
+      recordAlphaHolderSnapshotRun({ startedAt, capturedAt, result });
+      return result;
     }
 
     if (respectAlphaHolderBackfillLock && isAlphaHolderBackfillActive()) {
-      return {
+      const result = {
         ok: true,
         skipped: true,
         source: 'alpha-holder-snapshot-all',
@@ -529,10 +572,11 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         capturedAt,
         reason: 'Alpha-holder backfill is running',
       };
+      recordAlphaHolderSnapshotRun({ startedAt, capturedAt, result });
+      return result;
     }
 
-    const subnets = await resolveAlphaHolderNetuids({ limit });
-    const startedAtMs = Date.now();
+    const startedAtMs = startedAt.getTime();
     const parsedConcurrency = Number.parseInt(String(concurrency), 10);
     const workersTotal = Math.max(1, Math.min(3, Number.isFinite(parsedConcurrency) && parsedConcurrency > 0 ? parsedConcurrency : 1));
     const emitProgress = (payload) => {
@@ -541,191 +585,201 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       }
     };
 
-    emitProgress({
-      phase: 'start',
-      operation: 'alpha-holder-sync',
-      total: subnets.length,
-      completed: 0,
-      remaining: subnets.length,
-      elapsedMs: 0,
-      etaMs: null,
-      etaIso: null,
-      netuid: null,
-      fetched: 0,
-      inserted: 0,
-      skipped: false,
-      ok: true,
-      capturedAt,
-      workersTotal,
-      message: workersTotal > 1 ? `running with ${workersTotal} workers` : 'running',
-    });
+    let subnets = [];
+    try {
+      subnets = await resolveAlphaHolderNetuids({ limit });
 
-    let fetched = 0;
-    let inserted = 0;
-    let ok = true;
-    const results = [];
-    let completedCount = 0;
-
-    const processSubnet = async (netuid, index, workerId = null) => {
-      const startedCompleted = completedCount;
-      const startedElapsedMs = Date.now() - startedAtMs;
-      const startedEtaMs = startedCompleted > 0 && startedCompleted < subnets.length
-        ? Math.max(0, Math.round((startedElapsedMs / startedCompleted) * (subnets.length - startedCompleted)))
-        : 0;
       emitProgress({
-        phase: 'item-start',
+        phase: 'start',
         operation: 'alpha-holder-sync',
         total: subnets.length,
-        completed: startedCompleted,
-        remaining: Math.max(0, subnets.length - startedCompleted),
-        elapsedMs: startedElapsedMs,
-        etaMs: startedEtaMs,
-        etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
-        netuid,
+        completed: 0,
+        remaining: subnets.length,
+        elapsedMs: 0,
+        etaMs: null,
+        etaIso: null,
+        netuid: null,
         fetched: 0,
         inserted: 0,
         skipped: false,
         ok: true,
-        message: `SN${netuid}`,
-        workerId,
+        capturedAt,
+        workersTotal,
+        message: workersTotal > 1 ? `running with ${workersTotal} workers` : 'running',
+      });
+
+      let fetched = 0;
+      let inserted = 0;
+      let ok = true;
+      const results = [];
+      let completedCount = 0;
+
+      const processSubnet = async (netuid, index, workerId = null) => {
+        const startedCompleted = completedCount;
+        const startedElapsedMs = Date.now() - startedAtMs;
+        const startedEtaMs = startedCompleted > 0 && startedCompleted < subnets.length
+          ? Math.max(0, Math.round((startedElapsedMs / startedCompleted) * (subnets.length - startedCompleted)))
+          : 0;
+        emitProgress({
+          phase: 'item-start',
+          operation: 'alpha-holder-sync',
+          total: subnets.length,
+          completed: startedCompleted,
+          remaining: Math.max(0, subnets.length - startedCompleted),
+          elapsedMs: startedElapsedMs,
+          etaMs: startedEtaMs,
+          etaIso: startedEtaMs > 0 ? new Date(Date.now() + startedEtaMs).toISOString() : null,
+          netuid,
+          fetched: 0,
+          inserted: 0,
+          skipped: false,
+          ok: true,
+          message: `SN${netuid}`,
+          workerId,
+          workersTotal,
+        });
+
+        try {
+          const snapshot = await syncAlphaHolderSnapshot({
+            netuid,
+            capturedAt,
+            skipIfAlreadyCapturedToday,
+            limit,
+            onProgress,
+            workerId,
+          });
+          fetched += Number(snapshot.fetched || 0);
+          inserted += Number(snapshot.inserted || 0);
+          if (snapshot.ok === false || snapshot.error) {
+            ok = false;
+          }
+          results[index] = {
+            netuid,
+            ok: snapshot.ok !== false && !snapshot.error,
+            skipped: Boolean(snapshot.skipped),
+            fetched: Number(snapshot.fetched || 0),
+            inserted: Number(snapshot.inserted || 0),
+            reason: snapshot.reason || null,
+          };
+          completedCount += 1;
+          const completed = completedCount;
+          const elapsedMs = Date.now() - startedAtMs;
+          const etaMs = completed > 0 && completed < subnets.length
+            ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
+            : 0;
+          emitProgress({
+            phase: 'item',
+            operation: 'alpha-holder-sync',
+            total: subnets.length,
+            completed,
+            remaining: Math.max(0, subnets.length - completed),
+            elapsedMs,
+            etaMs,
+            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+            netuid,
+            fetched: Number(snapshot.fetched || 0),
+            inserted: Number(snapshot.inserted || 0),
+            skipped: Boolean(snapshot.skipped),
+            ok: snapshot.ok !== false && !snapshot.error,
+            message: `SN${netuid}`,
+            workerId,
+            workersTotal,
+          });
+        } catch (error) {
+          ok = false;
+          results[index] = {
+            netuid,
+            ok: false,
+            skipped: false,
+            fetched: 0,
+            inserted: 0,
+            reason: error instanceof Error ? error.message : String(error),
+          };
+          completedCount += 1;
+          const completed = completedCount;
+          const elapsedMs = Date.now() - startedAtMs;
+          const etaMs = completed > 0 && completed < subnets.length
+            ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
+            : 0;
+          emitProgress({
+            phase: 'item',
+            operation: 'alpha-holder-sync',
+            total: subnets.length,
+            completed,
+            remaining: Math.max(0, subnets.length - completed),
+            elapsedMs,
+            etaMs,
+            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+            netuid,
+            fetched: 0,
+            inserted: 0,
+            skipped: false,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            message: `SN${netuid}`,
+            workerId,
+            workersTotal,
+          });
+        }
+      };
+
+      if (workersTotal <= 1 || subnets.length <= 1) {
+        for (const [index, netuid] of subnets.entries()) {
+          // eslint-disable-next-line no-await-in-loop
+          await processSubnet(netuid, index, 1);
+        }
+      } else {
+        let nextIndex = 0;
+        await Promise.all(Array.from({ length: workersTotal }, async (_, workerIndex) => {
+          const workerId = workerIndex + 1;
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            const currentIndex = nextIndex;
+            nextIndex += 1;
+            if (currentIndex >= subnets.length) {
+              break;
+            }
+            // eslint-disable-next-line no-await-in-loop
+            await processSubnet(subnets[currentIndex], currentIndex, workerId);
+          }
+        }));
+      }
+
+      emitProgress({
+        phase: 'done',
+        operation: 'alpha-holder-sync',
+        total: subnets.length,
+        completed: subnets.length,
+        remaining: 0,
+        elapsedMs: Date.now() - startedAtMs,
+        etaMs: 0,
+        etaIso: null,
+        netuid: null,
+        fetched,
+        inserted,
+        skipped: false,
+        ok,
+        results,
+        capturedAt,
         workersTotal,
       });
 
-      try {
-        const snapshot = await syncAlphaHolderSnapshot({
-          netuid,
-          capturedAt,
-          skipIfAlreadyCapturedToday,
-          limit,
-          onProgress,
-          workerId,
-        });
-        fetched += Number(snapshot.fetched || 0);
-        inserted += Number(snapshot.inserted || 0);
-        if (snapshot.ok === false || snapshot.error) {
-          ok = false;
-        }
-        results[index] = {
-          netuid,
-          ok: snapshot.ok !== false && !snapshot.error,
-          skipped: Boolean(snapshot.skipped),
-          fetched: Number(snapshot.fetched || 0),
-          inserted: Number(snapshot.inserted || 0),
-          reason: snapshot.reason || null,
-        };
-        completedCount += 1;
-        const completed = completedCount;
-        const elapsedMs = Date.now() - startedAtMs;
-        const etaMs = completed > 0 && completed < subnets.length
-          ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
-          : 0;
-        emitProgress({
-          phase: 'item',
-          operation: 'alpha-holder-sync',
-          total: subnets.length,
-          completed,
-          remaining: Math.max(0, subnets.length - completed),
-          elapsedMs,
-          etaMs,
-          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
-          netuid,
-          fetched: Number(snapshot.fetched || 0),
-          inserted: Number(snapshot.inserted || 0),
-          skipped: Boolean(snapshot.skipped),
-          ok: snapshot.ok !== false && !snapshot.error,
-          message: `SN${netuid}`,
-          workerId,
-          workersTotal,
-        });
-      } catch (error) {
-        ok = false;
-        results[index] = {
-          netuid,
-          ok: false,
-          skipped: false,
-          fetched: 0,
-          inserted: 0,
-          reason: error instanceof Error ? error.message : String(error),
-        };
-        completedCount += 1;
-        const completed = completedCount;
-        const elapsedMs = Date.now() - startedAtMs;
-        const etaMs = completed > 0 && completed < subnets.length
-          ? Math.max(0, Math.round((elapsedMs / completed) * (subnets.length - completed)))
-          : 0;
-        emitProgress({
-          phase: 'item',
-          operation: 'alpha-holder-sync',
-          total: subnets.length,
-          completed,
-          remaining: Math.max(0, subnets.length - completed),
-          elapsedMs,
-          etaMs,
-          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
-          netuid,
-          fetched: 0,
-          inserted: 0,
-          skipped: false,
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          message: `SN${netuid}`,
-          workerId,
-          workersTotal,
-        });
-      }
-    };
-
-    if (workersTotal <= 1 || subnets.length <= 1) {
-      for (const [index, netuid] of subnets.entries()) {
-        // eslint-disable-next-line no-await-in-loop
-        await processSubnet(netuid, index, 1);
-      }
-    } else {
-      let nextIndex = 0;
-      await Promise.all(Array.from({ length: workersTotal }, async (_, workerIndex) => {
-        const workerId = workerIndex + 1;
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const currentIndex = nextIndex;
-          nextIndex += 1;
-          if (currentIndex >= subnets.length) {
-            break;
-          }
-          // eslint-disable-next-line no-await-in-loop
-          await processSubnet(subnets[currentIndex], currentIndex, workerId);
-        }
-      }));
+      const result = {
+        ok,
+        skipped: false,
+        source: 'alpha-holder-snapshot-all',
+        fetched,
+        inserted,
+        netuids: subnets.length,
+        capturedAt,
+        results,
+      };
+      recordAlphaHolderSnapshotRun({ startedAt, capturedAt, result });
+      return result;
+    } catch (error) {
+      recordAlphaHolderSnapshotRun({ startedAt, capturedAt, result: { netuids: subnets.length }, error });
+      throw error;
     }
-
-    emitProgress({
-      phase: 'done',
-      operation: 'alpha-holder-sync',
-      total: subnets.length,
-      completed: subnets.length,
-      remaining: 0,
-      elapsedMs: Date.now() - startedAtMs,
-      etaMs: 0,
-      etaIso: null,
-      netuid: null,
-      fetched,
-      inserted,
-      skipped: false,
-      ok,
-      results,
-      capturedAt,
-      workersTotal,
-    });
-
-    return {
-      ok,
-      skipped: false,
-      source: 'alpha-holder-snapshot-all',
-      fetched,
-      inserted,
-      netuids: subnets.length,
-      capturedAt,
-      results,
-    };
   }
 
   async function runWalletActivityForWallet({

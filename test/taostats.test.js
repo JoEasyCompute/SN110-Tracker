@@ -57,6 +57,7 @@ const {
   countWalletTransactions,
   deleteSnapshotsInRange,
   deleteWalletStakePositions,
+  getLatestIngestRunBySource,
   getSetting,
   setSetting,
 } = require('../src/db');
@@ -1166,6 +1167,11 @@ test('alpha holder snapshot backfill does not depend on stake-balance history', 
   assert.equal(latestCalls.every((call) => call.limit === 1024), true);
   assert.equal(latestCalls.every((call) => call.maxRetries === 3), true);
   assert.equal(latestCalls.every((call) => call.retryDelayMs === 60000), true);
+  const run = getLatestIngestRunBySource(db, 'alpha-holder-snapshot-all');
+  assert.equal(run.ok, 1);
+  assert.equal(run.message, 'Alpha-holder snapshot batch completed');
+  assert.equal(run.error, null);
+  assert.equal(JSON.parse(run.detail_json).inserted, 2);
   db.close();
 });
 
