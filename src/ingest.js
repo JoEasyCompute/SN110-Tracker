@@ -1459,28 +1459,6 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           }
         }
       }
-      try {
-        const alphaHolderSnapshot = await syncAllAlphaHolderSnapshots({
-          capturedAt: result.snapshot.captured_at,
-          skipIfAlreadyCapturedToday: true,
-          limit: 1024,
-        });
-        alphaHolderFetched = alphaHolderSnapshot.fetched || 0;
-        alphaHolderInserted = alphaHolderSnapshot.inserted || 0;
-        detail = {
-          ...detail,
-          alphaHolderFetched,
-          alphaHolderInserted,
-          alphaHolderSnapshotSkipped: Boolean(alphaHolderSnapshot.skipped),
-          alphaHolderSnapshotCapturedAt: alphaHolderSnapshot.capturedAt || result.snapshot.captured_at,
-          alphaHolderSubnetCount: alphaHolderSnapshot.netuids || 0,
-        };
-      } catch (alphaHolderError) {
-        detail = {
-          ...detail,
-          alphaHolderError: alphaHolderError instanceof Error ? alphaHolderError.message : String(alphaHolderError),
-        };
-      }
       ok = true;
       message = `Captured ${result.snapshot.name || `SN${netuid}`} from ${source}`;
       return {

@@ -710,18 +710,9 @@ test('ingestOnce refreshes subnet metadata without tripping the catalog refresh 
       detail: { source: 'api' },
     }),
     fetchTaoPriceLatest: async () => null,
-    fetchStakeBalanceLatest: async ({ netuid, capturedAt }) => [normalizeStakeBalanceSnapshot({
-      block_number: 210000 + netuid,
-      timestamp: capturedAt,
-      netuid,
-      subnet_rank: 1,
-      subnet_total_holders: 1,
-      balance: '1000000000',
-      balance_as_tao: '1000000000',
-      coldkey: { ss58: `5AlphaHolder${netuid}`, hex: `0xholder${netuid}` },
-      hotkey: { ss58: `5Val${netuid}`, hex: `0xval${netuid}` },
-      hotkey_name: `Validator ${netuid}`,
-    }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt })],
+    fetchStakeBalanceLatest: async () => {
+      throw new Error('alpha-holder snapshot should not run during subnet ingest');
+    },
     fetchHistoricalStakeBalance: async () => [],
   };
   const service = createIngestService({
@@ -740,6 +731,7 @@ test('ingestOnce refreshes subnet metadata without tripping the catalog refresh 
 
   assert.equal(result.ok, true);
   assert.equal(getSubnetMetadata(db, 64)?.name, 'Chutes');
+  assert.equal(getLatestIngestRunBySource(db, 'alpha-holder-snapshot-all'), null);
   db.close();
 });
 
