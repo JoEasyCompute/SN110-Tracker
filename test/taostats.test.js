@@ -743,6 +743,95 @@ test('ingestOnce refreshes subnet metadata without tripping the catalog refresh 
   db.close();
 });
 
+test('ingest service exposes active job details while a run is in progress', async () => {
+  const db = openDatabase(':memory:');
+  let releaseLatest = null;
+  const latestPromise = new Promise((resolve) => {
+    releaseLatest = resolve;
+  });
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => [],
+    fetchLatestSnapshot: async () => latestPromise,
+    fetchHistoricalSnapshots: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoPriceLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoPriceHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoFlowHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchStakeBalanceLatest: async () => [],
+    fetchHistoricalStakeBalance: async () => {
+      throw new Error('should not be called');
+    },
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsPublicBaseUrl: 'https://taostats.io',
+      taostatsAuthHeader: '',
+      taostatsRateLimiter: null,
+      wallets: [],
+    },
+    taostats,
+  });
+
+  const running = service.ingestOnce({ netuid: 110 });
+  await new Promise((resolve) => setImmediate(resolve));
+  const activeJob = service.getActiveJob();
+  assert.equal(service.isActive(), true);
+  assert.equal(activeJob.kind, 'subnet-ingest');
+  assert.equal(activeJob.netuid, 110);
+  assert.equal(Number.isFinite(activeJob.elapsedMs), true);
+
+  const skipped = await service.backfillHistoricalSnapshots({ netuid: 110, days: 1 });
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.activeJob.kind, 'subnet-ingest');
+
+  releaseLatest({
+    source: 'api',
+    fallbackUsed: false,
+    detail: {},
+    snapshot: normalizeSnapshot({
+      netuid: 110,
+      block_number: 8161001,
+      timestamp: '2026-05-16T20:00:00Z',
+      name: 'Green Compute',
+      symbol: 'SN110',
+      price: '1.0',
+      market_cap: '100',
+      liquidity: '50',
+      emission: '10',
+      projected_emission: '0.1',
+      incentive_burn: '0',
+      recycled_24_hours: '500000',
+      neuron_registration_cost: '500000',
+      active_keys: 256,
+      max_neurons: 256,
+      net_flow_1_day: '20',
+      net_flow_7_days: '30',
+      net_flow_30_days: '40',
+    }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-05-16T20:00:00.000Z' }),
+  });
+  const result = await running;
+  assert.equal(result.ok, true);
+  assert.equal(service.isActive(), false);
+  assert.equal(service.getActiveJob(), null);
+  db.close();
+});
+
 test('sqlite persistence stores and retrieves wallet transactions', () => {
   const db = openDatabase(':memory:');
   const walletConfig = { name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [] };
@@ -1987,6 +2076,13 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
       nextPollAtIso: '2026-05-16T01:00:00.000Z',
       nextWalletActivitySyncAtIso: '2026-05-16T02:00:00.000Z',
       nextAlphaHolderSnapshotAtIso: '2026-05-17T00:00:00.000Z',
+      ingestActive: true,
+      activeIngestJob: {
+        kind: 'subnet-ingest',
+        label: 'Subnet 110 ingest',
+        startedAtIso: new Date(Date.now() - 60000).toISOString(),
+        elapsedMs: 60000,
+      },
       wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [] }],
     },
     netuid: 110,
@@ -2002,6 +2098,7 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
   assert.equal(html.includes('Subnet poll ingest'), true);
   assert.equal(html.includes('Wallet activity sync'), true);
   assert.equal(html.includes('Alpha-holder snapshot'), true);
+  assert.equal(html.includes('Subnet 110 ingest started'), true);
   assert.equal(html.includes('Paused'), true);
   assert.equal(html.includes('HTTP 429 from https://api.example.invalid'), true);
   db.close();

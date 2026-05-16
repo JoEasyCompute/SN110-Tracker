@@ -333,6 +333,17 @@ function formatRelativeIso(value) {
   return 'just now';
 }
 
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.round(Number(ms) / 1000));
+  if (!Number.isFinite(totalSeconds)) return '—';
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 function formatChartDate(value, days) {
   const numericValue = Number(value);
   const date = Number.isFinite(numericValue) ? new Date(numericValue) : new Date(value);
@@ -2758,6 +2769,7 @@ function buildPageModel({ db, config, netuid }) {
     totalWalletSnapshots,
     nextPollAtIso: config.nextPollAtIso ?? null,
     ingestActive: Boolean(config.ingestActive),
+    activeIngestJob: config.activeIngestJob || null,
     hasApiKey: Boolean(config.taostatsAuthHeader),
   };
 }
@@ -2920,6 +2932,10 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
     return '';
   }
   const ingestActive = Boolean(config.ingestActive);
+  const activeIngestJob = config.activeIngestJob && typeof config.activeIngestJob === 'object' ? config.activeIngestJob : null;
+  const activeJobText = activeIngestJob
+    ? `${activeIngestJob.label || activeIngestJob.kind || 'Ingest job'} started ${formatRelativeIso(activeIngestJob.startedAtIso)}${Number.isFinite(Number(activeIngestJob.elapsedMs)) ? ` and has been running for ${formatDuration(Number(activeIngestJob.elapsedMs))}` : ''}.`
+    : 'An ingest job is currently running.';
   const walletActivityText = formatWalletActivityStatusText(walletActivityStatus);
   const walletActivityBadge = renderWalletActivityStatusBadge(walletActivityStatus, { id: 'wallet-activity-admin-badge' });
   const scheduleTable = renderScheduleStatusTable(scheduleStatus, {
@@ -2936,7 +2952,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
           <div class="panel admin-controls">
             <h3>Live controls</h3>
             ${walletActivityBadge ? `<div class="wallet-activity-status admin-wallet-activity-status" id="wallet-activity-admin-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
-            ${ingestActive ? '<p class="empty" data-status="warning">An ingest job is currently running. Manual refresh and backfill actions will be available when it finishes.</p>' : ''}
+            ${ingestActive ? `<p class="empty" data-status="warning">${escapeHtml(activeJobText)} Manual refresh and backfill actions will be available when it finishes.</p>` : ''}
             <p class="admin-helper">Subnet refresh updates the SN${netuid} snapshot. Use the wallet activity panel below for wallet transaction cache refreshes.</p>
             <div class="admin-actions">
               <button class="button primary" type="button" id="refresh-btn">Refresh subnet now</button>
@@ -8614,6 +8630,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           adminAuthEnabled: Boolean(String(config.taostatsAdminApiKey || '').trim()),
           adminAuthenticated,
           ingestActive: typeof ingestService.isActive === 'function' ? ingestService.isActive() : false,
+          activeIngestJob: typeof ingestService.getActiveJob === 'function' ? ingestService.getActiveJob() : null,
           taostatsAdminApiKey: '',
         };
         const model = buildPageModel({ db, config: pageConfig, netuid });
@@ -8925,6 +8942,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           nextWalletActivitySyncAtIso: config.nextWalletActivitySyncAtIso ?? null,
           nextAlphaHolderSnapshotAtIso: config.nextAlphaHolderSnapshotAtIso ?? null,
           ingestActive: typeof ingestService.isActive === 'function' ? ingestService.isActive() : null,
+          activeIngestJob: typeof ingestService.getActiveJob === 'function' ? ingestService.getActiveJob() : null,
           alphaHolderBackfillActive: String(getSetting(db, 'alpha_holder_backfill_active') || '').trim() === '1',
         }, null, 2));
         return;

@@ -50,6 +50,37 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
   } = taostats;
 
   let active = false;
+  let activeJob = null;
+
+  function getActiveJob() {
+    if (!activeJob) return null;
+    const startedAtMs = Date.parse(activeJob.startedAtIso);
+    return {
+      ...activeJob,
+      elapsedMs: Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : null,
+    };
+  }
+
+  function activeSkipResult() {
+    return { skipped: true, reason: 'ingest already running', activeJob: getActiveJob() };
+  }
+
+  function beginActiveJob(kind, detail = {}) {
+    const startedAt = new Date();
+    active = true;
+    activeJob = {
+      kind,
+      label: detail.label || kind,
+      startedAtIso: startedAt.toISOString(),
+      ...detail,
+    };
+    return startedAt;
+  }
+
+  function finishActiveJob() {
+    active = false;
+    activeJob = null;
+  }
 
   function isAlphaHolderBackfillActive() {
     return String(getSetting(db, ALPHA_HOLDER_BACKFILL_ACTIVE_KEY) || '').trim() === '1';
@@ -871,14 +902,18 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     forceRefresh = false,
   } = {}) {
     if (active) {
-      return { skipped: true, reason: 'ingest already running' };
+      return activeSkipResult();
     }
     if (isAlphaHolderBackfillActive()) {
       return { skipped: true, reason: 'alpha-holder backfill is running' };
     }
 
-    active = true;
-    const startedAt = new Date();
+    const startedAt = beginActiveJob('wallet-activity-wallet', {
+      label: 'Wallet activity sync',
+      address: address || walletConfig?.ss58 || null,
+      wallet: walletConfig?.name || null,
+      days,
+    });
     const startedIso = startedAt.toISOString();
     let result;
     try {
@@ -908,7 +943,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         error: result?.error || null,
         detail_json: JSON.stringify(logDetail),
       });
-      active = false;
+      finishActiveJob();
     }
   }
 
@@ -919,14 +954,17 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     forceRefresh = false,
   } = {}) {
     if (active) {
-      return { skipped: true, reason: 'ingest already running' };
+      return activeSkipResult();
     }
     if (isAlphaHolderBackfillActive()) {
       return { skipped: true, reason: 'alpha-holder backfill is running' };
     }
 
-    active = true;
-    const startedAt = new Date();
+    const startedAt = beginActiveJob('wallet-activity', {
+      label: 'Wallet activity sync',
+      wallets: Array.isArray(wallets) ? wallets.length : 0,
+      days,
+    });
     const startedIso = startedAt.toISOString();
     const results = [];
     const detail = {
@@ -977,7 +1015,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         error: null,
         detail_json: JSON.stringify(detail),
       });
-      active = false;
+      finishActiveJob();
     }
   }
 
@@ -1288,14 +1326,16 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
   async function ingestOnce({ netuid = config.netuid } = {}) {
     if (active) {
-      return { skipped: true, reason: 'ingest already running' };
+      return activeSkipResult();
     }
     if (isAlphaHolderBackfillActive()) {
       return { skipped: true, reason: 'alpha-holder backfill is running' };
     }
 
-    active = true;
-    const startedAt = new Date();
+    const startedAt = beginActiveJob('subnet-ingest', {
+      label: `Subnet ${netuid} ingest`,
+      netuid,
+    });
     const startedIso = startedAt.toISOString();
     let snapshotId = null;
     let ok = false;
@@ -1485,7 +1525,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         error: errorMessage,
         detail_json: detail ? JSON.stringify(detail) : null,
       });
-      active = false;
+      finishActiveJob();
     }
   }
 
@@ -1496,14 +1536,19 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     overwrite = config.taostatsBackfillOverwrite ?? true,
   } = {}) {
     if (active) {
-      return { skipped: true, reason: 'ingest already running' };
+      return activeSkipResult();
     }
     if (isAlphaHolderBackfillActive()) {
       return { skipped: true, reason: 'alpha-holder backfill is running' };
     }
 
-    active = true;
-    const startedAt = new Date();
+    const startedAt = beginActiveJob('historical-backfill', {
+      label: `Subnet ${netuid} historical backfill`,
+      netuid,
+      days,
+      frequency,
+      overwrite: Boolean(overwrite),
+    });
     const startedIso = startedAt.toISOString();
     let ok = false;
     let source = 'api-history';
@@ -1862,7 +1907,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         error: errorMessage,
         detail_json: detail ? JSON.stringify(detail) : null,
       });
-      active = false;
+      finishActiveJob();
     }
   }
 
@@ -1878,6 +1923,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     syncWalletActivityForWallet,
     backfillWalletActivity,
     isActive: () => active,
+    getActiveJob,
     isAlphaHolderBackfillActive,
   };
 }
