@@ -1704,6 +1704,8 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
     config: {
       taostatsAuthHeader: '',
       taostatsAdminApiKey: 'admin-secret',
+      adminAuthEnabled: true,
+      adminAuthenticated: true,
       pollIntervalMinutes: 15,
       wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney', role: 'validator' }, { name: 'Owner Key', ss58: '5HotkeyTwo', netuid: 112, network: 'finney', role: 'owner' }] }],
     },
@@ -1970,6 +1972,8 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
     config: {
       taostatsAuthHeader: 'secret',
       taostatsAdminApiKey: 'admin-secret',
+      adminAuthEnabled: true,
+      adminAuthenticated: true,
       pollIntervalMinutes: 15,
       nextPollAtIso: '2026-05-16T01:00:00.000Z',
       nextWalletActivitySyncAtIso: '2026-05-16T02:00:00.000Z',
@@ -1981,6 +1985,9 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
   const html = renderPage(model);
   assert.equal(model.scheduleStatus.length, 3);
   assert.equal(model.alphaHolderBackfillActive, true);
+  assert.equal(model.scheduleStatus.find((row) => row.key === 'polling')?.lastRun?.source, 'scrape');
+  assert.equal(model.scheduleStatus.find((row) => row.key === 'wallet-activity')?.lastRun?.source, 'wallet-activity');
+  assert.equal(model.scheduleStatus.find((row) => row.key === 'alpha-holder')?.lastRun?.source, 'alpha-holder-snapshot-all');
   assert.equal(html.includes('Schedules & runs'), true);
   assert.equal(html.includes('Background polling is paused while alpha-holder backfill is running'), true);
   assert.equal(html.includes('Subnet poll ingest'), true);
@@ -2246,6 +2253,73 @@ test('renderPage hides admin tools when no admin api key is configured', () => {
   assert.equal(html.includes('id="refresh-btn"'), false);
   assert.equal(html.includes('data-poll-interval="60"'), false);
   db.close();
+});
+
+test('dashboard admin panel requires an authenticated admin session', async () => {
+  const db = openDatabase(':memory:');
+  const ingestService = {
+    ingestOnce: async () => ({ ok: true, source: 'test' }),
+  };
+  const app = createDashboardServer({
+    db,
+    ingestService,
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+      nextPollAtIso: null,
+      wallets: [],
+    },
+  });
+  const server = await app.start(0);
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const publicDashboard = await fetch(`${baseUrl}/subnets/110`);
+    const publicHtml = await publicDashboard.text();
+    assert.equal(publicHtml.includes('Admin panel'), false);
+    assert.equal(publicHtml.includes('Admin login'), true);
+    assert.equal(publicHtml.includes('admin-secret'), false);
+
+    const unauthenticatedPost = await fetch(`${baseUrl}/api/subnets/110/ingest`, { method: 'POST' });
+    assert.equal(unauthenticatedPost.status, 403);
+
+    const loginFailed = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ adminKey: 'wrong' }),
+    });
+    assert.equal(loginFailed.status, 401);
+
+    const login = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ adminKey: 'admin-secret' }),
+    });
+    assert.equal(login.status, 303);
+    const cookie = login.headers.get('set-cookie');
+    assert.equal(cookie.includes('sn110_admin_session='), true);
+    assert.equal(cookie.includes('HttpOnly'), true);
+
+    const authenticatedDashboard = await fetch(`${baseUrl}/subnets/110`, {
+      headers: { cookie },
+    });
+    const authenticatedHtml = await authenticatedDashboard.text();
+    assert.equal(authenticatedHtml.includes('Admin panel'), true);
+    assert.equal(authenticatedHtml.includes('Schedules & runs'), true);
+    assert.equal(authenticatedHtml.includes('admin-secret'), false);
+
+    const authenticatedPost = await fetch(`${baseUrl}/api/subnets/110/ingest`, {
+      method: 'POST',
+      headers: { cookie },
+    });
+    assert.equal(authenticatedPost.status, 200);
+  } finally {
+    await app.close();
+    db.close();
+  }
 });
 
 test('dashboard route renders without throwing', async () => {

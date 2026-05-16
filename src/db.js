@@ -352,6 +352,9 @@ function openDatabase(filePath) {
     CREATE INDEX IF NOT EXISTS idx_ingest_runs_netuid_started_at
       ON ingest_runs(netuid, started_at DESC, id DESC);
 
+    CREATE INDEX IF NOT EXISTS idx_ingest_runs_netuid_source_started_at
+      ON ingest_runs(netuid, source, started_at DESC, id DESC);
+
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -1800,6 +1803,22 @@ function getLatestIngestRunBySource(db, source) {
   return stmt.get(source) || null;
 }
 
+function getLatestIngestRunBySources(db, netuid, sources = []) {
+  const sourceList = Array.isArray(sources)
+    ? sources.map((source) => String(source || '').trim()).filter(Boolean)
+    : [];
+  if (!sourceList.length) return null;
+  const placeholders = sourceList.map(() => '?').join(', ');
+  const stmt = db.prepare(`
+    SELECT *
+    FROM ingest_runs
+    WHERE netuid = ? AND source IN (${placeholders})
+    ORDER BY started_at DESC, id DESC
+    LIMIT 1
+  `);
+  return stmt.get(netuid, ...sourceList) || null;
+}
+
 function countSnapshots(db, netuid) {
   const stmt = db.prepare(`
     SELECT COUNT(*) AS count
@@ -2000,6 +2019,7 @@ module.exports = {
   getWalletHistory,
   getLatestIngestRun,
   getLatestIngestRunBySource,
+  getLatestIngestRunBySources,
   countSnapshots,
   countWalletSnapshots,
   countWalletTransactions,

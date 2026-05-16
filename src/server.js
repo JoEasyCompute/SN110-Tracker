@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const http = require('node:http');
 
 const {
@@ -16,6 +17,7 @@ const {
   getWalletTransactions,
   getLatestIngestRun,
   getLatestIngestRunBySource,
+  getLatestIngestRunBySources,
   getSubnetMetadata,
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
@@ -41,6 +43,8 @@ const {
 } = require('./taostats');
 
 const TAO_PER_RAO = 1_000_000_000;
+const ADMIN_SESSION_COOKIE = 'sn110_admin_session';
+const ADMIN_SESSION_MAX_AGE_SECONDS = 12 * 60 * 60;
 
 function formatPollInterval(minutes) {
   const value = Number(minutes);
@@ -63,11 +67,69 @@ function readAdminApiKey(req) {
   return String(req.headers['x-admin-api-key'] || '').trim();
 }
 
+function parseCookies(req) {
+  const header = String(req.headers.cookie || '');
+  const cookies = new Map();
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index === -1) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (!key) continue;
+    cookies.set(key, decodeURIComponent(value));
+  }
+  return cookies;
+}
+
+function adminSessionSignature(secret, timestamp) {
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`sn110-admin-session:${timestamp}`)
+    .digest('base64url');
+}
+
+function timingSafeEqualText(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''));
+  const rightBuffer = Buffer.from(String(right || ''));
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function createAdminSessionValue(config, nowMs = Date.now()) {
+  const secret = String(config?.taostatsAdminApiKey || '').trim();
+  if (!secret) return null;
+  const timestamp = String(nowMs);
+  return `${timestamp}.${adminSessionSignature(secret, timestamp)}`;
+}
+
+function verifyAdminSession(req, config) {
+  const secret = String(config?.taostatsAdminApiKey || '').trim();
+  if (!secret) return false;
+  const raw = parseCookies(req).get(ADMIN_SESSION_COOKIE);
+  if (!raw) return false;
+  const [timestamp, signature] = String(raw).split('.');
+  const issuedAtMs = Number(timestamp);
+  if (!Number.isFinite(issuedAtMs) || !signature) return false;
+  if (Date.now() - issuedAtMs > ADMIN_SESSION_MAX_AGE_SECONDS * 1000) return false;
+  if (issuedAtMs - Date.now() > 60_000) return false;
+  return timingSafeEqualText(signature, adminSessionSignature(secret, timestamp));
+}
+
+function setAdminSessionCookie(res, config) {
+  const value = createAdminSessionValue(config);
+  if (!value) return;
+  res.setHeader('set-cookie', `${ADMIN_SESSION_COOKIE}=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${ADMIN_SESSION_MAX_AGE_SECONDS}`);
+}
+
+function clearAdminSessionCookie(res) {
+  res.setHeader('set-cookie', `${ADMIN_SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
 function requireAdminApiKey(req, config) {
   const expected = String(config?.taostatsAdminApiKey || '').trim();
   if (!expected) return null;
   const provided = readAdminApiKey(req);
   if (provided && provided === expected) return null;
+  if (verifyAdminSession(req, config)) return null;
   return {
     error: 'Admin API key required.',
     status: 403,
@@ -83,7 +145,7 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function readJsonBody(req) {
+function readRawBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
     req.setEncoding('utf8');
@@ -95,18 +157,81 @@ function readJsonBody(req) {
       }
     });
     req.on('end', () => {
-      if (!body) {
-        resolve({});
-        return;
-      }
-      try {
-        resolve(JSON.parse(body));
-      } catch (error) {
-        reject(new Error('Request body must be valid JSON'));
-      }
+      resolve(body);
     });
     req.on('error', reject);
   });
+}
+
+function readJsonBody(req) {
+  return readRawBody(req).then((body) => {
+    if (!body) return {};
+    try {
+      return JSON.parse(body);
+    } catch (error) {
+      throw new Error('Request body must be valid JSON');
+    }
+  });
+}
+
+async function readAdminLoginBody(req) {
+  const body = await readRawBody(req);
+  const contentType = String(req.headers['content-type'] || '').toLowerCase();
+  if (contentType.includes('application/json')) {
+    if (!body) return {};
+    try {
+      return JSON.parse(body);
+    } catch (error) {
+      throw new Error('Request body must be valid JSON');
+    }
+  }
+  const form = new URLSearchParams(body);
+  return {
+    adminKey: form.get('adminKey') || form.get('admin_key') || form.get('password') || '',
+  };
+}
+
+function renderAdminLoginPage({ config, error = null } = {}) {
+  const enabled = Boolean(String(config?.taostatsAdminApiKey || '').trim());
+  const dashboardPath = `/subnets/${config?.netuid || 110}`;
+  return `<!doctype html>
+  <html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SN110 Admin Login</title>
+    <style>
+      :root { color-scheme: dark; --bg: #0b0f14; --panel: #101722; --border: #223043; --text: #e7eef7; --muted: #8fa3b8; --accent: #00dbbc; --negative: #ff6b6b; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      main { width: min(420px, calc(100vw - 32px)); border: 1px solid var(--border); background: var(--panel); padding: 24px; border-radius: 8px; }
+      h1 { margin: 0 0 8px; font-size: 24px; letter-spacing: 0; }
+      p { margin: 0 0 18px; color: var(--muted); line-height: 1.5; }
+      label { display: grid; gap: 8px; color: var(--muted); font-size: 13px; }
+      input { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 8px; background: #0f1620; color: var(--text); padding: 11px 12px; font: inherit; }
+      .actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
+      button, a { border: 1px solid var(--border); border-radius: 8px; background: var(--accent); color: #03130f; padding: 10px 14px; font-weight: 700; text-decoration: none; cursor: pointer; }
+      a { background: transparent; color: var(--text); }
+      .error { color: var(--negative); margin-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Admin Login</h1>
+      <p>${enabled ? 'Enter the local admin key to unlock dashboard controls in this browser.' : 'Admin access is disabled because TAOSTATS_ADMIN_API_KEY is not configured.'}</p>
+      ${enabled ? `<form method="post" action="/admin/login">
+        <label>
+          Admin key
+          <input type="password" name="adminKey" autocomplete="current-password" autofocus required>
+        </label>
+        ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+        <div class="actions">
+          <button type="submit">Log in</button>
+          <a href="${escapeHtml(dashboardPath)}">Back to dashboard</a>
+        </div>
+      </form>` : `<div class="actions"><a href="${escapeHtml(dashboardPath)}">Back to dashboard</a></div>`}
+    </main>
+  </body>
+  </html>`;
 }
 
 function collectResultIssues(result) {
@@ -2543,6 +2668,7 @@ function buildPageModel({ db, config, netuid }) {
   }));
   const latestWalletActivityRun = getLatestIngestRunBySource(db, 'wallet-activity');
   const latestAlphaHolderRun = getLatestIngestRunBySource(db, 'alpha-holder-snapshot-all');
+  const latestSubnetPollRun = getLatestIngestRunBySources(db, netuid, ['api', 'scrape']);
   const alphaHolderBackfillActive = String(getSetting(db, 'alpha_holder_backfill_active') || '').trim() === '1';
   const latestAlphaHolderRows = getLatestAlphaHolderSnapshots(db, netuid, 20);
   const alphaHolderRankingRows = fetchAlphaHolderCurrentRanking(db, netuid);
@@ -2559,7 +2685,7 @@ function buildPageModel({ db, config, netuid }) {
       nextRunIso: config.nextPollAtIso ?? null,
       enabled: true,
       paused: alphaHolderBackfillActive,
-      lastRun: ingestRun,
+      lastRun: latestSubnetPollRun,
     },
     {
       key: 'wallet-activity',
@@ -2774,7 +2900,7 @@ function renderHistoryTable(rows) {
 }
 
 function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null, scheduleStatus = [], alphaHolderBackfillActive = false, alphaHolderBackfillStartedAtIso = null }) {
-  if (!config.taostatsAdminApiKey) {
+  if (!config.adminAuthenticated) {
     return '';
   }
   const walletActivityText = formatWalletActivityStatusText(walletActivityStatus);
@@ -2787,6 +2913,9 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
       <details class="admin-panel">
         <summary>Admin panel</summary>
         <div class="admin-panel-body">
+          <form class="admin-session-form" method="post" action="/admin/logout">
+            <button class="button" type="submit">Log out admin</button>
+          </form>
           <div class="panel admin-controls">
             <h3>Live controls</h3>
             ${walletActivityBadge ? `<div class="wallet-activity-status admin-wallet-activity-status" id="wallet-activity-admin-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
@@ -2880,7 +3009,7 @@ function renderDashboardClientScript({ netuid, config }) {
         latestSnapshotSignature: shell?.dataset.latestSnapshotSignature || '',
         latestIngestRunId: shell?.dataset.latestIngestRunId || '',
         pollIntervalMinutes: ${JSON.stringify(config.pollIntervalMinutes)},
-        adminApiKey: ${JSON.stringify(config.taostatsAdminApiKey || '')},
+        adminAuthenticated: ${JSON.stringify(Boolean(config.adminAuthenticated))},
         history: null,
         flowHistory: null,
         walletStakeHistory: null,
@@ -2922,7 +3051,6 @@ function renderDashboardClientScript({ netuid, config }) {
       function adminFetchHeaders(contentType = 'application/json') {
         const headers = {};
         if (contentType) headers['content-type'] = contentType;
-        if (state.adminApiKey) headers['x-admin-api-key'] = state.adminApiKey;
         return headers;
       }
 
@@ -6202,6 +6330,11 @@ function renderPage(model) {
   const nextPollText = nextPollAtIso ? `Next poll: ${formatPollTime(nextPollAtIso)}` : 'Next poll: —';
   const nextPollTitle = nextPollAtIso ? `Scheduled for ${formatIso(nextPollAtIso)}` : 'Poll schedule unavailable';
   const walletActivityBadge = renderWalletActivityStatusBadge(walletActivityStatus, { id: 'wallet-activity-topbar-badge' });
+  const adminSessionAction = config.adminAuthEnabled
+    ? (config.adminAuthenticated
+      ? `<form class="admin-session-form topbar-admin-session" method="post" action="/admin/logout"><button class="button" type="submit">Admin logout</button></form>`
+      : '<a class="button" href="/admin">Admin login</a>')
+    : '';
 
   const latestRunCard = ingestRun
     ? metricCard({
@@ -6276,6 +6409,8 @@ function renderPage(model) {
         margin-bottom: 24px;
       }
       .topbar .actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      .admin-session-form { margin: 0; }
+      .topbar-admin-session { display: inline-flex; }
       .topbar-wallet-status {
         flex-basis: 100%;
         margin-top: -8px;
@@ -8105,6 +8240,7 @@ function renderPage(model) {
           <button class="price-badge price-badge-button" id="tao-price-label" type="button" aria-live="polite" title="Click to view TAO price history">${escapeHtml(taoPriceText)}</button>
           <div class="price-badge next-poll-badge" id="next-poll-label" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" title="${escapeHtml(nextPollTitle)}">${escapeHtml(nextPollText)}</div>
           <button class="button" id="currency-toggle" type="button" disabled>Show USD</button>
+          ${adminSessionAction}
         </div>
         ${walletActivityBadge ? `<div class="topbar-wallet-status" id="wallet-activity-topbar-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
       </div>
@@ -8361,8 +8497,53 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/admin') {
+        if (verifyAdminSession(req, config)) {
+          res.writeHead(303, { Location: `/subnets/${config.netuid}` });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderAdminLoginPage({ config }));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/admin/login') {
+        const expected = String(config.taostatsAdminApiKey || '').trim();
+        if (!expected) {
+          res.writeHead(403, { 'content-type': 'text/html; charset=utf-8' });
+          res.end(renderAdminLoginPage({ config, error: 'Admin access is disabled.' }));
+          return;
+        }
+        const payload = await readAdminLoginBody(req);
+        const provided = String(payload.adminKey || payload.admin_api_key || payload.key || '').trim();
+        if (!provided || !timingSafeEqualText(provided, expected)) {
+          res.writeHead(401, { 'content-type': 'text/html; charset=utf-8' });
+          res.end(renderAdminLoginPage({ config, error: 'Invalid admin key.' }));
+          return;
+        }
+        setAdminSessionCookie(res, config);
+        res.writeHead(303, { Location: `/subnets/${config.netuid}` });
+        res.end();
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/admin/logout') {
+        clearAdminSessionCookie(res);
+        res.writeHead(303, { Location: `/subnets/${config.netuid}` });
+        res.end();
+        return;
+      }
+
       if (req.method === 'GET' && url.pathname === `/subnets/${netuid}`) {
-        const model = buildPageModel({ db, config, netuid });
+        const adminAuthenticated = verifyAdminSession(req, config);
+        const pageConfig = {
+          ...config,
+          adminAuthEnabled: Boolean(String(config.taostatsAdminApiKey || '').trim()),
+          adminAuthenticated,
+          taostatsAdminApiKey: '',
+        };
+        const model = buildPageModel({ db, config: pageConfig, netuid });
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(renderPage(model));
         return;
