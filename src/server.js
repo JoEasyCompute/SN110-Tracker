@@ -2919,8 +2919,9 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
           <div class="panel admin-controls">
             <h3>Live controls</h3>
             ${walletActivityBadge ? `<div class="wallet-activity-status admin-wallet-activity-status" id="wallet-activity-admin-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
+            <p class="admin-helper">Subnet refresh updates the SN${netuid} snapshot. Use the wallet activity panel below for wallet transaction cache refreshes.</p>
             <div class="admin-actions">
-              <button class="button primary" type="button" id="refresh-btn">Refresh now</button>
+              <button class="button primary" type="button" id="refresh-btn">Refresh subnet now</button>
               <div class="poll-switcher" role="tablist" aria-label="Polling interval">
                 ${pollIntervalButtons}
               </div>
@@ -2969,7 +2970,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
                 <p class="admin-helper">Backfills extrinsics, transfers, and derived stake deltas for every configured wallet.</p>
               </div>
               <div class="admin-actions">
-                <button class="button primary" type="button" id="wallet-backfill-btn">Backfill wallet activity</button>
+                <button class="button primary" type="button" id="wallet-backfill-btn">Refresh wallet activity</button>
               </div>
               <progress class="admin-progress" id="wallet-backfill-progress" hidden></progress>
               <p class="empty" id="wallet-backfill-status" hidden></p>
@@ -6084,15 +6085,24 @@ function renderDashboardClientScript({ netuid, config }) {
 
       const refreshButton = document.getElementById('refresh-btn');
       refreshButton?.addEventListener('click', async () => {
-        const response = await fetch('/api/subnets/' + netuid + '/ingest', {
-          method: 'POST',
-          headers: adminFetchHeaders(null),
-        });
-        if (!response.ok) {
-          alert('Ingest failed');
-          return;
+        refreshButton.disabled = true;
+        try {
+          const response = await fetch('/api/subnets/' + netuid + '/ingest', {
+            method: 'POST',
+            headers: adminFetchHeaders(null),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || payload.result?.ok === false) {
+            const message = payload.error || payload.result?.error || payload.result?.message || 'Subnet ingest failed.';
+            throw new Error(message);
+          }
+          window.location.reload();
+        } catch (error) {
+          console.error(error);
+          alert('Subnet refresh failed: ' + (error?.message || 'Unknown error'));
+        } finally {
+          refreshButton.disabled = false;
         }
-        window.location.reload();
       });
 
       currencyToggle?.addEventListener('click', () => {
