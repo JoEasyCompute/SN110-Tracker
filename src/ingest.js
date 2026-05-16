@@ -392,6 +392,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     limit = 1024,
     onProgress = null,
     workerId = null,
+    maxRetries = 3,
+    retryDelayMs = 60_000,
   } = {}) {
     if (!config.taostatsAuthHeader) {
       return {
@@ -429,6 +431,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       capturedAt,
       limit,
       onProgress,
+      maxRetries,
+      retryDelayMs,
       workerId,
     });
     const inserted = await storeAlphaHolderRows({

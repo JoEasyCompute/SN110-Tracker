@@ -1078,6 +1078,7 @@ test('stake-balance latest fetch retries 429 once and emits wait prompts', async
       return {
         ok: false,
         status: 429,
+        headers: { get: () => '0' },
         text: async () => JSON.stringify({ error: 'rate limited' }),
       };
     }
@@ -1125,8 +1126,8 @@ test('alpha holder snapshot backfill does not depend on stake-balance history', 
   const latestCalls = [];
   const taostats = {
     fetchSubnetLatestCatalog: async () => [{ netuid: 110 }, { netuid: 111 }],
-    fetchStakeBalanceLatest: async ({ netuid, capturedAt: rowCapturedAt, limit }) => {
-      latestCalls.push({ netuid, limit });
+    fetchStakeBalanceLatest: async ({ netuid, capturedAt: rowCapturedAt, limit, maxRetries, retryDelayMs }) => {
+      latestCalls.push({ netuid, limit, maxRetries, retryDelayMs });
       return [normalizeStakeBalanceSnapshot({
       block_number: 400 + netuid,
       timestamp: rowCapturedAt,
@@ -1162,6 +1163,8 @@ test('alpha holder snapshot backfill does not depend on stake-balance history', 
   assert.equal(result.inserted, 2);
   assert.equal(latestCalls.length, 2);
   assert.equal(latestCalls.every((call) => call.limit === 1024), true);
+  assert.equal(latestCalls.every((call) => call.maxRetries === 3), true);
+  assert.equal(latestCalls.every((call) => call.retryDelayMs === 60000), true);
   db.close();
 });
 
@@ -2366,6 +2369,7 @@ test('wallet transactions endpoint downgrades stake history 429 to a warning', a
         return {
           ok: false,
           status: 429,
+          headers: { get: () => '0' },
           json: async () => ({ error: 'rate limited' }),
           text: async () => JSON.stringify({ error: 'rate limited' }),
         };

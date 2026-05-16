@@ -169,7 +169,7 @@ async function run() {
   }
   console.log(JSON.stringify(result, null, 2));
 
-  if (!once && !backfill) {
+  if (!once && !backfill && !walletBackfill && !subnetNameBackfill && !alphaHolderBackfill && !alphaHolderHistoryBackfill && !alphaHolderSync) {
     console.log('Use --once to run the ingest command and exit.');
   }
 

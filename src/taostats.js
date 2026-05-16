@@ -26,6 +26,19 @@ function formatDurationShort(ms) {
   return `${seconds}s`;
 }
 
+function parseRetryAfterHeader(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+  const dateMs = Date.parse(String(value));
+  if (Number.isFinite(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+  return null;
+}
+
 function createRateLimiter({ maxRequests = 5, intervalMs = 60_000 } = {}) {
   if (!Number.isFinite(maxRequests) || maxRequests < 1) {
     throw new Error('maxRequests must be a positive number');
@@ -181,6 +194,12 @@ async function fetchJson(url, { headers = {}, timeoutMs = 20000, rateLimiter = n
       const error = new Error(`HTTP ${response.status} from ${url}`);
       error.status = response.status;
       error.body = json || text;
+      if (response.status === 429) {
+        const retryAfterMs = parseRetryAfterHeader(response.headers?.get?.('retry-after'));
+        if (Number.isFinite(retryAfterMs) && retryAfterMs !== null) {
+          error.retryAfterMs = retryAfterMs;
+        }
+      }
       throw error;
     }
     return { json, rateLimit: slot };
@@ -1006,7 +1025,11 @@ async function fetchStakeBalanceLatest({
         break;
       } catch (error) {
         if (Number(error?.status) === 429 && attempt < maxRetries) {
-          const delayMs = Math.max(0, Number(retryDelayMs) || 0);
+          const retryAfterMs = Number(error?.retryAfterMs);
+          const baseDelayMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+            ? retryAfterMs
+            : Math.max(0, Number(retryDelayMs) || 0);
+          const delayMs = Math.max(0, Math.round(baseDelayMs * (attempt + 1)));
           emitProgress({
             phase: 'retry-wait',
             operation: 'stake-balance-latest',
