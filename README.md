@@ -80,7 +80,7 @@ The checked-in `.env.example` is intentionally redacted, so copy it locally and 
 
 If the Taostats API requires a prefix like `Bearer`, put the full header value in `TAOSTATS_AUTH_HEADER`.
 When an API key is configured, the app rate-limits Taostats API requests to 5 per minute by default so the free tier is respected.
-If `TAOSTATS_ADMIN_API_KEY` is set, the admin drawer appears with the manual refresh button, poll interval controls, JSON links, backfill form, wallet activity status badge, and ingest history views; without it, those controls stay hidden. The POST admin routes (`/api/subnets/:netuid/ingest`, `/api/subnets/:netuid/backfill`, `/api/subnets/:netuid/wallet-backfill`, and `/api/settings/poll-interval`) also require the matching `X-Admin-API-Key` header when the admin key is configured.
+If `TAOSTATS_ADMIN_API_KEY` is set, the admin drawer appears with the manual refresh button, poll interval controls, JSON links, backfill form, wallet activity status badge, schedules-and-runs table, and ingest history views; without it, those controls stay hidden. The POST admin routes (`/api/subnets/:netuid/ingest`, `/api/subnets/:netuid/backfill`, `/api/subnets/:netuid/wallet-backfill`, and `/api/settings/poll-interval`) also require the matching `X-Admin-API-Key` header when the admin key is configured.
 The dashboard also shows the current TAO price used for USD conversion and uses the stored TAO price history when you open the TAO price badge modal.
 Wallet activity uses a separate backfill flow and admin-panel trigger, so the transaction timeline can stay on a local cache even when the live Taostats request path is slow.
 

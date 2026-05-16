@@ -25,6 +25,7 @@ const {
   countSnapshots,
   countWalletSnapshots,
   countWalletTransactions,
+  getSetting,
 } = require('./db');
 const { buildWalletTransactionTimelineFromRows } = require('./wallet-activity');
 const { POLL_INTERVAL_OPTIONS } = require('./config');
@@ -2041,6 +2042,107 @@ function renderWalletActivityStatusBadge(walletActivityStatus = null, { id = 'wa
   return `<span class="wallet-activity-badge status-badge status-badge-${tone}" id="${escapeHtml(id)}" title="${escapeHtml(text)}">${escapeHtml(label)}</span>`;
 }
 
+function formatSchedulerRunSummary(run = null) {
+  if (!run) {
+    return {
+      tone: 'neutral',
+      label: 'Never run',
+      text: 'No recorded run yet.',
+      error: null,
+    };
+  }
+  const ok = run.ok !== false && !run.error;
+  const tone = ok ? 'positive' : 'negative';
+  const label = ok ? 'OK' : 'Failed';
+  const parts = [];
+  if (run.started_at) {
+    parts.push(formatRelativeIso(run.started_at));
+  }
+  if (run.source) {
+    parts.push(run.source);
+  }
+  if (run.fallback_used) {
+    parts.push('fallback used');
+  }
+  if (run.duration_ms !== null && run.duration_ms !== undefined) {
+    parts.push(`${compact(run.duration_ms, 0)} ms`);
+  }
+  return {
+    tone,
+    label,
+    text: parts.length ? parts.join(' • ') : 'Run recorded.',
+    error: run.error || null,
+  };
+}
+
+function renderScheduleStatusBadge(schedule = null, { id = 'schedule-status-badge' } = {}) {
+  if (!schedule) return '';
+  const summary = formatSchedulerRunSummary(schedule.lastRun || null);
+  let tone = summary.tone;
+  let label = summary.label;
+  if (schedule.paused) {
+    tone = 'accent';
+    label = 'Paused';
+  } else if (schedule.enabled === false) {
+    tone = 'neutral';
+    label = 'Disabled';
+  } else if (!schedule.lastRun) {
+    tone = 'neutral';
+    label = 'Never run';
+  }
+  return `<span class="status-badge status-badge-${tone}" id="${escapeHtml(id)}" title="${escapeHtml(schedule.title || schedule.label || 'Schedule status')}">${escapeHtml(label)}</span>`;
+}
+
+function renderScheduleStatusTable(schedules = [], { paused = false, backfillStartedAtIso = null } = {}) {
+  const rows = Array.isArray(schedules) ? schedules : [];
+  const pausedNotice = paused
+    ? `<p class="empty schedule-paused-note">Background polling is paused while alpha-holder backfill is running${backfillStartedAtIso ? ` • started ${escapeHtml(formatRelativeIso(backfillStartedAtIso))}` : ''}.</p>`
+    : '';
+  const rowsHtml = rows.length
+    ? rows.map((schedule, index) => {
+        const summary = formatSchedulerRunSummary(schedule.lastRun || null);
+        const nextRunText = schedule.nextRunIso ? formatPollTime(schedule.nextRunIso) : '—';
+        const nextRunTitle = schedule.nextRunIso ? `Scheduled for ${formatIso(schedule.nextRunIso)}` : 'No next run scheduled';
+        const cadenceText = schedule.cadenceText || '—';
+        const scheduleBadge = renderScheduleStatusBadge(schedule, { id: `schedule-status-badge-${index}` });
+        const errorText = summary.error ? summary.error : (schedule.lastRun?.message || '—');
+        return `
+          <tr class="${schedule.paused ? 'current' : ''}">
+            <td>
+              <div class="schedule-row-title">${escapeHtml(schedule.label || 'Schedule')}</div>
+              <div class="schedule-row-subtext">${escapeHtml(schedule.description || '')}</div>
+            </td>
+            <td>${escapeHtml(cadenceText)}</td>
+            <td title="${escapeHtml(nextRunTitle)}">${escapeHtml(nextRunText)}</td>
+            <td>
+              <div class="schedule-run-summary">${escapeHtml(summary.text)}</div>
+            </td>
+            <td>${scheduleBadge}</td>
+            <td class="${summary.error ? 'negative' : 'neutral'}">${escapeHtml(errorText)}</td>
+          </tr>
+        `;
+      }).join('')
+    : '<tr><td colspan="6" class="empty">No schedules configured.</td></tr>';
+  return `
+    ${pausedNotice}
+    <div class="table-wrap">
+      <table class="schedule-status-table">
+        <thead>
+          <tr>
+            <th>Schedule</th>
+            <th>Cadence</th>
+            <th>Next run</th>
+            <th>Last run</th>
+            <th>Status</th>
+            <th>Error / notes</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderPoolGrowthScenarioChartMarkup(series, selectedResult, maxInjected) {
   if (!series?.available || !Array.isArray(series.points) || series.points.length < 2 || !selectedResult?.available) {
   return `
@@ -2440,11 +2542,48 @@ function buildPageModel({ db, config, netuid }) {
     hotkeys: Array.isArray(wallet.hotkeys) ? wallet.hotkeys : [],
   }));
   const latestWalletActivityRun = getLatestIngestRunBySource(db, 'wallet-activity');
+  const latestAlphaHolderRun = getLatestIngestRunBySource(db, 'alpha-holder-snapshot-all');
+  const alphaHolderBackfillActive = String(getSetting(db, 'alpha_holder_backfill_active') || '').trim() === '1';
   const latestAlphaHolderRows = getLatestAlphaHolderSnapshots(db, netuid, 20);
   const alphaHolderRankingRows = fetchAlphaHolderCurrentRanking(db, netuid);
   const alphaHolderCurrentRankRow = alphaHolderRankingRows.find((row) => Number(row.netuid) === Number(netuid)) || null;
   const alphaHolderRankHistory = fetchAlphaHolderRankHistory(db, netuid, sinceIso);
   const comparisons = latestWithPrice ? buildComparisons(historyWithAlphaHolders, latestWithPrice) : [];
+  const scheduleStatus = [
+    {
+      key: 'polling',
+      label: 'Subnet poll ingest',
+      title: 'Latest subnet ingest',
+      description: 'Fetches the current subnet snapshot for the dashboard and keeps the latest local row current.',
+      cadenceText: formatPollInterval(config.pollIntervalMinutes),
+      nextRunIso: config.nextPollAtIso ?? null,
+      enabled: true,
+      paused: alphaHolderBackfillActive,
+      lastRun: ingestRun,
+    },
+    {
+      key: 'wallet-activity',
+      label: 'Wallet activity sync',
+      title: 'Wallet activity cache',
+      description: 'Refreshes configured wallet history and keeps the transaction cache up to date.',
+      cadenceText: config.walletActivitySyncIntervalMinutes ? formatPollInterval(config.walletActivitySyncIntervalMinutes) : formatPollInterval(config.taostatsWalletActivitySyncIntervalMinutes || 60),
+      nextRunIso: config.nextWalletActivitySyncAtIso ?? null,
+      enabled: Boolean(config.taostatsAuthHeader && Array.isArray(config.wallets) && config.wallets.length > 0),
+      paused: alphaHolderBackfillActive,
+      lastRun: latestWalletActivityRun,
+    },
+    {
+      key: 'alpha-holder',
+      label: 'Alpha-holder snapshot',
+      title: 'All-subnet alpha-holder collection',
+      description: 'Snapshots every discovered subnet at UTC midnight so the leaderboard and rank history stay local.',
+      cadenceText: 'daily at UTC midnight',
+      nextRunIso: config.nextAlphaHolderSnapshotAtIso ?? null,
+      enabled: Boolean(config.taostatsAuthHeader),
+      paused: alphaHolderBackfillActive,
+      lastRun: latestAlphaHolderRun,
+    },
+  ];
 
   return {
     config,
@@ -2470,6 +2609,9 @@ function buildPageModel({ db, config, netuid }) {
     alphaHolderCurrentRankRow,
     alphaHolderRankHistory,
     alphaHolderRankHistoryStartAt: alphaHolderRankHistory[0]?.captured_at ?? null,
+    scheduleStatus,
+    alphaHolderBackfillActive,
+    alphaHolderBackfillStartedAtIso: getSetting(db, 'alpha_holder_backfill_started_at') || null,
     subnetLabel,
     subnetName: latest?.name ?? null,
     totalWalletSnapshots,
@@ -2631,12 +2773,16 @@ function renderHistoryTable(rows) {
   `;
 }
 
-function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null }) {
+function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null, scheduleStatus = [], alphaHolderBackfillActive = false, alphaHolderBackfillStartedAtIso = null }) {
   if (!config.taostatsAdminApiKey) {
     return '';
   }
   const walletActivityText = formatWalletActivityStatusText(walletActivityStatus);
   const walletActivityBadge = renderWalletActivityStatusBadge(walletActivityStatus, { id: 'wallet-activity-admin-badge' });
+  const scheduleTable = renderScheduleStatusTable(scheduleStatus, {
+    paused: alphaHolderBackfillActive,
+    backfillStartedAtIso: alphaHolderBackfillStartedAtIso,
+  });
   return `
       <details class="admin-panel">
         <summary>Admin panel</summary>
@@ -2699,6 +2845,11 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               <progress class="admin-progress" id="wallet-backfill-progress" hidden></progress>
               <p class="empty" id="wallet-backfill-status" hidden></p>
             </div>
+          </div>
+          <div class="panel">
+            <h3>Schedules & runs</h3>
+            <p class="admin-helper">This panel shows what the server is scheduled to do, when each job should run next, and the last recorded result stored in SQLite.</p>
+            ${scheduleTable}
           </div>
           <div class="admin-grid">
             <div class="panel">
@@ -6017,6 +6168,9 @@ function renderPage(model) {
     alphaHolderRankingRows,
     alphaHolderCurrentRankRow,
     alphaHolderRankHistoryStartAt,
+    scheduleStatus,
+    alphaHolderBackfillActive,
+    alphaHolderBackfillStartedAtIso,
     subnetLabel,
   } = model;
   const latestMetricDefs = getLatestMetricDefs();
@@ -7704,6 +7858,45 @@ function renderPage(model) {
         width: auto;
         margin: 0;
       }
+      .admin-helper {
+        margin: -4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .schedule-paused-note {
+        margin: 0 0 12px;
+      }
+      .schedule-status-table {
+        min-width: 780px;
+      }
+      .schedule-status-table th,
+      .schedule-status-table td {
+        padding-top: 10px;
+        padding-bottom: 10px;
+      }
+      .schedule-status-table thead th {
+        font-size: 11px;
+        color: #94a9bb;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .schedule-row-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .schedule-row-subtext {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .schedule-run-summary {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
       .admin-grid {
         display: grid;
         gap: 14px;
@@ -7967,7 +8160,18 @@ function renderPage(model) {
         </div>
       </section>
 
-      ${renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus })}
+      ${renderAdminPanel({
+        netuid,
+        config,
+        recent,
+        latestRunCard,
+        ingestRun,
+        pollIntervalButtons,
+        walletActivityStatus,
+        scheduleStatus,
+        alphaHolderBackfillActive,
+        alphaHolderBackfillStartedAtIso,
+      })}
 
       <div class="footer">
         <div>Database snapshots: ${totalSnapshots}</div>
@@ -8463,6 +8667,9 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           netuid: config.netuid,
           pollIntervalMinutes: config.pollIntervalMinutes,
           nextPollAtIso: config.nextPollAtIso ?? null,
+          nextWalletActivitySyncAtIso: config.nextWalletActivitySyncAtIso ?? null,
+          nextAlphaHolderSnapshotAtIso: config.nextAlphaHolderSnapshotAtIso ?? null,
+          alphaHolderBackfillActive: String(getSetting(db, 'alpha_holder_backfill_active') || '').trim() === '1',
         }, null, 2));
         return;
       }

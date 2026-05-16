@@ -35,6 +35,7 @@ const {
   insertWalletStakePosition,
   insertWalletTransaction,
   insertAlphaHolderSnapshot,
+  insertIngestRun,
   upsertSubnetMetadata,
   getLatestSnapshot,
   getRecentSnapshots,
@@ -1898,6 +1899,95 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('/api/subnets/' + model.netuid + '/latest'), true);
   assert.equal(html.includes('syncLiveSnapshotState()'), true);
   assert.equal(model.latest.tao_price_usd, 100);
+  db.close();
+});
+
+test('renderPage shows hidden admin schedule status with last-run errors', () => {
+  const db = openDatabase(':memory:');
+  const snapshot = normalizeSnapshot({
+    netuid: 110,
+    block_number: 1,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '1.0',
+    market_cap: '100',
+    liquidity: '50',
+    emission: '10',
+    projected_emission: '0.1',
+    recycled_24_hours: '500000',
+    neuron_registration_cost: '500000',
+    active_keys: 256,
+    max_neurons: 256,
+    root_sell: 'NO',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
+  snapshot.alpha_holders_num = 2;
+  snapshot.alpha_holders_text = '2';
+  insertSnapshot(db, snapshot);
+  setSetting(db, 'alpha_holder_backfill_active', '1');
+  setSetting(db, 'alpha_holder_backfill_started_at', '2026-05-16T00:00:00.000Z');
+  insertIngestRun(db, {
+    netuid: 110,
+    started_at: '2026-05-16T00:01:00.000Z',
+    finished_at: '2026-05-16T00:02:00.000Z',
+    duration_ms: 60000,
+    source: 'scrape',
+    fallback_used: false,
+    ok: true,
+    snapshot_id: null,
+    message: 'subnet ingest complete',
+    error: null,
+    detail_json: JSON.stringify({ phase: 'done' }),
+  });
+  insertIngestRun(db, {
+    netuid: 110,
+    started_at: '2026-05-16T00:03:00.000Z',
+    finished_at: '2026-05-16T00:08:00.000Z',
+    duration_ms: 300000,
+    source: 'wallet-activity',
+    fallback_used: false,
+    ok: false,
+    snapshot_id: null,
+    message: 'wallet activity sync failed',
+    error: 'HTTP 429 from https://api.example.invalid',
+    detail_json: JSON.stringify({ phase: 'retry-wait' }),
+  });
+  insertIngestRun(db, {
+    netuid: 110,
+    started_at: '2026-05-16T00:09:00.000Z',
+    finished_at: '2026-05-16T00:10:00.000Z',
+    duration_ms: 60000,
+    source: 'alpha-holder-snapshot-all',
+    fallback_used: false,
+    ok: true,
+    snapshot_id: null,
+    message: 'alpha-holder snapshot complete',
+    error: null,
+    detail_json: JSON.stringify({ phase: 'done' }),
+  });
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: 'secret',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 15,
+      nextPollAtIso: '2026-05-16T01:00:00.000Z',
+      nextWalletActivitySyncAtIso: '2026-05-16T02:00:00.000Z',
+      nextAlphaHolderSnapshotAtIso: '2026-05-17T00:00:00.000Z',
+      wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [] }],
+    },
+    netuid: 110,
+  });
+  const html = renderPage(model);
+  assert.equal(model.scheduleStatus.length, 3);
+  assert.equal(model.alphaHolderBackfillActive, true);
+  assert.equal(html.includes('Schedules & runs'), true);
+  assert.equal(html.includes('Background polling is paused while alpha-holder backfill is running'), true);
+  assert.equal(html.includes('Subnet poll ingest'), true);
+  assert.equal(html.includes('Wallet activity sync'), true);
+  assert.equal(html.includes('Alpha-holder snapshot'), true);
+  assert.equal(html.includes('Paused'), true);
+  assert.equal(html.includes('HTTP 429 from https://api.example.invalid'), true);
   db.close();
 });
 
