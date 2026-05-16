@@ -244,6 +244,7 @@ function collectResultIssues(result) {
     issues.push(prefix ? `${prefix}${text}` : text);
   };
   pushIssue(result.error);
+  pushIssue(result.reason);
   const detail = result.detail && typeof result.detail === 'object' ? result.detail : null;
   if (!detail) return issues;
   pushIssue(detail.error);
@@ -275,8 +276,13 @@ function summarizeResultFailure(label, result) {
 function summarizeBackfillOutcome(backfill, live) {
   const issues = [...collectResultIssues(backfill), ...collectResultIssues(live)];
   if (!issues.length) return null;
-  const label = !backfill?.ok ? 'Backfill failed' : !live?.ok ? 'Live refresh failed' : 'Completed with warnings';
+  const label = !backfill?.ok ? 'Backfill failed' : live && !live.ok ? 'Live refresh failed' : 'Completed with warnings';
   return `${label}: ${issues.join(' | ')}`;
+}
+
+function statusForAdminResult(result) {
+  if (result?.skipped) return 409;
+  return result?.ok ? 200 : 500;
 }
 
 function summarizeBackfillWarnings(backfill, live) {
@@ -2751,6 +2757,7 @@ function buildPageModel({ db, config, netuid }) {
     subnetName: latest?.name ?? null,
     totalWalletSnapshots,
     nextPollAtIso: config.nextPollAtIso ?? null,
+    ingestActive: Boolean(config.ingestActive),
     hasApiKey: Boolean(config.taostatsAuthHeader),
   };
 }
@@ -2912,6 +2919,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
   if (!config.adminAuthenticated) {
     return '';
   }
+  const ingestActive = Boolean(config.ingestActive);
   const walletActivityText = formatWalletActivityStatusText(walletActivityStatus);
   const walletActivityBadge = renderWalletActivityStatusBadge(walletActivityStatus, { id: 'wallet-activity-admin-badge' });
   const scheduleTable = renderScheduleStatusTable(scheduleStatus, {
@@ -2928,6 +2936,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
           <div class="panel admin-controls">
             <h3>Live controls</h3>
             ${walletActivityBadge ? `<div class="wallet-activity-status admin-wallet-activity-status" id="wallet-activity-admin-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
+            ${ingestActive ? '<p class="empty" data-status="warning">An ingest job is currently running. Manual refresh and backfill actions will be available when it finishes.</p>' : ''}
             <p class="admin-helper">Subnet refresh updates the SN${netuid} snapshot. Use the wallet activity panel below for wallet transaction cache refreshes.</p>
             <div class="admin-actions">
               <button class="button primary" type="button" id="refresh-btn">Refresh subnet now</button>
@@ -4896,6 +4905,7 @@ function renderDashboardClientScript({ netuid, config }) {
       }
 
       function adminPayloadErrorMessage(payload, fallback) {
+        if (payload?.error) return String(payload.error);
         const issues = collectAdminPayloadIssues(payload);
         if (issues.length) return issues.join(' | ');
         if (payload?.message) return String(payload.message);
@@ -8603,6 +8613,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           ...config,
           adminAuthEnabled: Boolean(String(config.taostatsAdminApiKey || '').trim()),
           adminAuthenticated,
+          ingestActive: typeof ingestService.isActive === 'function' ? ingestService.isActive() : false,
           taostatsAdminApiKey: '',
         };
         const model = buildPageModel({ db, config: pageConfig, netuid });
@@ -8809,7 +8820,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           return;
         }
         const result = await ingestService.ingestOnce({ netuid });
-        const status = result.ok ? 200 : 500;
+        const status = statusForAdminResult(result);
         const error = result.ok ? null : summarizeResultFailure('Subnet ingest failed', result);
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ netuid, result, ...(error ? { error } : {}) }, null, 2));
@@ -8825,15 +8836,15 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         }
         const payload = await readJsonBody(req);
         const backfill = await ingestService.backfillHistoricalSnapshots({ netuid, ...parseBackfillOptions(payload, config) });
-        const live = await ingestService.ingestOnce({ netuid });
+        const live = backfill.skipped ? null : await ingestService.ingestOnce({ netuid });
         const error = summarizeBackfillOutcome(backfill, live);
         const warnings = summarizeBackfillWarnings(backfill, live);
-        const status = backfill.ok && live.ok ? 200 : 500;
+        const status = backfill.skipped || live?.skipped ? 409 : (backfill.ok && live?.ok ? 200 : 500);
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({
           netuid,
           backfill,
-          live,
+          ...(live ? { live } : {}),
           ...(error ? { error } : {}),
           ...(warnings.length ? { warnings } : {}),
         }, null, 2));
@@ -8913,6 +8924,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           nextPollAtIso: config.nextPollAtIso ?? null,
           nextWalletActivitySyncAtIso: config.nextWalletActivitySyncAtIso ?? null,
           nextAlphaHolderSnapshotAtIso: config.nextAlphaHolderSnapshotAtIso ?? null,
+          ingestActive: typeof ingestService.isActive === 'function' ? ingestService.isActive() : null,
           alphaHolderBackfillActive: String(getSetting(db, 'alpha_holder_backfill_active') || '').trim() === '1',
         }, null, 2));
         return;

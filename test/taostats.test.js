@@ -2920,6 +2920,45 @@ test('admin backfill endpoint runs backfill and live ingest', async () => {
   db.close();
 });
 
+test('admin backfill endpoint does not run live ingest when backfill is skipped', async () => {
+  const db = openDatabase(':memory:');
+  let liveCalled = false;
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      backfillHistoricalSnapshots: async () => ({ skipped: true, reason: 'ingest already running' }),
+      ingestOnce: async () => {
+        liveCalled = true;
+        return { ok: true, source: 'api' };
+      },
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+      taostatsBackfillDays: 30,
+      taostatsBackfillFrequency: 'by_hour',
+      taostatsBackfillOverwrite: true,
+    },
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/backfill`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
+    body: JSON.stringify({ days: 60, frequency: 'by_day', overwrite: false }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 409);
+  assert.equal(liveCalled, false);
+  assert.equal(payload.live, undefined);
+  assert.equal(payload.error, 'Backfill failed: ingest already running');
+  await app.close();
+  db.close();
+});
+
 test('admin backfill endpoint surfaces detailed failures', async () => {
   const db = openDatabase(':memory:');
   const app = createDashboardServer({
