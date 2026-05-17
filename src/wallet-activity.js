@@ -279,25 +279,28 @@ async function buildWalletTransactionTimeline({
   let warning = null;
   let reason = null;
 
-  const [extrinsicsRaw, transfersRaw] = await Promise.all([
-    fetchExtrinsics({
+  let extrinsicsRaw = [];
+  try {
+    extrinsicsRaw = await fetchExtrinsics({
       signerAddress: address,
       ...fetchOptions,
-    }).catch((error) => {
-      partial = true;
-      reason = reason || `Extrinsics unavailable: ${error.message}`;
-      return [];
-    }),
-    fetchTransfers({
+    });
+  } catch (error) {
+    partial = true;
+    reason = reason || `Extrinsics unavailable: ${error.message}`;
+  }
+
+  let transfersRaw = [];
+  try {
+    transfersRaw = await fetchTransfers({
       address,
       network,
       ...fetchOptions,
-    }).catch((error) => {
-      partial = true;
-      reason = reason || `Transfers unavailable: ${error.message}`;
-      return [];
-    }),
-  ]);
+    });
+  } catch (error) {
+    partial = true;
+    reason = reason || `Transfers unavailable: ${error.message}`;
+  }
 
   const rows = [];
   const hotkeyLookup = new Map(hotkeys.map((hotkey) => [String(hotkey.ss58), hotkey]));

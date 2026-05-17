@@ -2717,7 +2717,7 @@ function buildPageModel({ db, config, netuid }) {
       key: 'wallet-activity',
       label: 'Wallet activity sync',
       title: 'Wallet activity cache',
-      description: 'Refreshes configured wallet history and keeps the transaction cache up to date.',
+      description: 'Refreshes configured wallet balances, stake positions, and history.',
       cadenceText: config.walletActivitySyncIntervalMinutes ? formatPollInterval(config.walletActivitySyncIntervalMinutes) : formatPollInterval(config.taostatsWalletActivitySyncIntervalMinutes || 60),
       nextRunIso: config.nextWalletActivitySyncAtIso ?? null,
       enabled: Boolean(config.taostatsAuthHeader && Array.isArray(config.wallets) && config.wallets.length > 0),
@@ -2953,7 +2953,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
             <h3>Live controls</h3>
             ${walletActivityBadge ? `<div class="wallet-activity-status admin-wallet-activity-status" id="wallet-activity-admin-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
             ${ingestActive ? `<p class="empty" data-status="warning">${escapeHtml(activeJobText)} Manual refresh and backfill actions will be available when it finishes.</p>` : ''}
-            <p class="admin-helper">Subnet refresh updates the SN${netuid} snapshot. Use the wallet activity panel below for wallet transaction cache refreshes.</p>
+            <p class="admin-helper">Subnet refresh updates the SN${netuid} snapshot. Use the wallet activity panel below for wallet balance, stake, and transaction cache refreshes.</p>
             <div class="admin-actions">
               <button class="button primary" type="button" id="refresh-btn">Refresh subnet now</button>
               <div class="poll-switcher" role="tablist" aria-label="Polling interval">

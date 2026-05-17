@@ -496,8 +496,8 @@ test('buildPageModel ranks subnets by the latest local alpha-holder counts', () 
 
 test('buildPageModel includes alpha-holder trend data for the leaderboard rows', () => {
   const db = openDatabase(':memory:');
-  const day1 = '2026-05-10T00:00:00Z';
-  const day2 = '2026-05-11T00:00:00Z';
+  const day1 = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const day2 = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
   const makeStakeRows = (netuid, capturedAt, count, blockOffset) => Array.from({ length: count }, (_, index) => normalizeStakeBalanceSnapshot({
     block_number: 800000 + blockOffset + index,
     timestamp: capturedAt,
@@ -530,7 +530,7 @@ test('buildPageModel includes alpha-holder trend data for the leaderboard rows',
   const row110 = model.alphaHolderRankingRows.find((row) => Number(row.netuid) === 110);
   const row111 = model.alphaHolderRankingRows.find((row) => Number(row.netuid) === 111);
 
-  assert.equal(row110?.trend?.series_length >= 2, true);
+  assert.equal(row110?.trend?.series_length, 2);
   assert.equal(row110?.trend?.change_num, 2);
   assert.equal(Array.isArray(row110?.trend?.points), true);
   assert.equal(row111?.trend?.change_num, 1);
@@ -709,6 +709,9 @@ test('ingestOnce refreshes subnet metadata without tripping the catalog refresh 
       fallbackUsed: false,
       detail: { source: 'api' },
     }),
+    fetchAccountLatest: async () => {
+      throw new Error('wallet snapshot refresh should not run during subnet ingest');
+    },
     fetchTaoPriceLatest: async () => null,
     fetchStakeBalanceLatest: async () => {
       throw new Error('alpha-holder snapshot should not run during subnet ingest');
@@ -732,6 +735,70 @@ test('ingestOnce refreshes subnet metadata without tripping the catalog refresh 
   assert.equal(result.ok, true);
   assert.equal(getSubnetMetadata(db, 64)?.name, 'Chutes');
   assert.equal(getLatestIngestRunBySource(db, 'alpha-holder-snapshot-all'), null);
+  db.close();
+});
+
+test('wallet activity sync refreshes wallet snapshots and stake positions', async () => {
+  const db = openDatabase(':memory:');
+  const walletConfig = { name: 'Miner', ss58: '5WalletMiner123456789ABCDEFGH', network: 'finney', hotkeys: [] };
+  const taostats = {
+    fetchExtrinsicsHistory: async () => [],
+    fetchTransferHistory: async () => [],
+    fetchHistoricalStakeBalance: async () => [],
+    fetchAccountLatest: async ({ address, network, capturedAt }) => normalizeAccountSnapshot({
+      address: { ss58: address, hex: '0xwallet' },
+      network,
+      timestamp: '2026-05-16T21:00:00Z',
+      balance_staked: '411000000000',
+      balance_staked_alpha_as_tao: '411000000000',
+      balance_total: '411000000000',
+    }, {
+      source: 'api',
+      sourceUrl: 'https://example.invalid/api/account/latest/v1',
+      walletName: walletConfig.name,
+      address,
+      network,
+      capturedAt,
+    }),
+    fetchStakeBalanceLatest: async ({ coldkey, capturedAt }) => ([normalizeStakeBalanceSnapshot({
+      block_number: 123,
+      netuid: 110,
+      subnet_rank: 1,
+      subnet_total_holders: 1,
+      balance: '411000000000',
+      balance_as_tao: '411000000000',
+      coldkey: { ss58: coldkey, hex: '0xwallet' },
+      hotkey: { ss58: '5HotkeyOne', hex: '0xhotkey' },
+      hotkey_name: 'Validator One',
+      timestamp: '2026-05-16T21:00:00Z',
+    }, {
+      source: 'api',
+      sourceUrl: 'https://example.invalid/api/dtao/stake_balance/latest/v1',
+      capturedAt,
+      walletName: walletConfig.name,
+      address: coldkey,
+    })]),
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+      wallets: [walletConfig],
+    },
+    taostats,
+  });
+
+  const result = await service.syncWalletActivity({ wallets: [walletConfig], days: 7 });
+
+  assert.equal(result.ok, true);
+  const latestSnapshot = getLatestWalletSnapshot(db, walletConfig.ss58);
+  const latestStakePositions = getLatestWalletStakePositions(db, walletConfig.ss58);
+  assert.equal(Number(latestSnapshot.balance_staked_alpha_as_tao_num), 411);
+  assert.equal(latestStakePositions.length, 1);
+  assert.equal(Number(latestStakePositions[0].balance_as_tao_num), 411);
   db.close();
 });
 
@@ -1919,7 +1986,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Admin panel'), true);
   assert.equal(html.includes('id="refresh-btn"'), true);
   assert.equal(html.includes('Refresh subnet now'), true);
-  assert.equal(html.includes('Use the wallet activity panel below for wallet transaction cache refreshes.'), true);
+  assert.equal(html.includes('Use the wallet activity panel below for wallet balance, stake, and transaction cache refreshes.'), true);
   assert.equal(html.includes('id="backfill-days"'), true);
   assert.equal(html.includes('id="backfill-frequency"'), true);
   assert.equal(html.includes('id="backfill-overwrite"'), true);
