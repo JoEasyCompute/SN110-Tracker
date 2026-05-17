@@ -34,6 +34,19 @@ const {
 
 const ALPHA_HOLDER_BACKFILL_ACTIVE_KEY = 'alpha_holder_backfill_active';
 const ALPHA_HOLDER_BACKFILL_STARTED_AT_KEY = 'alpha_holder_backfill_started_at';
+const DEFAULT_RETRY_DELAY_MS = 60_000;
+
+function retryDelayFromError(error, fallbackMs = DEFAULT_RETRY_DELAY_MS) {
+  if (!error || Number(error?.status) !== 429) {
+    return null;
+  }
+  const retryAfterMs = Number(error?.retryAfterMs);
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return retryAfterMs;
+  }
+  const fallbackDelayMs = Number(fallbackMs);
+  return Number.isFinite(fallbackDelayMs) && fallbackDelayMs > 0 ? fallbackDelayMs : DEFAULT_RETRY_DELAY_MS;
+}
 
 function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
   const {
@@ -100,9 +113,12 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     const notableResults = allResults
       .filter((row) => row && (row.ok === false || row.reason || row.error))
       .slice(0, 25);
+    const retryAfterMs = Number.isFinite(Number(result?.retryAfterMs)) && Number(result.retryAfterMs) > 0
+      ? Number(result.retryAfterMs)
+      : null;
     const errorMessage = error instanceof Error
       ? error.message
-      : (error ? String(error) : (result?.ok === false ? (result.reason || notableResults[0]?.reason || 'Alpha-holder snapshot batch failed') : null));
+      : (error ? String(error) : (retryAfterMs ? (result?.reason || notableResults[0]?.reason || 'Alpha-holder snapshot batch deferred') : (result?.ok === false ? (result.reason || notableResults[0]?.reason || 'Alpha-holder snapshot batch failed') : null)));
     const detail = {
       capturedAt,
       fetched: Number(result?.fetched || 0),
@@ -112,13 +128,17 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       reason: result?.reason || null,
       failedSubnets: allResults.filter((row) => row?.ok === false).length,
       skippedSubnets: allResults.filter((row) => row?.skipped).length,
+      deferredSubnets: Math.max(0, Number(result?.netuids || 0) - allResults.length),
+      retryAfterMs,
       notableResults,
     };
-    const message = errorMessage
-      ? 'Alpha-holder snapshot batch failed'
-      : result?.skipped
-        ? `Alpha-holder snapshot skipped: ${result.reason || 'not run'}`
-        : 'Alpha-holder snapshot batch completed';
+    const message = retryAfterMs
+      ? 'Alpha-holder snapshot batch deferred'
+      : errorMessage
+        ? 'Alpha-holder snapshot batch failed'
+        : result?.skipped
+          ? `Alpha-holder snapshot skipped: ${result.reason || 'not run'}`
+          : 'Alpha-holder snapshot batch completed';
     insertIngestRun(db, {
       netuid: config.netuid,
       started_at: startedAt.toISOString(),
@@ -126,7 +146,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       duration_ms: finishedAt.getTime() - startedAt.getTime(),
       source: 'alpha-holder-snapshot-all',
       fallback_used: false,
-      ok: !errorMessage,
+      ok: !errorMessage && !retryAfterMs,
       snapshot_id: null,
       message,
       error: errorMessage,
@@ -200,7 +220,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
   async function syncSubnetMetadataCatalog({
     limit = 1024,
-    concurrency = 3,
+    concurrency = 1,
     onProgress = null,
   } = {}) {
     if (!config.taostatsAuthHeader) {
@@ -463,7 +483,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
   async function backfillSubnetNames({
     limit = 1024,
-    concurrency = 3,
+    concurrency = 1,
     onProgress = null,
   } = {}) {
     return syncSubnetMetadataCatalog({
@@ -511,33 +531,51 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       }
     }
 
-    const rows = await fetchStakeBalanceLatest({
-      netuid,
-      taostatsBaseUrl: config.taostatsBaseUrl,
-      taostatsAuthHeader: config.taostatsAuthHeader,
-      rateLimiter: config.taostatsRateLimiter || null,
-      capturedAt,
-      limit,
-      onProgress,
-      maxRetries,
-      retryDelayMs,
-      workerId,
-    });
-    const inserted = await storeAlphaHolderRows({
-      rows,
-      source: 'api',
-      sourceUrl: `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/stake_balance/latest/v1`,
-      capturedAt,
-    });
+    try {
+      const rows = await fetchStakeBalanceLatest({
+        netuid,
+        taostatsBaseUrl: config.taostatsBaseUrl,
+        taostatsAuthHeader: config.taostatsAuthHeader,
+        rateLimiter: config.taostatsRateLimiter || null,
+        capturedAt,
+        limit,
+        onProgress,
+        maxRetries,
+        retryDelayMs,
+        workerId,
+      });
+      const inserted = await storeAlphaHolderRows({
+        rows,
+        source: 'api',
+        sourceUrl: `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/dtao/stake_balance/latest/v1`,
+        capturedAt,
+      });
 
-    return {
-      ok: true,
-      skipped: false,
-      source: 'alpha-holder-snapshot',
-      fetched: rows.length,
-      inserted,
-      capturedAt,
-    };
+      return {
+        ok: true,
+        skipped: false,
+        source: 'alpha-holder-snapshot',
+        fetched: rows.length,
+        inserted,
+        capturedAt,
+      };
+    } catch (error) {
+      const retryAfterMs = retryDelayFromError(error);
+      if (retryAfterMs !== null) {
+        return {
+          ok: false,
+          skipped: false,
+          source: 'alpha-holder-snapshot',
+          fetched: 0,
+          inserted: 0,
+          capturedAt,
+          retryAfterMs,
+          retryable: true,
+          reason: 'Alpha-holder snapshot is temporarily rate-limited by Taostats; retrying later.',
+        };
+      }
+      throw error;
+    }
   }
 
   async function resolveAlphaHolderNetuids({
@@ -555,7 +593,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     }
 
     try {
-      const { rows: catalog } = await syncSubnetMetadataCatalog({ limit });
+      const { rows: catalog } = await syncSubnetMetadataCatalog({ limit, concurrency: 1 });
       for (const subnet of Array.isArray(catalog) ? catalog : []) {
         const subnetNetuid = Number.parseInt(String(subnet?.netuid), 10);
         if (Number.isFinite(subnetNetuid) && subnetNetuid > 0) {
@@ -608,8 +646,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     }
 
     const startedAtMs = startedAt.getTime();
-    const parsedConcurrency = Number.parseInt(String(concurrency), 10);
-    const workersTotal = Math.max(1, Math.min(3, Number.isFinite(parsedConcurrency) && parsedConcurrency > 0 ? parsedConcurrency : 1));
+    const workersTotal = 1;
     const emitProgress = (payload) => {
       if (typeof onProgress === 'function') {
         onProgress(payload);
@@ -642,6 +679,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       let fetched = 0;
       let inserted = 0;
       let ok = true;
+      let retryAfterMs = null;
+      let deferred = false;
       const results = [];
       let completedCount = 0;
 
@@ -684,6 +723,11 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           if (snapshot.ok === false || snapshot.error) {
             ok = false;
           }
+          if (Number(snapshot.retryAfterMs) > 0) {
+            retryAfterMs = Math.max(Number(retryAfterMs) || 0, Number(snapshot.retryAfterMs));
+            deferred = true;
+            ok = false;
+          }
           results[index] = {
             netuid,
             ok: snapshot.ok !== false && !snapshot.error,
@@ -691,6 +735,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
             fetched: Number(snapshot.fetched || 0),
             inserted: Number(snapshot.inserted || 0),
             reason: snapshot.reason || null,
+            retryAfterMs: Number(snapshot.retryAfterMs) > 0 ? Number(snapshot.retryAfterMs) : null,
           };
           completedCount += 1;
           const completed = completedCount;
@@ -716,8 +761,16 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
             workerId,
             workersTotal,
           });
+          if (deferred) {
+            return;
+          }
         } catch (error) {
           ok = false;
+          const delayMs = retryDelayFromError(error);
+          if (delayMs !== null) {
+            retryAfterMs = Math.max(Number(retryAfterMs) || 0, delayMs);
+            deferred = true;
+          }
           results[index] = {
             netuid,
             ok: false,
@@ -725,6 +778,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
             fetched: 0,
             inserted: 0,
             reason: error instanceof Error ? error.message : String(error),
+            retryAfterMs: delayMs,
           };
           completedCount += 1;
           const completed = completedCount;
@@ -758,6 +812,9 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         for (const [index, netuid] of subnets.entries()) {
           // eslint-disable-next-line no-await-in-loop
           await processSubnet(netuid, index, 1);
+          if (deferred) {
+            break;
+          }
         }
       } else {
         let nextIndex = 0;
@@ -780,8 +837,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         phase: 'done',
         operation: 'alpha-holder-sync',
         total: subnets.length,
-        completed: subnets.length,
-        remaining: 0,
+        completed: completedCount,
+        remaining: Math.max(0, subnets.length - completedCount),
         elapsedMs: Date.now() - startedAtMs,
         etaMs: 0,
         etaIso: null,
@@ -793,10 +850,12 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         results,
         capturedAt,
         workersTotal,
+        retryAfterMs,
+        deferred,
       });
 
       const result = {
-        ok,
+        ok: ok && !deferred,
         skipped: false,
         source: 'alpha-holder-snapshot-all',
         fetched,
@@ -804,6 +863,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         netuids: subnets.length,
         capturedAt,
         results,
+        retryAfterMs,
+        deferred,
       };
       recordAlphaHolderSnapshotRun({ startedAt, capturedAt, result });
       return result;
@@ -870,8 +931,9 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       summary.partial = timeline.partial;
       summary.reason = timeline.reason;
       summary.warning = timeline.warning;
+      summary.retryAfterMs = Number(timeline.retryAfterMs) > 0 ? Number(timeline.retryAfterMs) : null;
       summary.rowsFetched = Array.isArray(timeline.rows) ? timeline.rows.length : 0;
-      if (timeline.available || forceRefresh || summary.rowsFetched > 0 || timeline.reason) {
+      if (!summary.retryAfterMs && (timeline.available || forceRefresh || summary.rowsFetched > 0 || timeline.reason)) {
         summary.rowsInserted = await storeWalletTimelineRows({
           walletConfig: wallet,
           rows: timeline.rows,
@@ -879,16 +941,27 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           source: 'api-history',
         });
       }
-      summary.ok = true;
+      const noTransactionsReason = 'No wallet transactions were found for the selected period.';
+      summary.ok = !summary.retryAfterMs && !summary.partial && (!summary.reason || summary.reason === noTransactionsReason);
+      if (summary.retryAfterMs) {
+        summary.partial = true;
+        summary.warning = summary.warning || 'Wallet activity hit a Taostats rate limit; retrying later.';
+      }
       return {
         ...summary,
         rows: timeline.rows,
       };
     } catch (error) {
+      const retryAfterMs = retryDelayFromError(error);
       return {
         ...summary,
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        retryAfterMs,
+        retryable: retryAfterMs !== null,
+        error: retryAfterMs !== null ? null : (error instanceof Error ? error.message : String(error)),
+        warning: retryAfterMs !== null
+          ? (summary.warning || 'Wallet activity hit a Taostats rate limit; retrying later.')
+          : summary.warning,
       };
     }
   }
@@ -948,7 +1021,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       summary.partial = true;
       const message = error instanceof Error ? error.message : String(error);
       if (Number(error?.status) === 429) {
-        summary.warning = summary.warning || 'Wallet balance snapshot is temporarily rate-limited by Taostats; showing cached values only.';
+        summary.retryAfterMs = Math.max(Number(summary.retryAfterMs) || 0, retryDelayFromError(error) || 0) || null;
+        summary.warning = summary.warning || 'Wallet balance snapshot is temporarily rate-limited by Taostats; retrying later.';
       } else {
         summary.reason = summary.reason || `Wallet snapshot unavailable: ${message}`;
       }
@@ -974,13 +1048,14 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       summary.partial = true;
       const message = error instanceof Error ? error.message : String(error);
       if (Number(error?.status) === 429) {
-        summary.warning = summary.warning || 'Wallet stake snapshot is temporarily rate-limited by Taostats; showing cached values only.';
+        summary.retryAfterMs = Math.max(Number(summary.retryAfterMs) || 0, retryDelayFromError(error) || 0) || null;
+        summary.warning = summary.warning || 'Wallet stake snapshot is temporarily rate-limited by Taostats; retrying later.';
       } else {
         summary.reason = summary.reason || `Wallet stake snapshot unavailable: ${message}`;
       }
     }
 
-    summary.ok = true;
+    summary.ok = !summary.retryAfterMs && !summary.reason;
     return summary;
   }
 
@@ -1031,7 +1106,11 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         skipped: snapshotResult.skipped,
         reason: snapshotResult.reason,
         warning: snapshotResult.warning,
+        retryAfterMs: snapshotResult.retryAfterMs || null,
       };
+      if (snapshotResult.retryAfterMs) {
+        result.retryAfterMs = Math.max(Number(result.retryAfterMs) || 0, Number(snapshotResult.retryAfterMs));
+      }
       if (snapshotResult.reason && !result.reason) {
         result.reason = snapshotResult.reason;
       }
@@ -1053,9 +1132,11 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         duration_ms: finishedAt.getTime() - startedAt.getTime(),
         source: 'wallet-activity',
         fallback_used: false,
-        ok: Boolean(result?.ok),
+        ok: Boolean(result?.ok) && !result?.retryAfterMs,
         snapshot_id: null,
-        message: result?.ok ? `Wallet activity synced for ${result.wallet}` : 'Wallet activity sync failed',
+        message: result?.retryAfterMs
+          ? `Wallet activity sync deferred for ${result.wallet}`
+          : (result?.ok ? `Wallet activity synced for ${result.wallet}` : 'Wallet activity sync failed'),
         error: result?.error || null,
         detail_json: JSON.stringify(logDetail),
       });
@@ -1112,7 +1193,11 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           skipped: snapshotResult.skipped,
           reason: snapshotResult.reason,
           warning: snapshotResult.warning,
+          retryAfterMs: snapshotResult.retryAfterMs || null,
         };
+        if (snapshotResult.retryAfterMs) {
+          result.retryAfterMs = Math.max(Number(result.retryAfterMs) || 0, Number(snapshotResult.retryAfterMs));
+        }
         if (snapshotResult.reason && !result.reason) {
           result.reason = snapshotResult.reason;
         }
@@ -1123,8 +1208,13 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           result.partial = true;
         }
         results.push(result);
+        if (result.retryAfterMs) {
+          break;
+        }
       }
-      const ok = results.every((result) => result.ok !== false && !result.error);
+      const retryAfterMs = results.reduce((max, result) => Math.max(max, Number(result.retryAfterMs) || 0), 0) || null;
+      const deferred = Boolean(retryAfterMs);
+      const ok = results.every((result) => result.ok !== false && !result.error) && !deferred;
       detail.results = results.map((result) => ({
         wallet: result.wallet,
         address: result.address,
@@ -1134,12 +1224,15 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         warning: result.warning,
         reason: result.reason,
         walletSnapshot: result.walletSnapshot || null,
+        retryAfterMs: result.retryAfterMs || null,
       }));
       return {
         ok,
         days,
         limit,
         results,
+        retryAfterMs,
+        deferred,
         detail,
       };
     } finally {
@@ -1151,9 +1244,11 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         duration_ms: finishedAt.getTime() - startedAt.getTime(),
         source: 'wallet-activity',
         fallback_used: false,
-        ok: results.every((result) => result.ok !== false && !result.error),
+        ok: results.every((result) => result.ok !== false && !result.error) && !results.some((result) => Number(result.retryAfterMs) > 0),
         snapshot_id: null,
-        message: 'Wallet activity sync batch completed',
+        message: results.some((result) => Number(result.retryAfterMs) > 0)
+          ? 'Wallet activity sync batch deferred'
+          : 'Wallet activity sync batch completed',
         error: null,
         detail_json: JSON.stringify(detail),
       });
@@ -1178,7 +1273,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = false,
     limit = 1024,
-    concurrency = 3,
+    concurrency = 1,
     onProgress = null,
   } = {}) {
     setAlphaHolderBackfillActive(true);
@@ -1489,7 +1584,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
     try {
       try {
-        await syncSubnetMetadataCatalog({ limit: 1024 });
+        await syncSubnetMetadataCatalog({ limit: 1024, concurrency: 1 });
       } catch {
         // Non-fatal metadata cache refresh: keep the ingest flowing even if the subnet catalog is temporarily unavailable.
       }
@@ -1541,7 +1636,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       };
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
-      message = 'Snapshot ingest failed';
+      const retryAfterMs = retryDelayFromError(error);
+      message = retryAfterMs ? 'Snapshot ingest deferred' : 'Snapshot ingest failed';
       return {
         ok: false,
         source,
@@ -1549,6 +1645,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         snapshotId: null,
         detail,
         error: errorMessage,
+        retryAfterMs,
         message,
       };
     } finally {

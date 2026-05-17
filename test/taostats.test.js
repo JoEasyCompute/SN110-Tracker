@@ -802,6 +802,91 @@ test('wallet activity sync refreshes wallet snapshots and stake positions', asyn
   db.close();
 });
 
+test('wallet activity sync defers on taostats 429 without storing partial rows', async () => {
+  const db = openDatabase(':memory:');
+  const walletConfig = { name: 'Miner', ss58: '5WalletMiner123456789ABCDEFGH', network: 'finney', hotkeys: [] };
+  const taostats = {
+    fetchExtrinsicsHistory: async () => [{
+      id: 'ext-1',
+      full_name: 'SubtensorModule.add_stake',
+      signer_address: walletConfig.ss58,
+      timestamp: '2026-05-16T21:00:00Z',
+      block_number: 101,
+      call_args: { hotkey: { ss58: '5HotkeyOne' }, netuid: 110, amount: '1000000000' },
+      success: true,
+    }],
+    fetchTransferHistory: async () => [{
+      id: 'transfer-1',
+      from: walletConfig.ss58,
+      to: '5WalletReceiver',
+      timestamp: '2026-05-16T21:01:00Z',
+      block_number: 102,
+      amount: '2000000000',
+    }],
+    fetchHistoricalStakeBalance: async () => {
+      const error = new Error('HTTP 429 from https://api.example.invalid');
+      error.status = 429;
+      error.retryAfterMs = 120000;
+      throw error;
+    },
+    fetchAccountLatest: async ({ address, network, capturedAt }) => normalizeAccountSnapshot({
+      address: { ss58: address, hex: '0xwallet' },
+      network,
+      timestamp: '2026-05-16T21:00:00Z',
+      balance_staked: '411000000000',
+      balance_staked_alpha_as_tao: '411000000000',
+      balance_total: '411000000000',
+    }, {
+      source: 'api',
+      sourceUrl: 'https://example.invalid/api/account/latest/v1',
+      walletName: walletConfig.name,
+      address,
+      network,
+      capturedAt,
+    }),
+    fetchStakeBalanceLatest: async ({ coldkey, capturedAt }) => ([normalizeStakeBalanceSnapshot({
+      block_number: 123,
+      netuid: 110,
+      subnet_rank: 1,
+      subnet_total_holders: 1,
+      balance: '411000000000',
+      balance_as_tao: '411000000000',
+      coldkey: { ss58: coldkey, hex: '0xwallet' },
+      hotkey: { ss58: '5HotkeyOne', hex: '0xhotkey' },
+      hotkey_name: 'Validator One',
+    }, {
+      source: 'api',
+      sourceUrl: 'https://example.invalid/api/dtao/stake_balance/latest/v1',
+      capturedAt,
+      walletName: walletConfig.name,
+      address: coldkey,
+    })]),
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+      wallets: [walletConfig],
+    },
+    taostats,
+  });
+
+  const result = await service.syncWalletActivity({ wallets: [walletConfig], days: 7 });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.deferred, true);
+  assert.equal(result.retryAfterMs, 120000);
+  assert.equal(result.results[0].retryAfterMs, 120000);
+  assert.equal(countWalletTransactions(db, walletConfig.ss58), 0);
+  const run = getLatestIngestRunBySource(db, 'wallet-activity');
+  assert.equal(run.ok, 0);
+  assert.equal(run.message, 'Wallet activity sync batch deferred');
+  db.close();
+});
+
 test('ingest service exposes active job details while a run is in progress', async () => {
   const db = openDatabase(':memory:');
   let releaseLatest = null;
@@ -1119,7 +1204,7 @@ test('alpha holder backfill reports CLI-friendly progress updates with eta field
   db.close();
 });
 
-test('alpha holder backfill runs up to three subnet workers in parallel', async () => {
+test('alpha holder backfill runs serially one subnet at a time', async () => {
   const db = openDatabase(':memory:');
   const capturedAt = '2026-05-11T00:00:00.000Z';
   const active = new Set();
@@ -1162,10 +1247,10 @@ test('alpha holder backfill runs up to three subnet workers in parallel', async 
 
   assert.equal(result.ok, true);
   assert.equal(result.netuids, 3);
-  assert.equal(maxActive, 3);
+  assert.equal(maxActive, 1);
   assert.equal(progress.some((event) => event.phase === 'item-start' && event.workerId === 1), true);
-  assert.equal(progress.some((event) => event.phase === 'item-start' && event.workerId === 2), true);
-  assert.equal(progress.some((event) => event.phase === 'item-start' && event.workerId === 3), true);
+  assert.equal(progress.some((event) => event.phase === 'item-start' && event.workerId === 2), false);
+  assert.equal(progress.some((event) => event.phase === 'item-start' && event.workerId === 3), false);
   db.close();
 });
 
@@ -1449,6 +1534,68 @@ test('alpha-holder snapshot sync respects the backfill lock', async () => {
   assert.equal(result.skipped, true);
   assert.equal(result.reason, 'Alpha-holder backfill is running');
   assert.equal(catalogCalls, 0);
+  db.close();
+});
+
+test('alpha-holder snapshot sync defers on taostats 429 and stops after first subnet', async () => {
+  const db = openDatabase(':memory:');
+  const seenNetuids = [];
+  const taostats = {
+    fetchLatestSnapshot: async () => {
+      throw new Error('should not be called');
+    },
+    fetchHistoricalSnapshots: async () => {
+      throw new Error('should not be called');
+    },
+    fetchSubnetLatestCatalog: async () => [{ netuid: 110 }, { netuid: 111 }],
+    fetchTaoPriceLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoPriceHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchTaoFlowHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountLatest: async () => {
+      throw new Error('should not be called');
+    },
+    fetchAccountHistory: async () => {
+      throw new Error('should not be called');
+    },
+    fetchStakeBalanceLatest: async ({ netuid }) => {
+      seenNetuids.push(netuid);
+      const error = new Error('HTTP 429 from https://api.example.invalid');
+      error.status = 429;
+      error.retryAfterMs = 90000;
+      throw error;
+    },
+    fetchHistoricalStakeBalance: async () => {
+      throw new Error('should not be called');
+    },
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+    },
+    taostats,
+  });
+
+  const result = await service.syncAllAlphaHolderSnapshots({
+    capturedAt: '2026-05-11T00:00:00.000Z',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.deferred, true);
+  assert.equal(result.retryAfterMs, 90000);
+  assert.deepEqual(seenNetuids, [110]);
+  const run = getLatestIngestRunBySource(db, 'alpha-holder-snapshot-all');
+  assert.equal(run.ok, 0);
+  assert.equal(run.message, 'Alpha-holder snapshot batch deferred');
   db.close();
 });
 

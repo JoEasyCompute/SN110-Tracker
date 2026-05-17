@@ -24,7 +24,71 @@ async function main() {
   let timer = null;
   let walletActivityTimer = null;
   let alphaHolderTimer = null;
+  let schedulerQueue = Promise.resolve();
   const isAlphaHolderBackfillActive = () => ingestService.isAlphaHolderBackfillActive();
+
+  const enqueueSerialTask = (task) => {
+    schedulerQueue = schedulerQueue.then(task, task);
+    return schedulerQueue;
+  };
+
+  const createRecurringSerialScheduler = ({
+    initialDelayMs,
+    getDefaultDelayMs,
+    isPaused = () => false,
+    updateNextRunIso = () => {},
+    run,
+    retryDelayMs = 30_000,
+  }) => {
+    let currentTimer = null;
+    let cancelled = false;
+
+    const schedule = (delayMs) => {
+      if (cancelled) {
+        return;
+      }
+      const effectiveDelayMs = Math.max(1_000, Number(delayMs) || 0);
+      updateNextRunIso(new Date(Date.now() + effectiveDelayMs).toISOString());
+      if (currentTimer) {
+        clearTimeout(currentTimer);
+      }
+      currentTimer = setTimeout(() => {
+        void enqueueSerialTask(async () => {
+          if (cancelled) {
+            return;
+          }
+          if (isPaused()) {
+            schedule(retryDelayMs);
+            return;
+          }
+          try {
+            const result = await run();
+            const nextDelayMs = Number(result?.retryAfterMs) > 0
+              ? Number(result.retryAfterMs)
+              : getDefaultDelayMs(result);
+            schedule(nextDelayMs);
+          } catch (error) {
+            const nextDelayMs = Number(error?.retryAfterMs) > 0
+              ? Number(error?.retryAfterMs)
+              : retryDelayMs;
+            schedule(nextDelayMs);
+          }
+        });
+      }, effectiveDelayMs);
+      currentTimer.unref();
+    };
+
+    schedule(initialDelayMs);
+
+    return {
+      stop() {
+        cancelled = true;
+        if (currentTimer) {
+          clearTimeout(currentTimer);
+        }
+      },
+    };
+  };
 
   const msUntilNextUtcMidnight = (now = Date.now()) => {
     const current = new Date(now);
@@ -45,23 +109,22 @@ async function main() {
       return null;
     }
     if (alphaHolderTimer) {
-      clearTimeout(alphaHolderTimer);
+      alphaHolderTimer.stop();
       alphaHolderTimer = null;
     }
     const nextRunMs = msUntilNextUtcMidnight();
-    config.nextAlphaHolderSnapshotAtIso = new Date(Date.now() + nextRunMs).toISOString();
-    alphaHolderTimer = setTimeout(() => {
-      if (ingestService.isActive() || isAlphaHolderBackfillActive()) {
-        scheduleAlphaHolderSnapshot();
-        return;
-      }
-      void ingestService.syncAllAlphaHolderSnapshots({ capturedAt: new Date().toISOString() }).catch((error) => {
+    alphaHolderTimer = createRecurringSerialScheduler({
+      initialDelayMs: nextRunMs,
+      getDefaultDelayMs: () => msUntilNextUtcMidnight(),
+      isPaused: () => ingestService.isActive() || isAlphaHolderBackfillActive(),
+      updateNextRunIso: (iso) => {
+        config.nextAlphaHolderSnapshotAtIso = iso;
+      },
+      run: () => ingestService.syncAllAlphaHolderSnapshots({ capturedAt: new Date().toISOString() }).catch((error) => {
         console.error('Scheduled alpha-holder snapshot batch failed:', error);
-      }).finally(() => {
-        scheduleAlphaHolderSnapshot();
-      });
-    }, nextRunMs);
-    alphaHolderTimer.unref();
+        throw error;
+      }),
+    });
     return {
       nextAlphaHolderSnapshotAtIso: config.nextAlphaHolderSnapshotAtIso,
     };
@@ -71,20 +134,25 @@ async function main() {
     const normalizedMinutes = normalizePollIntervalMinutes(minutes, config.pollIntervalMinutes);
     config.pollIntervalMinutes = normalizedMinutes;
     config.pollIntervalMs = normalizedMinutes * 60 * 1000;
-    config.nextPollAtIso = new Date(Date.now() + config.pollIntervalMs).toISOString();
     if (timer) {
-      clearInterval(timer);
+      timer.stop();
+      timer = null;
     }
-    timer = setInterval(() => {
-      config.nextPollAtIso = new Date(Date.now() + config.pollIntervalMs).toISOString();
-      if (isAlphaHolderBackfillActive()) {
-        return;
-      }
-      void ingestService.ingestOnce({ netuid: config.netuid }).catch((error) => {
-        console.error('Scheduled ingest failed:', error);
-      });
-    }, config.pollIntervalMs);
-    timer.unref();
+    timer = createRecurringSerialScheduler({
+      initialDelayMs: config.pollIntervalMs,
+      getDefaultDelayMs: () => config.pollIntervalMs,
+      isPaused: () => ingestService.isActive() || isAlphaHolderBackfillActive(),
+      updateNextRunIso: (iso) => {
+        config.nextPollAtIso = iso;
+      },
+      run: async () => {
+        const result = await ingestService.ingestOnce({ netuid: config.netuid });
+        if (result?.skipped && result.reason === 'ingest already running') {
+          return { retryAfterMs: 30_000 };
+        }
+        return result;
+      },
+    });
     return {
       pollIntervalMinutes: normalizedMinutes,
       nextPollAtIso: config.nextPollAtIso,
@@ -99,22 +167,27 @@ async function main() {
       ? Number(minutes)
       : config.taostatsWalletActivitySyncIntervalMinutes || 60;
     config.walletActivitySyncIntervalMinutes = normalizedMinutes;
-    config.nextWalletActivitySyncAtIso = new Date(Date.now() + normalizedMinutes * 60 * 1000).toISOString();
     if (walletActivityTimer) {
-      clearInterval(walletActivityTimer);
+      walletActivityTimer.stop();
+      walletActivityTimer = null;
     }
-    walletActivityTimer = setInterval(() => {
-      config.nextWalletActivitySyncAtIso = new Date(Date.now() + normalizedMinutes * 60 * 1000).toISOString();
-      if (isAlphaHolderBackfillActive()) {
-        return;
-      }
-      void ingestService.syncWalletActivity({
-        days: config.taostatsWalletActivitySyncDays,
-      }).catch((error) => {
-        console.error('Scheduled wallet activity sync failed:', error);
-      });
-    }, normalizedMinutes * 60 * 1000);
-    walletActivityTimer.unref();
+    walletActivityTimer = createRecurringSerialScheduler({
+      initialDelayMs: normalizedMinutes * 60 * 1000,
+      getDefaultDelayMs: () => normalizedMinutes * 60 * 1000,
+      isPaused: () => ingestService.isActive() || isAlphaHolderBackfillActive(),
+      updateNextRunIso: (iso) => {
+        config.nextWalletActivitySyncAtIso = iso;
+      },
+      run: async () => {
+        const result = await ingestService.syncWalletActivity({
+          days: config.taostatsWalletActivitySyncDays,
+        });
+        if (result?.skipped && result.reason === 'ingest already running') {
+          return { retryAfterMs: 30_000 };
+        }
+        return result;
+      },
+    });
     return {
       walletActivitySyncIntervalMinutes: normalizedMinutes,
       nextWalletActivitySyncAtIso: config.nextWalletActivitySyncAtIso,
@@ -182,13 +255,13 @@ async function main() {
 
   const shutdown = async () => {
     if (timer) {
-      clearInterval(timer);
+      timer.stop();
     }
     if (walletActivityTimer) {
-      clearInterval(walletActivityTimer);
+      walletActivityTimer.stop();
     }
     if (alphaHolderTimer) {
-      clearTimeout(alphaHolderTimer);
+      alphaHolderTimer.stop();
     }
     await app.close();
     db.close();

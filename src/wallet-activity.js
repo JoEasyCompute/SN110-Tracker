@@ -175,6 +175,7 @@ function buildWalletTransactionTimelineFromRows({
   partial = false,
   reason = null,
   warning = null,
+  retryAfterMs = null,
 } = {}) {
   const hotkeys = mergeWalletHotkeyTargets(walletConfig, stakePositions);
   const normalizedRows = normalizeWalletTimelineRows(rows).map((row) => normalizeWalletTransactionRow(row));
@@ -196,6 +197,7 @@ function buildWalletTransactionTimelineFromRows({
     rows: orderedRows,
     summary,
     hotkeys,
+    retryAfterMs: Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) > 0 ? Number(retryAfterMs) : null,
   };
 }
 
@@ -278,6 +280,7 @@ async function buildWalletTransactionTimeline({
   let partial = false;
   let warning = null;
   let reason = null;
+  let retryAfterMs = null;
 
   let extrinsicsRaw = [];
   try {
@@ -287,7 +290,12 @@ async function buildWalletTransactionTimeline({
     });
   } catch (error) {
     partial = true;
-    reason = reason || `Extrinsics unavailable: ${error.message}`;
+    if (Number(error?.status) === 429) {
+      retryAfterMs = Math.max(Number(retryAfterMs) || 0, Number(error?.retryAfterMs) || 60_000);
+      warning = warning || 'Wallet activity is temporarily rate-limited by Taostats; retrying later.';
+    } else {
+      reason = reason || `Extrinsics unavailable: ${error.message}`;
+    }
   }
 
   let transfersRaw = [];
@@ -299,7 +307,12 @@ async function buildWalletTransactionTimeline({
     });
   } catch (error) {
     partial = true;
-    reason = reason || `Transfers unavailable: ${error.message}`;
+    if (Number(error?.status) === 429) {
+      retryAfterMs = Math.max(Number(retryAfterMs) || 0, Number(error?.retryAfterMs) || 60_000);
+      warning = warning || 'Wallet activity is temporarily rate-limited by Taostats; retrying later.';
+    } else {
+      reason = reason || `Transfers unavailable: ${error.message}`;
+    }
   }
 
   const rows = [];
@@ -318,7 +331,8 @@ async function buildWalletTransactionTimeline({
     } catch (error) {
       partial = true;
       if (Number(error?.status) === 429) {
-        warning = warning || 'Stake history is temporarily rate-limited by Taostats; showing extrinsics and transfers only.';
+        retryAfterMs = Math.max(Number(retryAfterMs) || 0, Number(error?.retryAfterMs) || 60_000);
+        warning = warning || 'Stake history is temporarily rate-limited by Taostats; retrying later.';
       } else {
         reason = reason || `Stake history unavailable: ${error.message}`;
       }
@@ -432,6 +446,7 @@ async function buildWalletTransactionTimeline({
     partial,
     reason,
     warning,
+    retryAfterMs,
   });
   timeline.summary.hotkeysTracked = hotkeys.length;
   return timeline;

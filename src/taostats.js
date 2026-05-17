@@ -670,8 +670,8 @@ async function fetchFromApi({ netuid, taostatsBaseUrl, taostatsPublicBaseUrl, ta
   subnetUrl.searchParams.set('netuid', String(netuid));
 
   const poolResponse = await fetchJson(poolUrl.toString(), { headers, rateLimiter });
-  const subnetResponse = await fetchJson(subnetUrl.toString(), { headers, rateLimiter });
   const poolPayload = poolResponse.json;
+  const subnetResponse = await fetchJson(subnetUrl.toString(), { headers, rateLimiter });
   const subnetPayload = subnetResponse.json;
 
   const merged = combineApiPayloads(pickRecord(subnetPayload, netuid), pickRecord(poolPayload, netuid));
@@ -1203,7 +1203,8 @@ async function fetchHistoricalSnapshots({
     return rows;
   }
 
-  const [subnetRows, poolRows] = await Promise.all(endpoints.map(fetchAllPages));
+  const subnetRows = await fetchAllPages(endpoints[0]);
+  const poolRows = await fetchAllPages(endpoints[1]);
   const mergedByKey = new Map();
 
   const keyFor = (record) => {
