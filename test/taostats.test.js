@@ -887,6 +887,70 @@ test('wallet activity sync defers on taostats 429 without storing partial rows',
   db.close();
 });
 
+test('wallet activity sync short-circuits when wallet balance snapshot is out of credits', async () => {
+  const db = openDatabase(':memory:');
+  const walletConfig = { name: 'Miner', ss58: '5WalletMiner123456789ABCDEFGH', network: 'finney', hotkeys: [] };
+  let extrinsicsCalled = false;
+  let transfersCalled = false;
+  let stakeHistoryCalled = false;
+  const taostats = {
+    fetchAccountLatest: async ({ address, network, capturedAt }) => {
+      const error = new Error('HTTP 429 from https://api.example.invalid/api/account/latest/v1');
+      error.status = 429;
+      error.body = {
+        status_code: 429,
+        message: 'Insufficient credits (remaining: 0, required: 1). You can purchase more at https://dash.taostats.io/billing.',
+      };
+      error.retryAfterMs = 21600000;
+      throw error;
+    },
+    fetchStakeBalanceLatest: async () => {
+      stakeHistoryCalled = true;
+      throw new Error('should not be called');
+    },
+    fetchExtrinsicsHistory: async () => {
+      extrinsicsCalled = true;
+      throw new Error('should not be called');
+    },
+    fetchTransferHistory: async () => {
+      transfersCalled = true;
+      throw new Error('should not be called');
+    },
+    fetchHistoricalStakeBalance: async () => {
+      throw new Error('should not be called');
+    },
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+      wallets: [walletConfig],
+    },
+    taostats,
+  });
+
+  const result = await service.syncWalletActivity({ wallets: [walletConfig], days: 7 });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.deferred, true);
+  assert.equal(result.retryAfterMs, 21600000);
+  assert.equal(result.results[0].retryAfterMs, 21600000);
+  assert.equal(result.results[0].walletSnapshot.retryAfterMs, 21600000);
+  assert.equal(result.results[0].walletSnapshot.warning.includes('credits are exhausted'), true);
+  assert.equal(extrinsicsCalled, false);
+  assert.equal(transfersCalled, false);
+  assert.equal(stakeHistoryCalled, false);
+  assert.equal(countWalletTransactions(db, walletConfig.ss58), 0);
+  assert.equal(getLatestWalletSnapshot(db, walletConfig.ss58), null);
+  const run = getLatestIngestRunBySource(db, 'wallet-activity');
+  assert.equal(run.ok, 0);
+  assert.equal(run.message, 'Wallet activity sync batch deferred');
+  db.close();
+});
+
 test('ingest service exposes active job details while a run is in progress', async () => {
   const db = openDatabase(':memory:');
   let releaseLatest = null;

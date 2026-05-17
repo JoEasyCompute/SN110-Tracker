@@ -35,8 +35,15 @@ const {
 const ALPHA_HOLDER_BACKFILL_ACTIVE_KEY = 'alpha_holder_backfill_active';
 const ALPHA_HOLDER_BACKFILL_STARTED_AT_KEY = 'alpha_holder_backfill_started_at';
 const DEFAULT_RETRY_DELAY_MS = 60_000;
+const TAOSTATS_CREDITS_EXHAUSTED_RETRY_MS = 6 * 60 * 60 * 1000;
 
-function retryDelayFromError(error, fallbackMs = DEFAULT_RETRY_DELAY_MS) {
+function isTaostatsCreditsExhaustedError(error) {
+  const bodyText = typeof error?.body === 'string' ? error.body : '';
+  const message = String(error?.body?.message || error?.body?.error || bodyText || error?.message || error || '');
+  return /insufficient credits/i.test(message);
+}
+
+function retryDelayFromTaostatsError(error, fallbackMs = DEFAULT_RETRY_DELAY_MS) {
   if (!error || Number(error?.status) !== 429) {
     return null;
   }
@@ -44,8 +51,15 @@ function retryDelayFromError(error, fallbackMs = DEFAULT_RETRY_DELAY_MS) {
   if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
     return retryAfterMs;
   }
+  if (isTaostatsCreditsExhaustedError(error)) {
+    return TAOSTATS_CREDITS_EXHAUSTED_RETRY_MS;
+  }
   const fallbackDelayMs = Number(fallbackMs);
   return Number.isFinite(fallbackDelayMs) && fallbackDelayMs > 0 ? fallbackDelayMs : DEFAULT_RETRY_DELAY_MS;
+}
+
+function retryDelayFromError(error, fallbackMs = DEFAULT_RETRY_DELAY_MS) {
+  return retryDelayFromTaostatsError(error, fallbackMs);
 }
 
 function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
@@ -1022,10 +1036,19 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       const message = error instanceof Error ? error.message : String(error);
       if (Number(error?.status) === 429) {
         summary.retryAfterMs = Math.max(Number(summary.retryAfterMs) || 0, retryDelayFromError(error) || 0) || null;
-        summary.warning = summary.warning || 'Wallet balance snapshot is temporarily rate-limited by Taostats; retrying later.';
+        summary.warning = summary.warning || (
+          isTaostatsCreditsExhaustedError(error)
+            ? 'Taostats credits are exhausted; retrying wallet balance snapshot later.'
+            : 'Wallet balance snapshot is temporarily rate-limited by Taostats; retrying later.'
+        );
       } else {
         summary.reason = summary.reason || `Wallet snapshot unavailable: ${message}`;
       }
+    }
+
+    if (summary.retryAfterMs) {
+      summary.ok = !summary.retryAfterMs && !summary.reason;
+      return summary;
     }
 
     try {
@@ -1059,6 +1082,44 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     return summary;
   }
 
+  function buildWalletActivityDeferredResult({
+    walletConfig = null,
+    address = null,
+    days = config.walletActivitySyncDays ?? 7,
+    retryAfterMs = null,
+    snapshotResult = null,
+  } = {}) {
+    const wallet = walletConfig || resolveWalletConfig(address);
+    const snapshotWarning = snapshotResult?.warning || null;
+    return {
+      ok: false,
+      wallet: wallet.name,
+      address: wallet.ss58,
+      days,
+      rowsFetched: 0,
+      rowsInserted: 0,
+      source: 'wallet-activity',
+      partial: true,
+      reason: snapshotResult?.reason || null,
+      warning: snapshotWarning,
+      skipped: false,
+      retryAfterMs: Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) > 0 ? Number(retryAfterMs) : null,
+      rows: [],
+      walletSnapshot: snapshotResult ? {
+        source: snapshotResult.source,
+        snapshotFetched: snapshotResult.snapshotFetched,
+        snapshotInserted: snapshotResult.snapshotInserted,
+        stakeFetched: snapshotResult.stakeFetched,
+        stakeInserted: snapshotResult.stakeInserted,
+        partial: snapshotResult.partial,
+        skipped: snapshotResult.skipped,
+        reason: snapshotResult.reason,
+        warning: snapshotResult.warning,
+        retryAfterMs: snapshotResult.retryAfterMs || null,
+      } : null,
+    };
+  }
+
   async function syncWalletActivityForWallet({
     walletConfig = null,
     address = null,
@@ -1088,6 +1149,16 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         address,
         capturedAt: startedIso,
       });
+      if (snapshotResult.retryAfterMs) {
+        result = buildWalletActivityDeferredResult({
+          walletConfig,
+          address,
+          days,
+          retryAfterMs: snapshotResult.retryAfterMs,
+          snapshotResult,
+        });
+        return result;
+      }
       result = await runWalletActivityForWallet({
         walletConfig,
         address,
@@ -1176,6 +1247,16 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           walletConfig: wallet,
           capturedAt: startedIso,
         });
+        if (snapshotResult.retryAfterMs) {
+          const result = buildWalletActivityDeferredResult({
+            walletConfig: wallet,
+            days,
+            retryAfterMs: snapshotResult.retryAfterMs,
+            snapshotResult,
+          });
+          results.push(result);
+          break;
+        }
         const result = await runWalletActivityForWallet({
           walletConfig: wallet,
           days,

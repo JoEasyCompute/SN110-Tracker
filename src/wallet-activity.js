@@ -184,11 +184,12 @@ function buildWalletTransactionTimelineFromRows({
   summary.hotkeysTracked = hotkeys.length;
   const network = walletConfig?.network || orderedRows.find((row) => row.network)?.network || 'finney';
   const available = orderedRows.length > 0;
+  const deferred = Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) > 0;
 
   return {
     available,
     partial: Boolean(partial),
-    reason: reason || (!available ? (warning || 'No wallet transactions were found for the selected period.') : null),
+    reason: deferred ? null : (reason || (!available ? (warning || 'No wallet transactions were found for the selected period.') : null)),
     warning: warning || null,
     days,
     address,
@@ -197,7 +198,7 @@ function buildWalletTransactionTimelineFromRows({
     rows: orderedRows,
     summary,
     hotkeys,
-    retryAfterMs: Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) > 0 ? Number(retryAfterMs) : null,
+    retryAfterMs: deferred ? Number(retryAfterMs) : null,
   };
 }
 
@@ -293,6 +294,17 @@ async function buildWalletTransactionTimeline({
     if (Number(error?.status) === 429) {
       retryAfterMs = Math.max(Number(retryAfterMs) || 0, Number(error?.retryAfterMs) || 60_000);
       warning = warning || 'Wallet activity is temporarily rate-limited by Taostats; retrying later.';
+      return buildWalletTransactionTimelineFromRows({
+        address,
+        walletConfig,
+        stakePositions,
+        rows,
+        days,
+        partial,
+        reason,
+        warning,
+        retryAfterMs,
+      });
     } else {
       reason = reason || `Extrinsics unavailable: ${error.message}`;
     }
@@ -310,6 +322,17 @@ async function buildWalletTransactionTimeline({
     if (Number(error?.status) === 429) {
       retryAfterMs = Math.max(Number(retryAfterMs) || 0, Number(error?.retryAfterMs) || 60_000);
       warning = warning || 'Wallet activity is temporarily rate-limited by Taostats; retrying later.';
+      return buildWalletTransactionTimelineFromRows({
+        address,
+        walletConfig,
+        stakePositions,
+        rows,
+        days,
+        partial,
+        reason,
+        warning,
+        retryAfterMs,
+      });
     } else {
       reason = reason || `Transfers unavailable: ${error.message}`;
     }
@@ -333,6 +356,7 @@ async function buildWalletTransactionTimeline({
       if (Number(error?.status) === 429) {
         retryAfterMs = Math.max(Number(retryAfterMs) || 0, Number(error?.retryAfterMs) || 60_000);
         warning = warning || 'Stake history is temporarily rate-limited by Taostats; retrying later.';
+        break;
       } else {
         reason = reason || `Stake history unavailable: ${error.message}`;
       }

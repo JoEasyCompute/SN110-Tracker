@@ -7,6 +7,7 @@ const TAO_PER_RAO = 1_000_000_000;
 // matches raw emission divided by 500,000,000.
 const EMISSION_PERCENT_DENOMINATOR = 500_000_000;
 const TAO_PER_DAY = 7_200;
+const TAOSTATS_CREDITS_EXHAUSTED_RETRY_MS = 6 * 60 * 60 * 1000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -198,6 +199,11 @@ async function fetchJson(url, { headers = {}, timeoutMs = 20000, rateLimiter = n
         const retryAfterMs = parseRetryAfterHeader(response.headers?.get?.('retry-after'));
         if (Number.isFinite(retryAfterMs) && retryAfterMs !== null) {
           error.retryAfterMs = retryAfterMs;
+        } else {
+          const message = String(error.body?.message || error.body?.error || error.body || text || '');
+          if (/insufficient credits/i.test(message)) {
+            error.retryAfterMs = TAOSTATS_CREDITS_EXHAUSTED_RETRY_MS;
+          }
         }
       }
       throw error;
