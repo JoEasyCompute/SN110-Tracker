@@ -2244,6 +2244,87 @@ function renderScheduleStatusBadge(schedule = null, { id = 'schedule-status-badg
   return `<span class="status-badge status-badge-${tone}" id="${escapeHtml(id)}" title="${escapeHtml(schedule.title || schedule.label || 'Schedule status')}">${escapeHtml(label)}</span>`;
 }
 
+function buildScheduleQueuePreview(schedules = [], {
+  ingestActive = false,
+  activeIngestJob = null,
+  alphaHolderBackfillActive = false,
+  alphaHolderBackfillStartedAtIso = null,
+} = {}) {
+  const queue = [];
+  const activeJob = ingestActive && activeIngestJob && typeof activeIngestJob === 'object' ? activeIngestJob : null;
+  if (activeJob) {
+    queue.push({
+      key: 'active-ingest',
+      type: 'active',
+      title: activeJob.label || activeJob.kind || 'Ingest job',
+      label: activeJob.label || activeJob.kind || 'Ingest job',
+      statusLabel: 'Running',
+      tone: 'accent',
+      nextRunIso: activeJob.startedAtIso || null,
+      detail: `${formatRelativeIso(activeJob.startedAtIso)}${Number.isFinite(Number(activeJob.elapsedMs)) ? ` • running for ${formatDuration(Number(activeJob.elapsedMs))}` : ''}`,
+    });
+  }
+
+  const upcoming = (Array.isArray(schedules) ? schedules : [])
+    .filter((schedule) => schedule && schedule.enabled !== false && schedule.nextRunIso)
+    .map((schedule) => ({
+      key: `schedule-${schedule.key || schedule.label || 'schedule'}`,
+      type: 'schedule',
+      title: schedule.title || schedule.label || 'Schedule',
+      label: schedule.label || schedule.title || 'Schedule',
+      statusLabel: schedule.paused ? 'Paused' : 'Queued',
+      tone: schedule.paused ? 'accent' : 'neutral',
+      nextRunIso: schedule.nextRunIso,
+      detail: schedule.paused
+        ? `Waiting for alpha-holder backfill to finish${alphaHolderBackfillStartedAtIso ? ` • started ${formatRelativeIso(alphaHolderBackfillStartedAtIso)}` : ''}`
+        : `Due ${formatPollTime(schedule.nextRunIso)}`,
+      note: schedule.description || null,
+    }))
+    .sort((left, right) => new Date(left.nextRunIso).getTime() - new Date(right.nextRunIso).getTime());
+
+  queue.push(...upcoming);
+  return queue.slice(0, 4);
+}
+
+function renderScheduleQueuePreview(queue = [], { paused = false, backfillStartedAtIso = null } = {}) {
+  const rows = Array.isArray(queue) ? queue : [];
+  const pausedNotice = paused
+    ? `<p class="empty schedule-paused-note">Queued work is paused while alpha-holder backfill is running${backfillStartedAtIso ? ` • started ${escapeHtml(formatRelativeIso(backfillStartedAtIso))}` : ''}.</p>`
+    : '';
+  const itemsHtml = rows.length
+    ? rows.map((item, index) => {
+        const title = item.label || item.title || 'Schedule';
+        const detail = item.detail || item.note || '—';
+        return `
+          <li class="schedule-queue-item schedule-queue-item-${escapeHtml(item.type || 'schedule')}">
+            <div class="schedule-queue-item-head">
+              <div>
+                <div class="schedule-queue-item-kicker">${index === 0 ? 'Next up' : 'After that'}</div>
+                <div class="schedule-queue-item-title">${escapeHtml(title)}</div>
+              </div>
+              <span class="status-badge status-badge-${escapeHtml(item.tone || 'neutral')}">${escapeHtml(item.statusLabel || 'Queued')}</span>
+            </div>
+            <div class="schedule-queue-item-meta">${escapeHtml(detail)}</div>
+          </li>
+        `;
+      }).join('')
+    : '<li class="schedule-queue-empty">No queued jobs at the moment.</li>';
+
+  return `
+    ${pausedNotice}
+    <div class="schedule-queue">
+      <div class="schedule-queue-head">
+        <div>
+          <div class="eyebrow">Expected next</div>
+          <h3>Queue</h3>
+        </div>
+        <div class="schedule-queue-hint">Running job first, then the next scheduled work in order.</div>
+      </div>
+      <ol class="schedule-queue-list">${itemsHtml}</ol>
+    </div>
+  `;
+}
+
 function renderScheduleStatusTable(schedules = [], { paused = false, backfillStartedAtIso = null } = {}) {
   const rows = Array.isArray(schedules) ? schedules : [];
   const pausedNotice = paused
@@ -2736,6 +2817,12 @@ function buildPageModel({ db, config, netuid }) {
       lastRun: latestAlphaHolderRun,
     },
   ];
+  const scheduleQueue = buildScheduleQueuePreview(scheduleStatus, {
+    ingestActive: Boolean(config.ingestActive),
+    activeIngestJob: config.activeIngestJob || null,
+    alphaHolderBackfillActive,
+    alphaHolderBackfillStartedAtIso: getSetting(db, 'alpha_holder_backfill_started_at') || null,
+  });
 
   return {
     config,
@@ -2762,6 +2849,7 @@ function buildPageModel({ db, config, netuid }) {
     alphaHolderRankHistory,
     alphaHolderRankHistoryStartAt: alphaHolderRankHistory[0]?.captured_at ?? null,
     scheduleStatus,
+    scheduleQueue,
     alphaHolderBackfillActive,
     alphaHolderBackfillStartedAtIso: getSetting(db, 'alpha_holder_backfill_started_at') || null,
     subnetLabel,
@@ -2927,7 +3015,7 @@ function renderHistoryTable(rows) {
   `;
 }
 
-function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null, scheduleStatus = [], alphaHolderBackfillActive = false, alphaHolderBackfillStartedAtIso = null }) {
+function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null, scheduleStatus = [], scheduleQueue = [], alphaHolderBackfillActive = false, alphaHolderBackfillStartedAtIso = null }) {
   if (!config.adminAuthenticated) {
     return '';
   }
@@ -2938,6 +3026,10 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
     : 'An ingest job is currently running.';
   const walletActivityText = formatWalletActivityStatusText(walletActivityStatus);
   const walletActivityBadge = renderWalletActivityStatusBadge(walletActivityStatus, { id: 'wallet-activity-admin-badge' });
+  const queuePreview = renderScheduleQueuePreview(scheduleQueue, {
+    paused: alphaHolderBackfillActive,
+    backfillStartedAtIso: alphaHolderBackfillStartedAtIso,
+  });
   const scheduleTable = renderScheduleStatusTable(scheduleStatus, {
     paused: alphaHolderBackfillActive,
     backfillStartedAtIso: alphaHolderBackfillStartedAtIso,
@@ -2960,6 +3052,10 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
                 ${pollIntervalButtons}
               </div>
             </div>
+          </div>
+          <div class="panel">
+            <h3>Queue</h3>
+            ${queuePreview}
           </div>
           <div class="admin-actions">
             <a class="button" href="/api/subnets/${netuid}/latest">Latest JSON</a>
@@ -6385,6 +6481,7 @@ function renderPage(model) {
     alphaHolderCurrentRankRow,
     alphaHolderRankHistoryStartAt,
     scheduleStatus,
+    scheduleQueue,
     alphaHolderBackfillActive,
     alphaHolderBackfillStartedAtIso,
     subnetLabel,
@@ -8120,6 +8217,68 @@ function renderPage(model) {
         font-size: 12px;
         line-height: 1.45;
       }
+      .schedule-queue {
+        display: grid;
+        gap: 12px;
+      }
+      .schedule-queue-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .schedule-queue-head h3 {
+        margin: 0;
+      }
+      .schedule-queue-hint {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        text-align: right;
+      }
+      .schedule-queue-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      .schedule-queue-item {
+        border: 1px solid var(--border);
+        background: rgba(16, 23, 34, 0.72);
+        border-radius: 8px;
+        padding: 12px 14px;
+      }
+      .schedule-queue-item-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .schedule-queue-item-kicker {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .schedule-queue-item-title {
+        margin-top: 2px;
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .schedule-queue-item-meta {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .schedule-queue-empty {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        padding: 2px 0;
+      }
       .admin-grid {
         display: grid;
         gap: 14px;
@@ -8393,6 +8552,7 @@ function renderPage(model) {
         pollIntervalButtons,
         walletActivityStatus,
         scheduleStatus,
+        scheduleQueue,
         alphaHolderBackfillActive,
         alphaHolderBackfillStartedAtIso,
       })}
