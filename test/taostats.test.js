@@ -3119,6 +3119,51 @@ test('wallet transactions endpoint downgrades stake history 429 to a warning', a
   }
 });
 
+test('wallet transactions endpoint includes the latest wallet sync status', async () => {
+  const db = openDatabase(':memory:');
+  insertIngestRun(db, {
+    netuid: 110,
+    started_at: '2026-05-17T08:00:00.000Z',
+    finished_at: '2026-05-17T08:02:00.000Z',
+    duration_ms: 120000,
+    source: 'wallet-activity',
+    fallback_used: false,
+    ok: false,
+    snapshot_id: null,
+    message: 'Wallet activity sync batch deferred',
+    error: null,
+    detail_json: JSON.stringify({ retryAfterMs: 120000, deferred: true }),
+  });
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      pollIntervalMinutes: 60,
+      nextPollAtIso: null,
+      wallets: [
+        {
+          name: 'Alpha Treasury',
+          ss58: '5WalletAlpha123456789ABCDEFGH',
+          network: 'finney',
+          hotkeys: [],
+        },
+      ],
+    },
+  });
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/wallets/5WalletAlpha123456789ABCDEFGH/transactions?days=7`);
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.syncStatus.ok, false);
+  assert.equal(payload.syncStatus.message, 'Wallet activity sync batch deferred');
+  assert.equal(payload.syncStatus.text.includes('Wallet activity sync batch deferred'), true);
+  await app.close();
+  db.close();
+});
+
 test('poll interval selector endpoint updates the interval setting', async () => {
   const db = openDatabase(':memory:');
   let observedMinutes = null;

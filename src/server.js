@@ -4649,6 +4649,8 @@ function renderDashboardClientScript({ netuid, config }) {
         const summary = payload?.summary || {};
         const stakeRows = rows.filter((row) => walletTransactionGroup(row) === 'stake').length;
         const transferRows = rows.filter((row) => walletTransactionGroup(row) === 'transfer').length;
+        const syncStatusText = payload?.syncStatus?.text ? String(payload.syncStatus.text) : '';
+        const syncStatusOk = payload?.syncStatus ? payload.syncStatus.ok !== false : true;
         txRangeButtons.forEach((button) => {
           const days = Number(button.dataset.walletTxRange);
           const active = days === state.modalTransactionsDays;
@@ -4678,14 +4680,20 @@ function renderDashboardClientScript({ netuid, config }) {
             ? 'Fetching wallet activity from the local SQLite cache…'
             : (payloadIssue
               ? payload.reason
-              : (payloadWarning || 'Matched rows from extrinsics, transfers, and hotkey stake snapshots.'));
+              : (payloadWarning || syncStatusText || 'Matched rows from extrinsics, transfers, and hotkey stake snapshots.'));
         }
         if (txModalElements.note) {
           txModalElements.note.textContent = loading
             ? 'Fetching wallet activity…'
             : (payloadIssue
               ? payload.reason
-              : (payloadWarning || 'Click a row to inspect the raw payload and inference notes.'));
+              : (payloadWarning || syncStatusText || 'Click a row to inspect the raw payload and inference notes.'));
+        }
+        if (txModalElements.explanation && !loading && !payloadIssue && syncStatusText) {
+          txModalElements.explanation.hidden = false;
+          txModalElements.explanation.textContent = syncStatusOk
+            ? 'Wallet sync status: ' + syncStatusText
+            : 'Wallet sync deferred; showing cached transaction rows. ' + syncStatusText;
         }
         if (payloadWarning && txModalElements.explanation) {
           txModalElements.explanation.hidden = true;
@@ -8905,14 +8913,15 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         const rawDays = Number.parseInt(url.searchParams.get('days') || '7', 10);
         const days = Number.isFinite(rawDays) && rawDays >= 0 ? Math.min(rawDays, 3650) : 7;
         const refresh = String(url.searchParams.get('refresh') || '').trim() === '1' || String(url.searchParams.get('refresh') || '').trim().toLowerCase() === 'true';
-        const walletConfig = (config.wallets || []).find((wallet) => String(wallet.ss58 || wallet.coldkey || '') === address)
-          || {
-            name: address,
-            ss58: address,
-            coldkey: address,
-            network: 'finney',
-            hotkeys: [],
-          };
+      const walletConfig = (config.wallets || []).find((wallet) => String(wallet.ss58 || wallet.coldkey || '') === address)
+        || {
+          name: address,
+          ss58: address,
+          coldkey: address,
+          network: 'finney',
+          hotkeys: [],
+        };
+        const latestWalletSyncRun = getLatestIngestRunBySource(db, 'wallet-activity');
         const stakePositions = getLatestWalletStakePositions(db, address);
         const sinceIso = days === 0 ? null : new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
         let rows = getWalletTransactions(db, address, sinceIso);
@@ -8974,6 +8983,16 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
             days,
             reason: 'Taostats API access is required to load wallet transactions.',
           });
+        }
+        if (latestWalletSyncRun) {
+          transactionTimeline.syncStatus = {
+            ok: Boolean(latestWalletSyncRun.ok),
+            message: latestWalletSyncRun.message || null,
+            startedAtIso: latestWalletSyncRun.started_at || null,
+            durationMs: latestWalletSyncRun.duration_ms ?? null,
+            error: latestWalletSyncRun.error || null,
+            text: `${latestWalletSyncRun.message || 'Wallet activity sync'} • ${formatRelativeIso(latestWalletSyncRun.started_at)}`,
+          };
         }
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(transactionTimeline, null, 2));
