@@ -2623,6 +2623,43 @@ test('ctrl-clicking a wallet card opens the transaction modal and renders the ti
             text: async () => '[]',
           };
         }
+        if (text.includes('/stake-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              address: '5WalletAlpha123456789ABCDEFGH',
+              days: 7,
+              history: [
+                {
+                  captured_at: '2026-04-29T12:00:00.000Z',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  hotkey_name: 'Miner One',
+                  netuid: 111,
+                  balance_num: 1000000000,
+                  balance_as_tao_num: 1,
+                },
+                {
+                  captured_at: '2026-04-30T10:00:00.000Z',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  hotkey_name: 'Miner One',
+                  netuid: 111,
+                  balance_num: 1300000000,
+                  balance_as_tao_num: 1.3,
+                },
+                {
+                  captured_at: '2026-04-30T12:00:00.000Z',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  hotkey_name: 'Miner One',
+                  netuid: 111,
+                  balance_num: 1500000000,
+                  balance_as_tao_num: 1.5,
+                },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
         return { ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' };
       };
       window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };

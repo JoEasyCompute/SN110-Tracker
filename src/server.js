@@ -4364,11 +4364,30 @@ function renderDashboardClientScript({ netuid, config }) {
             return [...totalsByCapture.entries()].sort((a, b) => a[0] - b[0]);
           })();
           const alphaHistoryChangeRaw = alphaHistorySeries.length > 1
-            ? (alphaHistorySeries[alphaHistorySeries.length - 1][1] - alphaHistorySeries[alphaHistorySeries.length - 2][1])
+            ? (() => {
+                const latestPoint = alphaHistorySeries[alphaHistorySeries.length - 1];
+                const targetTime = latestPoint[0] - (24 * 60 * 60 * 1000);
+                let priorPoint = alphaHistorySeries[0];
+                let closestDistance = Infinity;
+                for (const point of alphaHistorySeries) {
+                  const distance = Math.abs(point[0] - targetTime);
+                  if (distance < closestDistance) {
+                    closestDistance = distance;
+                    priorPoint = point;
+                  }
+                }
+                const delta = latestPoint[1] - priorPoint[1];
+                return Number.isFinite(delta) ? delta : null;
+              })()
             : null;
           const alphaDailyChangeRaw = Number.isFinite(alphaChangeFromSnapshotRaw)
             ? alphaChangeFromSnapshotRaw
             : alphaHistoryChangeRaw;
+          const alphaDailyChangeTao = Number.isFinite(alphaChangeFromSnapshotTao)
+            ? alphaChangeFromSnapshotTao
+            : (Number.isFinite(alphaHistoryChangeRaw) && Number.isFinite(alphaPrice) && alphaPrice > 0
+              ? alphaHistoryChangeRaw * alphaPrice
+              : null);
           const stakeCards = stakePositions.map((position) => {
             const balance = toAlphaUnits(position.balance_num ?? position.balance ?? null);
             const hotkeyLabel = position.hotkey_name
@@ -4468,8 +4487,8 @@ function renderDashboardClientScript({ netuid, config }) {
           const alphaChangeText = Number.isFinite(alphaDailyChangeRaw)
             ? '24h change: ' + formatSignedAlphaAmount(alphaDailyChangeRaw, 4)
             : '24h change unavailable';
-          const alphaChangeTaoText = Number.isFinite(alphaChangeFromSnapshotTao)
-            ? '≈ ' + formatSignedTao(alphaChangeFromSnapshotTao, 2) + ' at current price'
+          const alphaChangeTaoText = Number.isFinite(alphaDailyChangeTao)
+            ? '≈ ' + formatSignedTao(alphaDailyChangeTao, 2) + ' at current price'
             : 'Compared with the previous day';
           modalElements.walletDetails.innerHTML = [
             '<h4 class="wallet-details-title">Wallet breakdown</h4>',
