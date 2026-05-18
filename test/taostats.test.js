@@ -2588,6 +2588,41 @@ test('ctrl-clicking a wallet card opens the transaction modal and renders the ti
             text: async () => '[]',
           };
         }
+        if (text.includes('/stake-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              address: '5WalletAlpha123456789ABCDEFGH',
+              days: 7,
+              history: [
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 9,
+                  balance_num: 1300000000,
+                  balance_as_tao_num: 2.3,
+                  captured_at: '2026-04-29T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 1500000000,
+                  balance_as_tao_num: 2.5,
+                  captured_at: '2026-04-30T00:00:00.000Z',
+                },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
         return { ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' };
       };
       window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
@@ -2722,15 +2757,19 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
   assert.ok(walletButton);
 
   walletButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await new Promise((resolve) => setTimeout(resolve, 600));
 
   const historyModal = dom.window.document.getElementById('history-modal');
   const walletDetails = dom.window.document.getElementById('history-modal-wallet-details');
+  for (let i = 0; i < 40 && !walletDetails.textContent.includes('0.2'); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   assert.ok(historyModal.classList.contains('open'));
   assert.equal(walletDetails.hidden, false);
   assert.equal(walletDetails.textContent.includes('Alpha stake'), true);
-  assert.equal(walletDetails.textContent.includes('α 0.5'), true);
-  assert.equal(walletDetails.textContent.includes('0.15'), true);
+  assert.equal(walletDetails.textContent.includes('α 1.5'), true);
+  assert.equal(walletDetails.textContent.includes('Raw α from current subnet stake positions'), true);
+  assert.equal(walletDetails.textContent.includes('24h change'), true);
 
   dom.window.close();
   db.close();

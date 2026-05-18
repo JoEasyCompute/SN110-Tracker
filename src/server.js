@@ -4268,13 +4268,10 @@ function renderDashboardClientScript({ netuid, config }) {
           const free = toNumeric(breakdown.free);
           const staked = toNumeric(breakdown.staked);
           const root = toNumeric(breakdown.root);
-          const alphaStake = toNumeric(breakdown.alpha);
           const change24h = toNumeric(breakdown.change24h);
-          const alpha24h = toNumeric(breakdown.alpha24h);
           const priceUsd = resolveUsdPrice(metric.latestTaoPriceUsd, state.latestTaoPriceUsd);
           const percent = (part, whole) => (Number.isFinite(part) && Number.isFinite(whole) && whole > 0 ? (part / whole) * 100 : null);
           const rootPct = percent(root, staked);
-          const alphaPct = percent(alphaStake, staked);
           const freePct = percent(free, total);
           const stakedPct = percent(staked, total);
           const stakeCount = Number(metric.stakeCount || 0);
@@ -4335,6 +4332,28 @@ function renderDashboardClientScript({ netuid, config }) {
             '  <div class="subtext">' + escapeHtml(item.subtext) + '</div>',
             '</div>',
           ].join('')).join('');
+          const alphaStakeRaw = (() => {
+            const totalRaw = stakePositions.reduce((sum, position) => {
+              const raw = Number(position.balance_num ?? position.balance ?? position.balance_as_tao_num ?? null);
+              return Number.isFinite(raw) ? sum + raw : sum;
+            }, 0);
+            return Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw / 1e9 : null;
+          })();
+          const alphaHistorySeries = (() => {
+            if (!Array.isArray(state.modalStakeHistory) || !state.modalStakeHistory.length) return [];
+            const totalsByCapture = new Map();
+            for (const row of state.modalStakeHistory) {
+              const capturedAt = row?.captured_at ? new Date(row.captured_at).getTime() : null;
+              if (!Number.isFinite(capturedAt)) continue;
+              const raw = Number(row.balance_num ?? row.balance ?? row.balance_as_tao_num ?? null);
+              if (!Number.isFinite(raw)) continue;
+              totalsByCapture.set(capturedAt, (totalsByCapture.get(capturedAt) || 0) + raw);
+            }
+            return [...totalsByCapture.entries()].sort((a, b) => a[0] - b[0]);
+          })();
+          const alphaDailyChangeRaw = alphaHistorySeries.length > 1
+            ? (alphaHistorySeries[alphaHistorySeries.length - 1][1] - alphaHistorySeries[alphaHistorySeries.length - 2][1]) / 1e9
+            : null;
           const stakeCards = stakePositions.map((position) => {
             const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
             const hotkeyLabel = position.hotkey_name
@@ -4428,9 +4447,11 @@ function renderDashboardClientScript({ netuid, config }) {
           const freeText = freePct === null ? 'Available balance' : freePct.toFixed(1) + '% of total';
           const stakedText = stakedPct === null ? 'Locked in stake' : stakedPct.toFixed(1) + '% of total';
           const rootText = rootPct === null ? 'Stake at root' : rootPct.toFixed(1) + '% of staked';
-          const alphaText = alphaPct === null ? 'Subnet stake' : alphaPct.toFixed(1) + '% of staked';
-          const alphaChangeText = Number.isFinite(alpha24h)
-            ? '24h change ' + formatSignedAlphaAmount(alpha24h, 4)
+          const alphaText = Number.isFinite(alphaStakeRaw)
+            ? 'Raw α from current subnet stake positions'
+            : 'Raw α unavailable until stake history loads';
+          const alphaChangeText = Number.isFinite(alphaDailyChangeRaw)
+            ? '24h change ' + formatSignedAlphaAmount(alphaDailyChangeRaw, 4)
             : '24h change unavailable';
           modalElements.walletDetails.innerHTML = [
             '<h4 class="wallet-details-title">Wallet breakdown</h4>',
@@ -4457,7 +4478,7 @@ function renderDashboardClientScript({ netuid, config }) {
             '  </div>',
             '  <div class="wallet-breakdown-card">',
             '    <div class="label">Alpha stake</div>',
-            '    <div class="value">' + escapeHtml(formatAlpha(alphaStake, 4)) + '</div>',
+            '    <div class="value">' + escapeHtml(Number.isFinite(alphaStakeRaw) ? formatAlpha(alphaStakeRaw, 4) : '—') + '</div>',
             '    <div class="subtext">' + escapeHtml(alphaText + ' • ' + alphaChangeText) + '</div>',
             '  </div>',
             '  <div class="wallet-breakdown-card">',
