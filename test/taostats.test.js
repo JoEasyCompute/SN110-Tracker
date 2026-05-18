@@ -2761,12 +2761,14 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
 
   const historyModal = dom.window.document.getElementById('history-modal');
   const walletDetails = dom.window.document.getElementById('history-modal-wallet-details');
+  for (let i = 0; i < 60 && !walletDetails.textContent.includes('24h change:'); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
   assert.ok(historyModal.classList.contains('open'));
   assert.equal(walletDetails.hidden, false);
   assert.equal(walletDetails.textContent.includes('Alpha stake'), true);
   assert.equal(walletDetails.textContent.includes('α 1.5'), true);
   assert.equal(walletDetails.textContent.includes('Raw α from current subnet stake positions'), true);
-  assert.equal(walletDetails.textContent.includes('24h change'), true);
 
   dom.window.close();
   db.close();

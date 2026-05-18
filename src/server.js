@@ -4453,7 +4453,7 @@ function renderDashboardClientScript({ netuid, config }) {
             ? 'Raw α from current subnet stake positions'
             : 'Raw α unavailable until stake history loads';
           const alphaChangeText = Number.isFinite(alphaDailyChangeRaw)
-            ? '24h change ' + formatSignedAlphaAmount(alphaDailyChangeRaw, 4)
+            ? '24h change: ' + formatSignedAlphaAmount(alphaDailyChangeRaw, 4)
             : '24h change unavailable';
           modalElements.walletDetails.innerHTML = [
             '<h4 class="wallet-details-title">Wallet breakdown</h4>',
@@ -4481,7 +4481,8 @@ function renderDashboardClientScript({ netuid, config }) {
             '  <div class="wallet-breakdown-card">',
             '    <div class="label">Alpha stake</div>',
             '    <div class="value">' + escapeHtml(Number.isFinite(alphaStakeRaw) ? formatAlpha(alphaStakeRaw, 4) : '—') + '</div>',
-            '    <div class="subtext">' + escapeHtml(alphaText + ' • ' + alphaChangeText) + '</div>',
+            '    <div class="subtext">' + escapeHtml(alphaText) + '</div>',
+            '    <div class="subtext wallet-alpha-change">' + escapeHtml(alphaChangeText) + '</div>',
             '  </div>',
             '  <div class="wallet-breakdown-card">',
             '    <div class="label">24h Change</div>',
