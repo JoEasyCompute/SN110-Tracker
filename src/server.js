@@ -4249,6 +4249,13 @@ function renderDashboardClientScript({ netuid, config }) {
         return sign + formatAlpha(Math.abs(num), digits);
       }
 
+      function toAlphaUnits(value) {
+        if (value === null || value === undefined || value === '') return null;
+        const num = Number(value);
+        if (!Number.isFinite(num)) return null;
+        return Math.abs(num) >= 1e6 ? num / 1e9 : num;
+      }
+
       function renderWalletDetails(metric) {
         if (!modalElements.walletDetails) return;
         if (!metric || metric.kind !== 'wallet') {
@@ -4334,10 +4341,10 @@ function renderDashboardClientScript({ netuid, config }) {
           ].join('')).join('');
           const alphaStakeRaw = (() => {
             const totalRaw = stakePositions.reduce((sum, position) => {
-              const raw = Number(position.balance_num ?? position.balance ?? position.balance_as_tao_num ?? null);
+              const raw = toAlphaUnits(position.balance_num ?? position.balance ?? position.balance_as_tao_num ?? null);
               return Number.isFinite(raw) ? sum + raw : sum;
             }, 0);
-            return Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw / 1e9 : null;
+            return Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : null;
           })();
           const alphaHistorySeries = (() => {
             if (!Array.isArray(state.modalStakeHistory) || !state.modalStakeHistory.length) return [];
@@ -4345,18 +4352,17 @@ function renderDashboardClientScript({ netuid, config }) {
             for (const row of state.modalStakeHistory) {
               const capturedAt = row?.captured_at ? new Date(row.captured_at).getTime() : null;
               if (!Number.isFinite(capturedAt)) continue;
-              const raw = Number(row.balance_num ?? row.balance ?? row.balance_as_tao_num ?? null);
+              const raw = toAlphaUnits(row.balance_num ?? row.balance ?? row.balance_as_tao_num ?? null);
               if (!Number.isFinite(raw)) continue;
               totalsByCapture.set(capturedAt, (totalsByCapture.get(capturedAt) || 0) + raw);
             }
             return [...totalsByCapture.entries()].sort((a, b) => a[0] - b[0]);
           })();
           const alphaDailyChangeRaw = alphaHistorySeries.length > 1
-            ? (alphaHistorySeries[alphaHistorySeries.length - 1][1] - alphaHistorySeries[alphaHistorySeries.length - 2][1]) / 1e9
+            ? (alphaHistorySeries[alphaHistorySeries.length - 1][1] - alphaHistorySeries[alphaHistorySeries.length - 2][1])
             : null;
           const stakeCards = stakePositions.map((position) => {
-            const balanceRaw = Number(position.balance_num ?? position.balance ?? null);
-            const balance = Number.isFinite(balanceRaw) ? balanceRaw / 1e9 : null;
+            const balance = toAlphaUnits(position.balance_num ?? position.balance ?? null);
             const hotkeyLabel = position.hotkey_name
               || (position.hotkey_address_ss58 && configuredHotkeyMap.has(String(position.hotkey_address_ss58))
                 ? (configuredHotkeyMap.get(String(position.hotkey_address_ss58)).name || shortAddress(position.hotkey_address_ss58))
@@ -4378,8 +4384,7 @@ function renderDashboardClientScript({ netuid, config }) {
                 const previousByKey = new Map();
                 const rows = [];
                 for (const position of chronological) {
-                  const balanceRaw = Number(position.balance_num ?? position.balance ?? null);
-                  const balance = Number.isFinite(balanceRaw) ? balanceRaw / 1e9 : null;
+                  const balance = toAlphaUnits(position.balance_num ?? position.balance ?? null);
                   const hotkeyKey = String(position.hotkey_address_ss58 || position.hotkey_name || position.netuid || 'unknown');
                   const priorBalance = previousByKey.has(hotkeyKey) ? previousByKey.get(hotkeyKey) : null;
                   const delta = Number.isFinite(Number(balance)) && Number.isFinite(Number(priorBalance))
