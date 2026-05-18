@@ -2680,8 +2680,8 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
     rank: 12,
     balance_free: '1000000000',
     balance_staked: '2000000000',
-    balance_staked_alpha_as_tao: '500000000',
-    balance_staked_alpha_as_tao_24hr_ago: '350000000',
+    balance_staked_alpha_as_tao: '900000000',
+    balance_staked_alpha_as_tao_24hr_ago: '600000000',
     balance_staked_root: '1500000000',
     balance_total: '3000000000',
     balance_total_24hr_ago: '2500000000',
@@ -2769,6 +2769,8 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
   assert.equal(walletDetails.textContent.includes('Alpha stake'), true);
   assert.equal(walletDetails.textContent.includes('α 1.5'), true);
   assert.equal(walletDetails.textContent.includes('Raw α from current subnet stake positions'), true);
+  assert.equal(walletDetails.textContent.includes('24h change: +α 3'), true);
+  assert.equal(walletDetails.textContent.includes('≈ +τ 0.3 at current price'), true);
 
   dom.window.close();
   db.close();

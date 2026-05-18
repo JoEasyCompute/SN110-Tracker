@@ -4346,6 +4346,11 @@ function renderDashboardClientScript({ netuid, config }) {
             }, 0);
             return Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : null;
           })();
+          const alphaPrice = Number(metric.poolEstimator?.currentPool?.currentPrice);
+          const alphaChangeFromSnapshotTao = toNumeric(breakdown.alpha24h);
+          const alphaChangeFromSnapshotRaw = Number.isFinite(alphaChangeFromSnapshotTao) && Number.isFinite(alphaPrice) && alphaPrice > 0
+            ? alphaChangeFromSnapshotTao / alphaPrice
+            : null;
           const alphaHistorySeries = (() => {
             if (!Array.isArray(state.modalStakeHistory) || !state.modalStakeHistory.length) return [];
             const totalsByCapture = new Map();
@@ -4358,9 +4363,12 @@ function renderDashboardClientScript({ netuid, config }) {
             }
             return [...totalsByCapture.entries()].sort((a, b) => a[0] - b[0]);
           })();
-          const alphaDailyChangeRaw = alphaHistorySeries.length > 1
+          const alphaHistoryChangeRaw = alphaHistorySeries.length > 1
             ? (alphaHistorySeries[alphaHistorySeries.length - 1][1] - alphaHistorySeries[alphaHistorySeries.length - 2][1])
             : null;
+          const alphaDailyChangeRaw = Number.isFinite(alphaChangeFromSnapshotRaw)
+            ? alphaChangeFromSnapshotRaw
+            : alphaHistoryChangeRaw;
           const stakeCards = stakePositions.map((position) => {
             const balance = toAlphaUnits(position.balance_num ?? position.balance ?? null);
             const hotkeyLabel = position.hotkey_name
@@ -4460,6 +4468,9 @@ function renderDashboardClientScript({ netuid, config }) {
           const alphaChangeText = Number.isFinite(alphaDailyChangeRaw)
             ? '24h change: ' + formatSignedAlphaAmount(alphaDailyChangeRaw, 4)
             : '24h change unavailable';
+          const alphaChangeTaoText = Number.isFinite(alphaChangeFromSnapshotTao)
+            ? '≈ ' + formatSignedTao(alphaChangeFromSnapshotTao, 2) + ' at current price'
+            : 'Compared with the previous day';
           modalElements.walletDetails.innerHTML = [
             '<h4 class="wallet-details-title">Wallet breakdown</h4>',
             '<div class="wallet-breakdown-row">',
@@ -4488,6 +4499,7 @@ function renderDashboardClientScript({ netuid, config }) {
             '    <div class="value">' + escapeHtml(Number.isFinite(alphaStakeRaw) ? formatAlpha(alphaStakeRaw, 4) : '—') + '</div>',
             '    <div class="subtext">' + escapeHtml(alphaText) + '</div>',
             '    <div class="subtext wallet-alpha-change">' + escapeHtml(alphaChangeText) + '</div>',
+            '    <div class="subtext wallet-alpha-change">' + escapeHtml(alphaChangeTaoText) + '</div>',
             '  </div>',
             '  <div class="wallet-breakdown-card">',
             '    <div class="label">24h Change</div>',
