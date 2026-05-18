@@ -4355,7 +4355,8 @@ function renderDashboardClientScript({ netuid, config }) {
             ? (alphaHistorySeries[alphaHistorySeries.length - 1][1] - alphaHistorySeries[alphaHistorySeries.length - 2][1]) / 1e9
             : null;
           const stakeCards = stakePositions.map((position) => {
-            const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
+            const balanceRaw = Number(position.balance_num ?? position.balance ?? null);
+            const balance = Number.isFinite(balanceRaw) ? balanceRaw / 1e9 : null;
             const hotkeyLabel = position.hotkey_name
               || (position.hotkey_address_ss58 && configuredHotkeyMap.has(String(position.hotkey_address_ss58))
                 ? (configuredHotkeyMap.get(String(position.hotkey_address_ss58)).name || shortAddress(position.hotkey_address_ss58))
@@ -4364,7 +4365,7 @@ function renderDashboardClientScript({ netuid, config }) {
             return [
               '<div class="wallet-current-stake-card">',
               '  <div class="label">Netuid ' + escapeHtml(position.netuid ?? '—') + '</div>',
-              '  <div class="value">' + escapeHtml(formatWalletAmount(balance, 2, priceUsd)) + '</div>',
+              '  <div class="value">' + escapeHtml(Number.isFinite(balance) ? formatAlpha(balance, 4) : '—') + '</div>',
               '  <div class="subtext">' + escapeHtml(hotkeyLabel) + (hotkeyRole !== '—' ? ' • ' + escapeHtml(hotkeyRole) : '') + ' • Rank ' + escapeHtml(position.subnet_rank ?? '—') + '</div>',
               '</div>',
             ].join('');
@@ -4377,7 +4378,8 @@ function renderDashboardClientScript({ netuid, config }) {
                 const previousByKey = new Map();
                 const rows = [];
                 for (const position of chronological) {
-                  const balance = position.balance_as_tao_num ?? position.balance_num ?? null;
+                  const balanceRaw = Number(position.balance_num ?? position.balance ?? null);
+                  const balance = Number.isFinite(balanceRaw) ? balanceRaw / 1e9 : null;
                   const hotkeyKey = String(position.hotkey_address_ss58 || position.hotkey_name || position.netuid || 'unknown');
                   const priorBalance = previousByKey.has(hotkeyKey) ? previousByKey.get(hotkeyKey) : null;
                   const delta = Number.isFinite(Number(balance)) && Number.isFinite(Number(priorBalance))
@@ -4397,9 +4399,9 @@ function renderDashboardClientScript({ netuid, config }) {
                     '<td>' + escapeHtml(snapshotLabel) + '</td>',
                     '<td>' + escapeHtml(hotkeyLabel) + '</td>',
                     '<td>' + escapeHtml(position.netuid ?? '—') + '</td>',
-                    '<td>' + escapeHtml(formatWalletAmount(balance, 2, priceUsd)) + '</td>',
+                    '<td>' + escapeHtml(Number.isFinite(balance) ? formatAlpha(balance, 4) : '—') + '</td>',
                     '<td>' + escapeHtml(position.subnet_rank ?? '—') + '</td>',
-                    '<td><span class="wallet-history-delta ' + deltaClass + '">' + escapeHtml(delta === null ? '—' : formatWalletSignedAmount(delta, 2, priceUsd)) + '</span></td>',
+                    '<td><span class="wallet-history-delta ' + deltaClass + '">' + escapeHtml(delta === null ? '—' : formatSignedAlphaAmount(delta, 4)) + '</span></td>',
                     '</tr>',
                   ].join(''));
                 }

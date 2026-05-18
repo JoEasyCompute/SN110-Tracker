@@ -2761,9 +2761,6 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
 
   const historyModal = dom.window.document.getElementById('history-modal');
   const walletDetails = dom.window.document.getElementById('history-modal-wallet-details');
-  for (let i = 0; i < 40 && !walletDetails.textContent.includes('0.2'); i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
   assert.ok(historyModal.classList.contains('open'));
   assert.equal(walletDetails.hidden, false);
   assert.equal(walletDetails.textContent.includes('Alpha stake'), true);
