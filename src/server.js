@@ -4241,6 +4241,14 @@ function renderDashboardClientScript({ netuid, config }) {
         return formatSignedTao(num, digits);
       }
 
+      function formatSignedAlphaAmount(value, digits = 4) {
+        if (value === null || value === undefined || value === '') return '—';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return '—';
+        const sign = num > 0 ? '+' : num < 0 ? '-' : '';
+        return sign + formatAlpha(Math.abs(num), digits);
+      }
+
       function renderWalletDetails(metric) {
         if (!modalElements.walletDetails) return;
         if (!metric || metric.kind !== 'wallet') {
@@ -4260,13 +4268,13 @@ function renderDashboardClientScript({ netuid, config }) {
           const free = toNumeric(breakdown.free);
           const staked = toNumeric(breakdown.staked);
           const root = toNumeric(breakdown.root);
-          const alpha = toNumeric(breakdown.alpha);
+          const alphaStake = toNumeric(breakdown.alpha);
           const change24h = toNumeric(breakdown.change24h);
           const alpha24h = toNumeric(breakdown.alpha24h);
           const priceUsd = resolveUsdPrice(metric.latestTaoPriceUsd, state.latestTaoPriceUsd);
           const percent = (part, whole) => (Number.isFinite(part) && Number.isFinite(whole) && whole > 0 ? (part / whole) * 100 : null);
           const rootPct = percent(root, staked);
-          const alphaPct = percent(alpha, staked);
+          const alphaPct = percent(alphaStake, staked);
           const freePct = percent(free, total);
           const stakedPct = percent(staked, total);
           const stakeCount = Number(metric.stakeCount || 0);
@@ -4422,7 +4430,7 @@ function renderDashboardClientScript({ netuid, config }) {
           const rootText = rootPct === null ? 'Stake at root' : rootPct.toFixed(1) + '% of staked';
           const alphaText = alphaPct === null ? 'Subnet stake' : alphaPct.toFixed(1) + '% of staked';
           const alphaChangeText = Number.isFinite(alpha24h)
-            ? '24h change ' + formatWalletSignedAmount(alpha24h, 2, priceUsd)
+            ? '24h change ' + formatSignedAlphaAmount(alpha24h, 4)
             : '24h change unavailable';
           modalElements.walletDetails.innerHTML = [
             '<h4 class="wallet-details-title">Wallet breakdown</h4>',
@@ -4449,7 +4457,7 @@ function renderDashboardClientScript({ netuid, config }) {
             '  </div>',
             '  <div class="wallet-breakdown-card">',
             '    <div class="label">Alpha stake</div>',
-            '    <div class="value">' + escapeHtml(formatWalletAmount(alpha, 2, priceUsd)) + '</div>',
+            '    <div class="value">' + escapeHtml(formatAlpha(alphaStake, 4)) + '</div>',
             '    <div class="subtext">' + escapeHtml(alphaText + ' • ' + alphaChangeText) + '</div>',
             '  </div>',
             '  <div class="wallet-breakdown-card">',

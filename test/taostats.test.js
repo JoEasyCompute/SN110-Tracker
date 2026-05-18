@@ -2729,7 +2729,8 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
   assert.ok(historyModal.classList.contains('open'));
   assert.equal(walletDetails.hidden, false);
   assert.equal(walletDetails.textContent.includes('Alpha stake'), true);
-  assert.equal(walletDetails.textContent.includes('24h change'), true);
+  assert.equal(walletDetails.textContent.includes('α 0.5'), true);
+  assert.equal(walletDetails.textContent.includes('0.15'), true);
 
   dom.window.close();
   db.close();
