@@ -4262,6 +4262,7 @@ function renderDashboardClientScript({ netuid, config }) {
           const root = toNumeric(breakdown.root);
           const alpha = toNumeric(breakdown.alpha);
           const change24h = toNumeric(breakdown.change24h);
+          const alpha24h = toNumeric(breakdown.alpha24h);
           const priceUsd = resolveUsdPrice(metric.latestTaoPriceUsd, state.latestTaoPriceUsd);
           const percent = (part, whole) => (Number.isFinite(part) && Number.isFinite(whole) && whole > 0 ? (part / whole) * 100 : null);
           const rootPct = percent(root, staked);
@@ -4420,6 +4421,9 @@ function renderDashboardClientScript({ netuid, config }) {
           const stakedText = stakedPct === null ? 'Locked in stake' : stakedPct.toFixed(1) + '% of total';
           const rootText = rootPct === null ? 'Stake at root' : rootPct.toFixed(1) + '% of staked';
           const alphaText = alphaPct === null ? 'Subnet stake' : alphaPct.toFixed(1) + '% of staked';
+          const alphaChangeText = Number.isFinite(alpha24h)
+            ? '24h change ' + formatWalletSignedAmount(alpha24h, 2, priceUsd)
+            : '24h change unavailable';
           modalElements.walletDetails.innerHTML = [
             '<h4 class="wallet-details-title">Wallet breakdown</h4>',
             '<div class="wallet-breakdown-row">',
@@ -4444,9 +4448,9 @@ function renderDashboardClientScript({ netuid, config }) {
             '    <div class="subtext">' + escapeHtml(rootText) + '</div>',
             '  </div>',
             '  <div class="wallet-breakdown-card">',
-            '    <div class="label">Alpha</div>',
+            '    <div class="label">Alpha stake</div>',
             '    <div class="value">' + escapeHtml(formatWalletAmount(alpha, 2, priceUsd)) + '</div>',
-            '    <div class="subtext">' + escapeHtml(alphaText) + '</div>',
+            '    <div class="subtext">' + escapeHtml(alphaText + ' • ' + alphaChangeText) + '</div>',
             '  </div>',
             '  <div class="wallet-breakdown-card">',
             '    <div class="label">24h Change</div>',

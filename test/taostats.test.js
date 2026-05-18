@@ -290,6 +290,7 @@ test('sqlite persistence stores and retrieves wallet balance history', () => {
     balance_free: '1000000000',
     balance_staked: '2000000000',
     balance_staked_alpha_as_tao: '500000000',
+    balance_staked_alpha_as_tao_24hr_ago: '350000000',
     balance_staked_root: '1500000000',
     balance_total: '3000000000',
     balance_total_24hr_ago: '2500000000',
@@ -2617,6 +2618,118 @@ test('ctrl-clicking a wallet card opens the transaction modal and renders the ti
   assert.equal(txBodyRows.length, 1);
   assert.equal(txDetail.hidden, false);
   assert.equal(txDetail.textContent.includes('"source_type": "transfer"'), true);
+
+  dom.window.close();
+  db.close();
+});
+
+test('clicking a wallet card opens the history modal and shows alpha stake change', async () => {
+  const db = openDatabase(':memory:');
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 110,
+    block_number: 1,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '0.1',
+    market_cap: '2000000000',
+    liquidity: '100000000000',
+    total_tao: '100000000000',
+    alpha_in_pool: '1000',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 }));
+  insertWalletSnapshot(db, normalizeAccountSnapshot({
+    address: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    network: 'finney',
+    block_number: 2,
+    timestamp: '2026-04-30T00:00:00Z',
+    rank: 12,
+    balance_free: '1000000000',
+    balance_staked: '2000000000',
+    balance_staked_alpha_as_tao: '500000000',
+    balance_staked_alpha_as_tao_24hr_ago: '350000000',
+    balance_staked_root: '1500000000',
+    balance_total: '3000000000',
+    balance_total_24hr_ago: '2500000000',
+    created_on_date: '2025-01-01',
+    created_on_network: 'finney',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', network: 'finney', capturedAt: '2026-04-30T00:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: '5WalletAlpha123456789ABCDEFGH', hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 8,
+    subnet_total_holders: 256,
+    balance: '1500000000',
+    balance_as_tao: '2500000000',
+    timestamp: '2026-04-30T00:00:00Z',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: '5WalletAlpha123456789ABCDEFGH', capturedAt: '2026-04-30T00:00:00.000Z' }));
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: 'token',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [{ name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [{ name: 'Miner One', ss58: '5HotkeyOne', netuid: 111, network: 'finney', role: 'validator' }] }],
+    },
+    netuid: 110,
+  });
+
+  const html = renderPage(model);
+  const dom = new JSDOM(html, {
+    url: 'http://localhost:3003/',
+    runScripts: 'dangerously',
+    resources: 'usable',
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.fetch = async (url) => {
+        const text = String(url);
+        if (text.includes('/transactions')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              available: true,
+              partial: false,
+              reason: null,
+              days: 7,
+              address: '5WalletAlpha123456789ABCDEFGH',
+              walletName: 'Alpha Treasury',
+              network: 'finney',
+              rows: [],
+              summary: { total: 0, extrinsics: 0, transfers: 0, stakeSnapshots: 0, stakeDelta: 0, hotkeysTracked: 1 },
+              hotkeys: [{ ss58: '5HotkeyOne', name: 'Miner One', netuid: 111, role: 'validator', network: 'finney', source: 'configured' }],
+            }),
+            text: async () => '[]',
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' };
+      };
+      window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+      window.SVGElement.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 500, height: 160, right: 500, bottom: 160 });
+      window.HTMLCanvasElement.prototype.getContext = () => ({ clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, rect() {}, arc() {}, closePath() {}, save() {}, restore() {}, setLineDash() {}, fillText() {}, measureText() { return { width: 10 }; } });
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
+  const walletButton = Array.from(dom.window.document.querySelectorAll('[data-metric]'))
+    .find((button) => {
+      const metric = String(button.dataset.metric || '');
+      return metric.includes('"kind":"wallet"') && metric.includes('Alpha Treasury');
+    });
+  assert.ok(walletButton);
+
+  walletButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  const historyModal = dom.window.document.getElementById('history-modal');
+  const walletDetails = dom.window.document.getElementById('history-modal-wallet-details');
+  assert.ok(historyModal.classList.contains('open'));
+  assert.equal(walletDetails.hidden, false);
+  assert.equal(walletDetails.textContent.includes('Alpha stake'), true);
+  assert.equal(walletDetails.textContent.includes('24h change'), true);
 
   dom.window.close();
   db.close();
