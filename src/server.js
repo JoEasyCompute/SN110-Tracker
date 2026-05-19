@@ -6784,6 +6784,17 @@ function renderPage(model, { experimental = false } = {}) {
     rankHistoryStartAt: alphaHolderRankHistoryStartAt,
     taostatsPublicBaseUrl: config.taostatsPublicBaseUrl,
   }) : '';
+  const experimentalDetailsHtml = experimental ? `
+      <details class="experimental-details-panel">
+        <summary>Details</summary>
+        <div class="experimental-details-body">
+          ${walletSectionHtml}
+          ${poolGrowthSectionHtml}
+          ${financialPerspectiveSectionHtml}
+          ${alphaHolderSectionHtml}
+        </div>
+      </details>
+    ` : '';
   const stableSectionsHtml = [
     walletSectionHtml,
     poolGrowthSectionHtml,
@@ -6797,12 +6808,9 @@ function renderPage(model, { experimental = false } = {}) {
   ].join('');
   const experimentalSectionsHtml = [
     experimentalOverviewSection,
-    financialPerspectiveSectionHtml,
     keyMetricsSectionHtml,
     subnetStatsSectionHtml,
-    walletSectionHtml,
-    poolGrowthSectionHtml,
-    alphaHolderSectionHtml,
+    experimentalDetailsHtml,
     comparisonsSectionHtml,
     trendChartsSectionHtml,
     supportingChartsSectionHtml,
@@ -6972,6 +6980,52 @@ function renderPage(model, { experimental = false } = {}) {
         margin-top: 4px;
         font-size: 10px;
         line-height: 1.3;
+      }
+      .experimental-page .experimental-details-panel {
+        margin-top: 16px;
+        border: 1px solid rgba(143, 163, 184, 0.20);
+        border-radius: 18px;
+        background: rgba(10, 15, 23, 0.62);
+        overflow: hidden;
+      }
+      .experimental-page .experimental-details-panel > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 12px 14px;
+        font-weight: 700;
+        color: rgba(231, 238, 247, 0.92);
+        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .experimental-page .experimental-details-panel > summary::-webkit-details-marker {
+        display: none;
+      }
+      .experimental-page .experimental-details-panel > summary::before {
+        content: '▸';
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--accent);
+        transition: transform 0.18s ease;
+        flex: 0 0 auto;
+      }
+      .experimental-page .experimental-details-panel[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .experimental-page .experimental-details-body {
+        display: grid;
+        gap: 12px;
+        padding: 12px;
+      }
+      .experimental-page .experimental-details-body .section {
+        margin-top: 0;
+      }
+      .experimental-page .experimental-details-body .financial-panel {
+        margin-top: 0;
       }
       .experimental-page .admin-panel.experimental-admin {
         border-color: rgba(143, 163, 184, 0.20);
