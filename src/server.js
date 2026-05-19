@@ -6788,15 +6788,10 @@ function renderPage(model, { experimental = false } = {}) {
       <details class="experimental-details-panel">
         <summary>Explore more</summary>
         <div class="experimental-details-body">
-          ${keyMetricsSectionHtml}
-          ${subnetStatsSectionHtml}
           ${walletSectionHtml}
           ${poolGrowthSectionHtml}
           ${financialPerspectiveSectionHtml}
           ${alphaHolderSectionHtml}
-          ${comparisonsSectionHtml}
-          ${trendChartsSectionHtml}
-          ${supportingChartsSectionHtml}
         </div>
       </details>
     ` : '';
@@ -6813,6 +6808,11 @@ function renderPage(model, { experimental = false } = {}) {
   ].join('');
   const experimentalSectionsHtml = [
     experimentalOverviewSection,
+    keyMetricsSectionHtml,
+    subnetStatsSectionHtml,
+    comparisonsSectionHtml,
+    trendChartsSectionHtml,
+    supportingChartsSectionHtml,
     experimentalDetailsHtml,
   ].join('');
 
