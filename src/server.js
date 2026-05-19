@@ -5788,7 +5788,12 @@ function renderDashboardClientScript({ netuid, config }) {
 
       function supportsRangeSummary(metric) {
         const key = String(metric?.key || '');
-        return metric?.kind === 'tao-price' || key === 'price_num' || key === 'market_cap_num';
+        return metric?.kind === 'tao-price'
+          || key === 'price_num'
+          || key === 'market_cap_num'
+          || key === 'emission_percent_num'
+          || key === 'alpha_holders_num'
+          || metric?.historySource === 'alpha-holder';
       }
 
       function computeRangeSummary(metric, history, days) {

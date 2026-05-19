@@ -2903,6 +2903,187 @@ test('clicking the TAO price badge opens the history modal and shows 14D and 30D
   db.close();
 });
 
+test('clicking emission rate and alpha holder subnet stats opens the history modal and shows 7D and 14D ranges', async () => {
+  const db = openDatabase(':memory:');
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 110,
+    block_number: 1,
+    timestamp: '2026-04-16T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '0.1',
+    market_cap: '2000000000',
+    liquidity: '100000000000',
+    total_tao: '100000000000',
+    alpha_in_pool: '1000',
+    emission_percent: '0.5',
+    alpha_holders: '2',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 }));
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 110,
+    block_number: 2,
+    timestamp: '2026-04-25T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '0.1',
+    market_cap: '2000000000',
+    liquidity: '100000000000',
+    total_tao: '100000000000',
+    alpha_in_pool: '1000',
+    emission_percent: '0.8',
+    alpha_holders: '4',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 }));
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 110,
+    block_number: 3,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '0.1',
+    market_cap: '2000000000',
+    liquidity: '100000000000',
+    total_tao: '100000000000',
+    alpha_in_pool: '1000',
+    emission_percent: '1.2',
+    alpha_holders: '7',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8160001,
+    timestamp: '2026-04-16T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 2,
+    balance: '1000000000',
+    balance_as_tao: '500000000',
+    coldkey: { ss58: '5AlphaHolderOne', hex: '0xholder1' },
+    hotkey: { ss58: '5ValOne', hex: '0xval1' },
+    hotkey_name: 'Validator One',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-16T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8161001,
+    timestamp: '2026-04-25T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 4,
+    balance: '1000000000',
+    balance_as_tao: '500000000',
+    coldkey: { ss58: '5AlphaHolderOne', hex: '0xholder1' },
+    hotkey: { ss58: '5ValOne', hex: '0xval1' },
+    hotkey_name: 'Validator One',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-25T00:00:00.000Z' }));
+  insertAlphaHolderSnapshot(db, normalizeStakeBalanceSnapshot({
+    block_number: 8162001,
+    timestamp: '2026-04-30T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 7,
+    balance: '1000000000',
+    balance_as_tao: '500000000',
+    coldkey: { ss58: '5AlphaHolderOne', hex: '0xholder1' },
+    hotkey: { ss58: '5ValOne', hex: '0xval1' },
+    hotkey_name: 'Validator One',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z' }));
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: 'token',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [],
+    },
+    netuid: 110,
+  });
+
+  const html = renderPage(model);
+  const dom = new JSDOM(html, {
+    url: 'http://localhost:3003/',
+    runScripts: 'dangerously',
+    resources: 'usable',
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.fetch = async (url) => {
+        const text = String(url);
+        if (text.includes('/api/subnets/110/alpha-holder-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              netuid: 110,
+              days: 30,
+              history: [
+                { captured_at: '2026-04-16T00:00:00.000Z', alpha_holders_num: 2 },
+                { captured_at: '2026-04-25T00:00:00.000Z', alpha_holders_num: 4 },
+                { captured_at: '2026-04-30T00:00:00.000Z', alpha_holders_num: 7 },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
+        if (text.includes('/api/subnets/110/history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              netuid: 110,
+              days: 30,
+              history: [
+                { captured_at: '2026-04-16T00:00:00.000Z', emission_percent_num: 0.5, market_cap_num: 100, price_num: 0.1 },
+                { captured_at: '2026-04-25T00:00:00.000Z', emission_percent_num: 0.8, market_cap_num: 100, price_num: 0.1 },
+                { captured_at: '2026-04-30T00:00:00.000Z', emission_percent_num: 1.2, market_cap_num: 100, price_num: 0.1 },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' };
+      };
+      window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+      window.SVGElement.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 500, height: 160, right: 500, bottom: 160 });
+      window.HTMLCanvasElement.prototype.getContext = () => ({ clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, rect() {}, arc() {}, closePath() {}, save() {}, restore() {}, setLineDash() {}, fillText() {}, measureText() { return { width: 10 }; } });
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
+  const findMetricButton = (label) => [...dom.window.document.querySelectorAll('[data-metric]')].find((element) => {
+    try {
+      return JSON.parse(element.getAttribute('data-metric') || '{}').label === label;
+    } catch {
+      return false;
+    }
+  });
+
+  const emissionButton = findMetricButton('Emission Rate');
+  assert.equal(emissionButton?.tagName, 'BUTTON');
+  emissionButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 600));
+
+  const historyModal = dom.window.document.getElementById('history-modal');
+  const rangeSummary = dom.window.document.getElementById('history-modal-range-summary');
+  assert.ok(historyModal.classList.contains('open'));
+  assert.equal(rangeSummary.hidden, false);
+  assert.equal(rangeSummary.textContent.includes('7D (Low/High)'), true);
+  assert.equal(rangeSummary.textContent.includes('14D (Low/High)'), true);
+  assert.match(rangeSummary.textContent, /0\.8\d*% \/ 1\.2\d*%/);
+  assert.match(rangeSummary.textContent, /0\.5\d*% \/ 1\.2\d*%/);
+
+  const alphaButton = findMetricButton('Alpha Holders');
+  assert.equal(alphaButton?.tagName, 'BUTTON');
+  alphaButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 600));
+
+  assert.ok(historyModal.classList.contains('open'));
+  assert.equal(rangeSummary.hidden, false);
+  assert.equal(rangeSummary.textContent.includes('7D (Low/High)'), true);
+  assert.equal(rangeSummary.textContent.includes('14D (Low/High)'), true);
+  assert.equal(rangeSummary.textContent.includes('4 / 7'), true);
+  assert.equal(rangeSummary.textContent.includes('2 / 7'), true);
+
+  dom.window.close();
+  db.close();
+});
+
 test('renderPage hides admin tools when no admin api key is configured', () => {
   const db = openDatabase(':memory:');
   const model = buildPageModel({
