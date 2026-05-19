@@ -6615,7 +6615,7 @@ function renderDashboardClientScript({ netuid, config }) {
 `;
 }
 
-function renderPage(model) {
+function renderPage(model, { experimental = false } = {}) {
   const {
     latest,
     recent,
@@ -6644,6 +6644,7 @@ function renderPage(model) {
   const signal = latest ? buildSignalSummary(latest, comparisons, latestMetricDefs) : null;
   const insight = buildInsightSummary(latest, comparisons, signal);
   const title = `${subnetLabel || `SN${netuid}`} Tracker`;
+  const pageTitle = experimental ? `Experimental ${title}` : title;
   const subtitle = latest
     ? `Latest snapshot captured ${formatRelativeIso(latest.captured_at)}`
     : 'No snapshots captured yet';
@@ -6673,6 +6674,11 @@ function renderPage(model) {
     ? (config.adminAuthenticated
       ? `<form class="admin-session-form topbar-admin-session" method="post" action="/admin/logout"><button class="button" type="submit">Admin logout</button></form>`
       : '<a class="button" href="/admin">Admin login</a>')
+    : '';
+  const dashboardSwitchAction = config.adminAuthenticated
+    ? (experimental
+      ? `<a class="button" href="/subnets/${netuid}">Open stable dashboard</a>`
+      : `<a class="button" href="/subnets/${netuid}/experimental">Open experimental dashboard</a>`)
     : '';
 
   const latestRunCard = ingestRun
@@ -6720,7 +6726,7 @@ function renderPage(model) {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
+    <title>${escapeHtml(pageTitle)}</title>
     <style>
       :root {
         color-scheme: dark;
@@ -6795,6 +6801,47 @@ function renderPage(model) {
         align-items: center;
         gap: 10px;
         flex-wrap: wrap;
+      }
+      .experimental-banner {
+        margin-bottom: 18px;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        background: linear-gradient(180deg, rgba(245, 158, 11, 0.10), rgba(16, 23, 34, 0.86));
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .experimental-banner-copy {
+        display: grid;
+        gap: 6px;
+      }
+      .experimental-banner-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        font-size: 18px;
+        font-weight: 700;
+      }
+      .experimental-banner-copy p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .experimental-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 7px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(245, 158, 11, 0.45);
+        background: rgba(245, 158, 11, 0.12);
+        color: #ffe6b0;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
       }
       .poll-switcher {
         display: inline-flex;
@@ -8646,15 +8693,29 @@ function renderPage(model) {
   <body>
     <div class="shell" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" data-latest-snapshot-signature="${escapeHtml(latest?.captured_at ? `${latest.captured_at}|${latest.block_number ?? ''}|${latest.source ?? ''}` : '')}" data-latest-ingest-run-id="${escapeHtml(ingestRun?.id ?? '')}">
       <div class="topbar">
-        <div class="muted">Local Taostats tracker for ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
+        <div class="muted">${experimental ? 'Experimental dashboard' : 'Local Taostats tracker'} for ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
         <div class="actions">
           <button class="price-badge price-badge-button" id="tao-price-label" type="button" aria-live="polite" title="Click to view TAO price history">${escapeHtml(taoPriceText)}</button>
           <div class="price-badge next-poll-badge" id="next-poll-label" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" title="${escapeHtml(nextPollTitle)}">${escapeHtml(nextPollText)}</div>
           <button class="button" id="currency-toggle" type="button" disabled>Show USD</button>
           ${adminSessionAction}
+          ${dashboardSwitchAction}
         </div>
         ${walletActivityBadge ? `<div class="topbar-wallet-status" id="wallet-activity-topbar-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
       </div>
+
+      ${experimental ? `
+      <section class="panel experimental-banner" aria-label="Experimental dashboard notice">
+        <div class="experimental-banner-copy">
+          <div class="experimental-banner-title">
+            <span class="experimental-pill">Experimental</span>
+            <span>Separate layout for dashboard iteration</span>
+          </div>
+          <p>This page reuses the same live data and modals as the stable dashboard, but is isolated for presentation and hierarchy changes.</p>
+        </div>
+        ${config.adminAuthenticated ? `<a class="button primary" href="/subnets/${netuid}">Return to stable dashboard</a>` : ''}
+      </section>
+      ` : ''}
 
       ${latestCard}
 
@@ -8901,7 +8962,9 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
-      const match = url.pathname.match(/^\/subnets\/(\d+)$/) || url.pathname.match(/^\/api\/subnets\/(\d+)\/(latest|history|ingest|backfill|wallet-backfill)$/);
+      const match = url.pathname.match(/^\/subnets\/(\d+)$/)
+        || url.pathname.match(/^\/subnets\/(\d+)\/experimental$/)
+        || url.pathname.match(/^\/api\/subnets\/(\d+)\/(latest|history|ingest|backfill|wallet-backfill)$/);
       const netuid = match ? Number(match[1]) : config.netuid;
 
       if (req.method === 'GET' && url.pathname === '/') {
@@ -8961,6 +9024,22 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         const model = buildPageModel({ db, config: pageConfig, netuid });
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(renderPage(model));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === `/subnets/${netuid}/experimental`) {
+        const adminAuthenticated = verifyAdminSession(req, config);
+        const pageConfig = {
+          ...config,
+          adminAuthEnabled: Boolean(String(config.taostatsAdminApiKey || '').trim()),
+          adminAuthenticated,
+          ingestActive: typeof ingestService.isActive === 'function' ? ingestService.isActive() : false,
+          activeIngestJob: typeof ingestService.getActiveJob === 'function' ? ingestService.getActiveJob() : null,
+          taostatsAdminApiKey: '',
+        };
+        const model = buildPageModel({ db, config: pageConfig, netuid });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderPage(model, { experimental: true }));
         return;
       }
 

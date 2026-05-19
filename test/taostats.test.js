@@ -3126,6 +3126,7 @@ test('dashboard admin panel requires an authenticated admin session', async () =
     const publicHtml = await publicDashboard.text();
     assert.equal(publicHtml.includes('Admin panel'), false);
     assert.equal(publicHtml.includes('Admin login'), true);
+    assert.equal(publicHtml.includes('Open experimental dashboard'), false);
     assert.equal(publicHtml.includes('admin-secret'), false);
 
     const unauthenticatedPost = await fetch(`${baseUrl}/api/subnets/110/ingest`, { method: 'POST' });
@@ -3156,7 +3157,18 @@ test('dashboard admin panel requires an authenticated admin session', async () =
     const authenticatedHtml = await authenticatedDashboard.text();
     assert.equal(authenticatedHtml.includes('Admin panel'), true);
     assert.equal(authenticatedHtml.includes('Schedules & runs'), true);
+    assert.equal(authenticatedHtml.includes('Open experimental dashboard'), true);
     assert.equal(authenticatedHtml.includes('admin-secret'), false);
+
+    const experimentalDashboard = await fetch(`${baseUrl}/subnets/110/experimental`, {
+      headers: { cookie },
+    });
+    const experimentalHtml = await experimentalDashboard.text();
+    assert.equal(experimentalDashboard.status, 200);
+    assert.equal(experimentalHtml.includes('Experimental dashboard'), true);
+    assert.equal(experimentalHtml.includes('Separate layout for dashboard iteration'), true);
+    assert.equal(experimentalHtml.includes('Return to stable dashboard'), true);
+    assert.equal(experimentalHtml.includes('history-modal-range-summary'), true);
 
     const authenticatedPost = await fetch(`${baseUrl}/api/subnets/110/ingest`, {
       method: 'POST',
