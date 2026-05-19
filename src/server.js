@@ -6962,14 +6962,16 @@ function renderPage(model, { experimental = false } = {}) {
         text-transform: uppercase;
       }
       .experimental-page .experimental-overview .card {
-        padding: 12px;
+        padding: 10px;
       }
       .experimental-page .experimental-overview .card-value {
-        font-size: 16px;
+        margin-top: 6px;
+        font-size: 15px;
       }
       .experimental-page .experimental-overview .card-subtext {
-        font-size: 11px;
-        line-height: 1.35;
+        margin-top: 4px;
+        font-size: 10px;
+        line-height: 1.3;
       }
       .experimental-page .admin-panel.experimental-admin {
         border-color: rgba(143, 163, 184, 0.20);
@@ -6979,11 +6981,38 @@ function renderPage(model, { experimental = false } = {}) {
         color: rgba(231, 238, 247, 0.9);
       }
       .experimental-page .admin-panel.experimental-admin .admin-panel-body {
-        padding-top: 14px;
+        padding: 12px;
       }
       .experimental-page .admin-panel.experimental-admin .panel {
         border-color: rgba(143, 163, 184, 0.16);
         background: rgba(16, 23, 34, 0.62);
+        padding: 12px;
+      }
+      .experimental-page .admin-panel.experimental-admin .admin-actions {
+        margin-bottom: 12px;
+      }
+      .experimental-page .admin-panel.experimental-admin .schedule-queue {
+        gap: 8px;
+      }
+      .experimental-page .admin-panel.experimental-admin .schedule-queue-list {
+        gap: 8px;
+      }
+      .experimental-page .admin-panel.experimental-admin .schedule-queue-item {
+        padding: 10px 12px;
+        border-radius: 12px;
+      }
+      .experimental-page .admin-panel.experimental-admin .schedule-queue-item-title {
+        font-size: 13px;
+      }
+      .experimental-page .admin-panel.experimental-admin .schedule-queue-item-meta {
+        margin-top: 4px;
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      .experimental-page .admin-panel.experimental-admin .schedule-status-table th,
+      .experimental-page .admin-panel.experimental-admin .schedule-status-table td {
+        padding-top: 8px;
+        padding-bottom: 8px;
       }
       .experimental-page .admin-panel.experimental-admin .button {
         background: rgba(16, 23, 34, 0.92);
