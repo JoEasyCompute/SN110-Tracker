@@ -3168,6 +3168,7 @@ test('dashboard admin panel requires an authenticated admin session', async () =
     assert.equal(experimentalHtml.includes('Experimental dashboard'), true);
     assert.equal(experimentalHtml.includes('Separate layout for dashboard iteration'), true);
     assert.equal(experimentalHtml.includes('Return to stable dashboard'), true);
+    assert.equal(experimentalHtml.includes('Overview'), true);
     assert.equal(experimentalHtml.includes('history-modal-range-summary'), true);
 
     const authenticatedPost = await fetch(`${baseUrl}/api/subnets/110/ingest`, {

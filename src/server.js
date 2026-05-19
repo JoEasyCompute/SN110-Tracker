@@ -6689,6 +6689,116 @@ function renderPage(model, { experimental = false } = {}) {
         tone: ingestRun.ok ? 'positive' : 'negative',
       })
     : metricCard({ label: 'Latest ingest', value: '—', subtext: 'No run yet' });
+  const overviewIngestCard = metricCard({
+    label: 'Ingest health',
+    value: ingestRun ? (ingestRun.ok ? 'Healthy' : 'Failed') : '—',
+    subtext: ingestRun
+      ? `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}${ingestRun.fallback_used ? ' • fallback used' : ''}`
+      : 'No ingest run recorded',
+    tone: ingestRun ? (ingestRun.ok ? 'positive' : 'negative') : 'neutral',
+  });
+  const overviewSnapshotCard = metricCard({
+    label: 'Snapshot freshness',
+    value: latest ? formatRelativeIso(latest.captured_at) : '—',
+    subtext: latest ? `Source: ${latest.source}${latest.block_number ? ` • block ${latest.block_number}` : ''}` : 'No current snapshot',
+    tone: latest ? 'positive' : 'neutral',
+  });
+  const overviewWalletCard = metricCard({
+    label: 'Wallet cache',
+    value: walletActivityStatus?.lastRunAtIso ? formatRelativeIso(walletActivityStatus.lastRunAtIso) : '—',
+    subtext: walletActivityText || 'Wallet activity unavailable',
+    tone: walletActivityStatus?.lastRunAtIso ? 'positive' : 'neutral',
+  });
+  const overviewQueueCard = metricCard({
+    label: 'Next scheduled work',
+    value: scheduleQueue?.[0]?.title || '—',
+    subtext: scheduleQueue?.[0]?.detail || 'No queued jobs at the moment',
+    tone: scheduleQueue?.[0] ? 'accent' : 'neutral',
+  });
+  const experimentalOverviewSection = experimental ? `
+      <section class="section">
+        <h2>Overview</h2>
+        <div class="grid stats">
+          ${overviewSnapshotCard}
+          ${overviewIngestCard}
+          ${overviewWalletCard}
+          ${overviewQueueCard}
+        </div>
+      </section>
+    ` : '';
+  const walletSectionHtml = renderWalletSection(walletEntries, latest, walletActivityStatus);
+  const poolGrowthSectionHtml = renderPoolGrowthSection(latest);
+  const financialPerspectiveSectionHtml = renderFinancialPerspectiveSection(signal, insight);
+  const keyMetricsSectionHtml = `
+      <section class="section">
+        <h2>Key metrics</h2>
+        <div class="grid">${cards}</div>
+      </section>
+    `;
+  const subnetStatsSectionHtml = `
+      <section class="section">
+        <h2>Subnet stats</h2>
+        <div class="grid stats">${latest ? renderSubnetDataCards(latest, subnetLabel) : ''}</div>
+      </section>
+    `;
+  const comparisonsSectionHtml = `
+      <section class="section">
+        <h2>What changed in the last 24h</h2>
+        ${renderComparisonSection(comparisons)}
+      </section>
+    `;
+  const trendChartsSectionHtml = `
+      <section class="section">
+        <h2>Trend charts</h2>
+        <div class="chart-grid">
+          <div class="panel"><h3>Token Price</h3><div class="chart-frame"><canvas id="price-chart"></canvas></div><div class="chart-note" id="price-chart-note" hidden></div></div>
+          <div class="panel"><h3>Money In/Out (1d)</h3><div class="chart-frame"><canvas id="net-flow-1d-chart"></canvas></div><div class="chart-note" id="net-flow-1d-chart-note" hidden></div></div>
+          <div class="panel"><h3>Subnet Sentiment (SSI)</h3><div class="chart-frame"><canvas id="sentiment-chart"></canvas></div><div class="chart-note" id="sentiment-chart-note" hidden></div></div>
+        </div>
+      </section>
+    `;
+  const supportingChartsSectionHtml = `
+      <section class="section">
+        <h2>Supporting charts</h2>
+        <div class="chart-grid">
+          <div class="panel"><h3>Emission Rate</h3><div class="chart-frame"><canvas id="emission-rate-chart"></canvas></div><div class="chart-note" id="emission-rate-chart-note" hidden></div></div>
+          <div class="panel"><h3>Subnet Market Cap</h3><div class="chart-frame"><canvas id="market-cap-chart"></canvas></div><div class="chart-note" id="market-cap-chart-note" hidden></div></div>
+          <div class="panel"><h3>Pool Liquidity</h3><div class="chart-frame"><canvas id="liquidity-chart"></canvas></div><div class="chart-note" id="liquidity-chart-note" hidden></div></div>
+        </div>
+      </section>
+    `;
+  const alphaHolderSectionHtml = (alphaHolderRows.length || alphaHolderRankingRows.length) ? renderAlphaHolderSection(alphaHolderRows, {
+    latestCaptureAt: alphaHolderRows?.[0]?.captured_at ?? null,
+    totalRowCount: alphaHolderRowCount,
+    rankingRows: alphaHolderRankingRows,
+    currentRankingRow: alphaHolderCurrentRankRow,
+    currentNetuid: netuid,
+    rankHistoryStartAt: alphaHolderRankHistoryStartAt,
+    taostatsPublicBaseUrl: config.taostatsPublicBaseUrl,
+  }) : '';
+  const stableSectionsHtml = [
+    walletSectionHtml,
+    poolGrowthSectionHtml,
+    financialPerspectiveSectionHtml,
+    keyMetricsSectionHtml,
+    subnetStatsSectionHtml,
+    alphaHolderSectionHtml,
+    comparisonsSectionHtml,
+    trendChartsSectionHtml,
+    supportingChartsSectionHtml,
+  ].join('');
+  const experimentalSectionsHtml = [
+    experimentalOverviewSection,
+    financialPerspectiveSectionHtml,
+    keyMetricsSectionHtml,
+    subnetStatsSectionHtml,
+    walletSectionHtml,
+    poolGrowthSectionHtml,
+    alphaHolderSectionHtml,
+    comparisonsSectionHtml,
+    trendChartsSectionHtml,
+    supportingChartsSectionHtml,
+  ].join('');
 
   const latestCard = latest
     ? `
@@ -8719,54 +8829,7 @@ function renderPage(model, { experimental = false } = {}) {
 
       ${latestCard}
 
-      ${renderWalletSection(walletEntries, latest, walletActivityStatus)}
-
-      ${renderPoolGrowthSection(latest)}
-
-      ${renderFinancialPerspectiveSection(signal, insight)}
-
-      <section class="section">
-        <h2>Key metrics</h2>
-        <div class="grid">${cards}</div>
-      </section>
-
-      <section class="section">
-        <h2>Subnet stats</h2>
-        <div class="grid stats">${latest ? renderSubnetDataCards(latest, subnetLabel) : ''}</div>
-      </section>
-
-      ${(alphaHolderRows.length || alphaHolderRankingRows.length) ? renderAlphaHolderSection(alphaHolderRows, {
-        latestCaptureAt: alphaHolderRows?.[0]?.captured_at ?? null,
-        totalRowCount: alphaHolderRowCount,
-        rankingRows: alphaHolderRankingRows,
-        currentRankingRow: alphaHolderCurrentRankRow,
-        currentNetuid: netuid,
-        rankHistoryStartAt: alphaHolderRankHistoryStartAt,
-        taostatsPublicBaseUrl: config.taostatsPublicBaseUrl,
-      }) : ''}
-
-      <section class="section">
-        <h2>What changed in the last 24h</h2>
-        ${renderComparisonSection(comparisons)}
-      </section>
-
-      <section class="section">
-        <h2>Trend charts</h2>
-        <div class="chart-grid">
-          <div class="panel"><h3>Token Price</h3><div class="chart-frame"><canvas id="price-chart"></canvas></div><div class="chart-note" id="price-chart-note" hidden></div></div>
-          <div class="panel"><h3>Money In/Out (1d)</h3><div class="chart-frame"><canvas id="net-flow-1d-chart"></canvas></div><div class="chart-note" id="net-flow-1d-chart-note" hidden></div></div>
-          <div class="panel"><h3>Subnet Sentiment (SSI)</h3><div class="chart-frame"><canvas id="sentiment-chart"></canvas></div><div class="chart-note" id="sentiment-chart-note" hidden></div></div>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Supporting charts</h2>
-        <div class="chart-grid">
-          <div class="panel"><h3>Emission Rate</h3><div class="chart-frame"><canvas id="emission-rate-chart"></canvas></div><div class="chart-note" id="emission-rate-chart-note" hidden></div></div>
-          <div class="panel"><h3>Subnet Market Cap</h3><div class="chart-frame"><canvas id="market-cap-chart"></canvas></div><div class="chart-note" id="market-cap-chart-note" hidden></div></div>
-          <div class="panel"><h3>Pool Liquidity</h3><div class="chart-frame"><canvas id="liquidity-chart"></canvas></div><div class="chart-note" id="liquidity-chart-note" hidden></div></div>
-        </div>
-      </section>
+      ${experimental ? experimentalSectionsHtml : stableSectionsHtml}
 
       ${renderAdminPanel({
         netuid,
