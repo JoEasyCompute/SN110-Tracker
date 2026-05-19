@@ -6786,12 +6786,17 @@ function renderPage(model, { experimental = false } = {}) {
   }) : '';
   const experimentalDetailsHtml = experimental ? `
       <details class="experimental-details-panel">
-        <summary>Details</summary>
+        <summary>Explore more</summary>
         <div class="experimental-details-body">
+          ${keyMetricsSectionHtml}
+          ${subnetStatsSectionHtml}
           ${walletSectionHtml}
           ${poolGrowthSectionHtml}
           ${financialPerspectiveSectionHtml}
           ${alphaHolderSectionHtml}
+          ${comparisonsSectionHtml}
+          ${trendChartsSectionHtml}
+          ${supportingChartsSectionHtml}
         </div>
       </details>
     ` : '';
@@ -6808,12 +6813,7 @@ function renderPage(model, { experimental = false } = {}) {
   ].join('');
   const experimentalSectionsHtml = [
     experimentalOverviewSection,
-    keyMetricsSectionHtml,
-    subnetStatsSectionHtml,
     experimentalDetailsHtml,
-    comparisonsSectionHtml,
-    trendChartsSectionHtml,
-    supportingChartsSectionHtml,
   ].join('');
 
   const latestCard = latest

@@ -3214,7 +3214,7 @@ test('dashboard admin panel requires an authenticated admin session', async () =
     assert.equal(experimentalHtml.includes('Compact overview-first layout'), true);
     assert.equal(experimentalHtml.includes('Return to stable dashboard'), true);
     assert.equal(experimentalHtml.includes('Overview'), true);
-    assert.equal(experimentalHtml.includes('Details'), true);
+    assert.equal(experimentalHtml.includes('Explore more'), true);
     assert.equal(experimentalHtml.includes('Latest snapshot captured'), false);
     assert.equal(experimentalHtml.includes('history-modal-range-summary'), true);
 
