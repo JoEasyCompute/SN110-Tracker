@@ -5823,7 +5823,7 @@ function renderDashboardClientScript({ netuid, config }) {
           modalElements.rangeSummary.innerHTML = '';
           return;
         }
-        const summaries = [14, 30]
+        const summaries = [7, 14]
           .map((days) => computeRangeSummary(metric, history, days))
           .filter(Boolean);
         if (!summaries.length) {
@@ -5834,8 +5834,8 @@ function renderDashboardClientScript({ netuid, config }) {
         const formatKey = resolveMetricFormat(metric);
         modalElements.rangeSummary.hidden = false;
         modalElements.rangeSummary.innerHTML = summaries.map((summary) => {
-          const rangeLabel = summary.days + 'D Range';
-          const rangeValue = formatBaseMetric(summary.high, formatKey) + ' / ' + formatBaseMetric(summary.low, formatKey);
+          const rangeLabel = summary.days + 'D (Low/High)';
+          const rangeValue = formatBaseMetric(summary.low, formatKey) + ' / ' + formatBaseMetric(summary.high, formatKey);
           const positionText = Number.isFinite(summary.positionPct)
             ? 'Current at ' + formatPercent(summary.positionPct, 1) + ' of the range'
             : 'Based on ' + summary.samples + ' stored samples';

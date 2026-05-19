@@ -2893,10 +2893,10 @@ test('clicking the TAO price badge opens the history modal and shows 14D and 30D
   const rangeSummary = dom.window.document.getElementById('history-modal-range-summary');
   assert.ok(historyModal.classList.contains('open'));
   assert.equal(rangeSummary.hidden, false);
-  assert.equal(rangeSummary.textContent.includes('14D Range'), true);
-  assert.equal(rangeSummary.textContent.includes('30D Range'), true);
-  assert.equal(rangeSummary.textContent.includes('$1.20 / $0.80'), true);
-  assert.equal(rangeSummary.textContent.includes('$1.20 / $0.70'), true);
+  assert.equal(rangeSummary.textContent.includes('7D (Low/High)'), true);
+  assert.equal(rangeSummary.textContent.includes('14D (Low/High)'), true);
+  assert.equal(rangeSummary.textContent.includes('$1.10 / $1.20'), true);
+  assert.equal(rangeSummary.textContent.includes('$0.80 / $1.20'), true);
   assert.equal(rangeSummary.textContent.includes('Current at'), true);
 
   dom.window.close();
