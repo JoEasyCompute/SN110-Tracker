@@ -6788,6 +6788,7 @@ function renderPage(model, { experimental = false } = {}) {
     supportingChartsSectionHtml,
   ].join('');
   const experimentalSectionsHtml = [
+    experimentalOverviewSection,
     financialPerspectiveSectionHtml,
     keyMetricsSectionHtml,
     subnetStatsSectionHtml,
@@ -8826,8 +8827,7 @@ function renderPage(model, { experimental = false } = {}) {
       </section>
       ` : ''}
 
-      ${experimental ? experimentalOverviewSection : latestCard}
-      ${experimental ? latestCard : ''}
+      ${experimental ? '' : latestCard}
 
       ${experimental ? experimentalSectionsHtml : stableSectionsHtml}
 
