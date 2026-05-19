@@ -2208,6 +2208,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('Refresh wallet activity'), true);
   assert.equal(html.includes('id="wallet-backfill-progress"'), true);
   assert.equal(html.includes('history-modal-wallet-details'), true);
+  assert.equal(html.includes('history-modal-range-summary'), true);
   assert.equal(html.includes('data-history-range="1"'), true);
   assert.equal(html.includes('data-history-range="7" aria-pressed="true"'), true);
   assert.equal(html.includes('7D</button>'), true);
@@ -2808,6 +2809,95 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
   assert.equal(walletDetails.textContent.includes('Raw α from current subnet stake positions'), true);
   assert.equal(walletDetails.textContent.includes('24h change: +α 3'), true);
   assert.equal(walletDetails.textContent.includes('≈ +τ 0.3 at current price'), true);
+
+  dom.window.close();
+  db.close();
+});
+
+test('clicking the TAO price badge opens the history modal and shows 14D and 30D ranges', async () => {
+  const db = openDatabase(':memory:');
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 110,
+    block_number: 1,
+    timestamp: '2026-04-30T00:00:00Z',
+    name: 'Green Compute',
+    symbol: 'Ѐ',
+    price: '0.1',
+    market_cap: '2000000000',
+    liquidity: '100000000000',
+    total_tao: '100000000000',
+    alpha_in_pool: '1000',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 }));
+  insertTaoPriceSnapshot(db, normalizeTaoPriceSnapshot({
+    created_at: '2026-04-30T00:00:00Z',
+    last_updated: '2026-04-30T00:00:00Z',
+    symbol: 'TAO',
+    price: '1.1',
+    volume_24h: '1000',
+    market_cap: '2000',
+  }, { source: 'api', sourceUrl: 'https://example.invalid', capturedAt: '2026-04-30T00:00:00.000Z' }));
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: 'token',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [],
+    },
+    netuid: 110,
+  });
+
+  const html = renderPage(model);
+  const dom = new JSDOM(html, {
+    url: 'http://localhost:3003/',
+    runScripts: 'dangerously',
+    resources: 'usable',
+    pretendToBeVisual: true,
+    beforeParse(window) {
+      window.fetch = async (url) => {
+        const text = String(url);
+        if (text.includes('/api/tao-price/history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              days: 37,
+              history: [
+                { captured_at: '2026-04-04T00:00:00.000Z', price_usd: 0.7 },
+                { captured_at: '2026-04-20T00:00:00.000Z', price_usd: 0.8 },
+                { captured_at: '2026-04-29T00:00:00.000Z', price_usd: 1.2 },
+                { captured_at: '2026-04-30T00:00:00.000Z', price_usd: 1.1 },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' };
+      };
+      window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+      window.SVGElement.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 500, height: 160, right: 500, bottom: 160 });
+      window.HTMLCanvasElement.prototype.getContext = () => ({ clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, rect() {}, arc() {}, closePath() {}, save() {}, restore() {}, setLineDash() {}, fillText() {}, measureText() { return { width: 10 }; } });
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
+  const priceButton = dom.window.document.getElementById('tao-price-label');
+  assert.ok(priceButton);
+
+  priceButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 600));
+
+  const historyModal = dom.window.document.getElementById('history-modal');
+  const rangeSummary = dom.window.document.getElementById('history-modal-range-summary');
+  assert.ok(historyModal.classList.contains('open'));
+  assert.equal(rangeSummary.hidden, false);
+  assert.equal(rangeSummary.textContent.includes('14D Range'), true);
+  assert.equal(rangeSummary.textContent.includes('30D Range'), true);
+  assert.equal(rangeSummary.textContent.includes('$1.20 / $0.80'), true);
+  assert.equal(rangeSummary.textContent.includes('$1.20 / $0.70'), true);
+  assert.equal(rangeSummary.textContent.includes('Current at'), true);
 
   dom.window.close();
   db.close();

@@ -3322,6 +3322,7 @@ function renderDashboardClientScript({ netuid, config }) {
         samples: document.getElementById('history-modal-samples'),
         samplesNote: document.getElementById('history-modal-samples-note'),
         captured: document.getElementById('history-modal-captured'),
+        rangeSummary: document.getElementById('history-modal-range-summary'),
         chartTitle: document.getElementById('history-modal-chart-title'),
         info: document.getElementById('history-modal-info'),
         explanation: document.getElementById('history-modal-explanation'),
@@ -5785,6 +5786,69 @@ function renderDashboardClientScript({ netuid, config }) {
         return 'Stored historical points in the last ' + days + ' days';
       }
 
+      function supportsRangeSummary(metric) {
+        const key = String(metric?.key || '');
+        return metric?.kind === 'tao-price' || key === 'price_num' || key === 'market_cap_num';
+      }
+
+      function computeRangeSummary(metric, history, days) {
+        const points = historySeriesForMetric(metric, history)
+          .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+          .sort((a, b) => a.x - b.x);
+        if (!points.length) return null;
+        const latest = points[points.length - 1];
+        const cutoff = latest.x - (Number(days) * 86400000);
+        const windowPoints = points.filter((point) => point.x >= cutoff && point.x <= latest.x);
+        if (!windowPoints.length) return null;
+        const values = windowPoints.map((point) => Number(point.y)).filter(Number.isFinite);
+        if (!values.length) return null;
+        const high = Math.max(...values);
+        const low = Math.min(...values);
+        const span = high - low;
+        const positionPct = span > 0 ? ((latest.y - low) / span) * 100 : null;
+        return {
+          days,
+          high,
+          low,
+          current: latest.y,
+          positionPct,
+          samples: values.length,
+        };
+      }
+
+      function renderRangeSummary(metric, history) {
+        if (!modalElements.rangeSummary) return;
+        if (!supportsRangeSummary(metric)) {
+          modalElements.rangeSummary.hidden = true;
+          modalElements.rangeSummary.innerHTML = '';
+          return;
+        }
+        const summaries = [14, 30]
+          .map((days) => computeRangeSummary(metric, history, days))
+          .filter(Boolean);
+        if (!summaries.length) {
+          modalElements.rangeSummary.hidden = true;
+          modalElements.rangeSummary.innerHTML = '';
+          return;
+        }
+        const formatKey = resolveMetricFormat(metric);
+        modalElements.rangeSummary.hidden = false;
+        modalElements.rangeSummary.innerHTML = summaries.map((summary) => {
+          const rangeLabel = summary.days + 'D Range';
+          const rangeValue = formatBaseMetric(summary.high, formatKey) + ' / ' + formatBaseMetric(summary.low, formatKey);
+          const positionText = Number.isFinite(summary.positionPct)
+            ? 'Current at ' + formatPercent(summary.positionPct, 1) + ' of the range'
+            : 'Based on ' + summary.samples + ' stored samples';
+          return [
+            '<section class="card">',
+            '  <div class="card-label">' + escapeHtml(rangeLabel) + '</div>',
+            '  <div class="card-value">' + escapeHtml(rangeValue) + '</div>',
+            '  <div class="card-subtext">' + escapeHtml(positionText) + '</div>',
+            '</section>',
+          ].join('');
+        }).join('');
+      }
+
       function modalWindowDurationMs() {
         return Math.max(1, Number(state.modalHistoryDays || 7)) * 86400000;
       }
@@ -6234,6 +6298,7 @@ function renderDashboardClientScript({ netuid, config }) {
         } catch (error) {
           console.warn('Unable to refresh wallet details after history load for', metric.label, error);
         }
+        renderRangeSummary(metric, history);
         modalElements.samples.textContent = String(visiblePoints.length);
         if (modalElements.samplesNote) {
           modalElements.samplesNote.textContent = historyRangeSubtitle(days);
@@ -6275,6 +6340,10 @@ function renderDashboardClientScript({ netuid, config }) {
         modalElements.latestRaw.textContent = 'Loading historical field...';
         modalElements.samples.textContent = '—';
         modalElements.captured.textContent = '—';
+        if (modalElements.rangeSummary) {
+          modalElements.rangeSummary.hidden = true;
+          modalElements.rangeSummary.innerHTML = '';
+        }
         modalElements.note.hidden = true;
         modalElements.empty.hidden = true;
         modalElements.canvas.hidden = false;
@@ -8097,6 +8166,12 @@ function renderPage(model) {
         gap: 14px;
         margin-bottom: 16px;
       }
+      .modal-range-summary {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 16px;
+      }
       .modal-chart {
         min-height: 360px;
       }
@@ -8526,6 +8601,10 @@ function renderPage(model) {
         .modal-grid {
           gap: 10px;
         }
+        .modal-range-summary {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
         .chart-frame {
           height: 210px;
         }
@@ -8691,6 +8770,7 @@ function renderPage(model) {
             <div class="card-subtext">Newest value from the local SQLite history</div>
           </section>
         </div>
+        <div class="modal-range-summary" id="history-modal-range-summary" hidden></div>
         <div class="panel modal-chart">
           <h3 id="history-modal-chart-title">Historical chart</h3>
           <div class="chart-frame modal"><canvas id="history-modal-canvas"></canvas></div>
