@@ -6788,7 +6788,6 @@ function renderPage(model, { experimental = false } = {}) {
     supportingChartsSectionHtml,
   ].join('');
   const experimentalSectionsHtml = [
-    experimentalOverviewSection,
     financialPerspectiveSectionHtml,
     keyMetricsSectionHtml,
     subnetStatsSectionHtml,
@@ -8803,7 +8802,7 @@ function renderPage(model, { experimental = false } = {}) {
   <body>
     <div class="shell" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" data-latest-snapshot-signature="${escapeHtml(latest?.captured_at ? `${latest.captured_at}|${latest.block_number ?? ''}|${latest.source ?? ''}` : '')}" data-latest-ingest-run-id="${escapeHtml(ingestRun?.id ?? '')}">
       <div class="topbar">
-        <div class="muted">${experimental ? 'Experimental dashboard' : 'Local Taostats tracker'} for ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
+        <div class="muted">${experimental ? 'Experimental layout' : 'Local Taostats tracker'} for ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
         <div class="actions">
           <button class="price-badge price-badge-button" id="tao-price-label" type="button" aria-live="polite" title="Click to view TAO price history">${escapeHtml(taoPriceText)}</button>
           <div class="price-badge next-poll-badge" id="next-poll-label" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" title="${escapeHtml(nextPollTitle)}">${escapeHtml(nextPollText)}</div>
@@ -8819,15 +8818,16 @@ function renderPage(model, { experimental = false } = {}) {
         <div class="experimental-banner-copy">
           <div class="experimental-banner-title">
             <span class="experimental-pill">Experimental</span>
-            <span>Separate layout for dashboard iteration</span>
+            <span>Overview-first layout</span>
           </div>
-          <p>This page reuses the same live data and modals as the stable dashboard, but is isolated for presentation and hierarchy changes.</p>
+          <p>This page reorders the same live data so we can iterate on presentation without touching the stable dashboard.</p>
         </div>
         ${config.adminAuthenticated ? `<a class="button primary" href="/subnets/${netuid}">Return to stable dashboard</a>` : ''}
       </section>
       ` : ''}
 
-      ${latestCard}
+      ${experimental ? experimentalOverviewSection : latestCard}
+      ${experimental ? latestCard : ''}
 
       ${experimental ? experimentalSectionsHtml : stableSectionsHtml}
 

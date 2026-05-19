@@ -3165,8 +3165,8 @@ test('dashboard admin panel requires an authenticated admin session', async () =
     });
     const experimentalHtml = await experimentalDashboard.text();
     assert.equal(experimentalDashboard.status, 200);
-    assert.equal(experimentalHtml.includes('Experimental dashboard'), true);
-    assert.equal(experimentalHtml.includes('Separate layout for dashboard iteration'), true);
+    assert.equal(experimentalHtml.includes('Experimental layout'), true);
+    assert.equal(experimentalHtml.includes('Overview-first layout'), true);
     assert.equal(experimentalHtml.includes('Return to stable dashboard'), true);
     assert.equal(experimentalHtml.includes('Overview'), true);
     assert.equal(experimentalHtml.includes('history-modal-range-summary'), true);
