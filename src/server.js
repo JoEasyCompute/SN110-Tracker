@@ -3015,7 +3015,7 @@ function renderHistoryTable(rows) {
   `;
 }
 
-function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null, scheduleStatus = [], scheduleQueue = [], alphaHolderBackfillActive = false, alphaHolderBackfillStartedAtIso = null }) {
+function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null, scheduleStatus = [], scheduleQueue = [], alphaHolderBackfillActive = false, alphaHolderBackfillStartedAtIso = null, experimental = false }) {
   if (!config.adminAuthenticated) {
     return '';
   }
@@ -3034,14 +3034,20 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
     paused: alphaHolderBackfillActive,
     backfillStartedAtIso: alphaHolderBackfillStartedAtIso,
   });
+  const adminPanelClass = experimental ? 'admin-panel experimental-admin' : 'admin-panel';
+  const adminControlsClass = experimental ? 'panel admin-controls admin-controls-secondary' : 'panel admin-controls';
+  const adminQueueClass = experimental ? 'panel admin-queue admin-queue-secondary' : 'panel';
+  const adminBackfillClass = experimental ? 'panel admin-backfill admin-backfill-secondary' : 'panel';
+  const adminWalletClass = experimental ? 'panel admin-wallet admin-wallet-secondary' : 'panel';
+  const adminRunsClass = experimental ? 'panel admin-runs admin-runs-secondary' : 'panel';
   return `
-      <details class="admin-panel">
+      <details class="${adminPanelClass}">
         <summary>Admin panel</summary>
         <div class="admin-panel-body">
           <form class="admin-session-form" method="post" action="/admin/logout">
             <button class="button" type="submit">Log out admin</button>
           </form>
-          <div class="panel admin-controls">
+          <div class="${adminControlsClass}">
             <h3>Live controls</h3>
             ${walletActivityBadge ? `<div class="wallet-activity-status admin-wallet-activity-status" id="wallet-activity-admin-status">${walletActivityBadge}<span class="muted">${escapeHtml(walletActivityText)}</span></div>` : ''}
             ${ingestActive ? `<p class="empty" data-status="warning">${escapeHtml(activeJobText)} Manual refresh and backfill actions will be available when it finishes.</p>` : ''}
@@ -3053,7 +3059,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               </div>
             </div>
           </div>
-          <div class="panel">
+          <div class="${adminQueueClass}">
             <h3>Queue</h3>
             ${queuePreview}
           </div>
@@ -3061,7 +3067,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
             <a class="button" href="/api/subnets/${netuid}/latest">Latest JSON</a>
             <a class="button" href="/api/subnets/${netuid}/history?days=30">History JSON</a>
           </div>
-          <div class="panel">
+          <div class="${adminBackfillClass}">
             <h3>Backfill</h3>
             <div class="admin-form">
               <div class="admin-form-row">
@@ -3089,7 +3095,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               <p class="empty" id="backfill-status" hidden></p>
             </div>
           </div>
-          <div class="panel">
+          <div class="${adminWalletClass}">
             <h3>Wallet activity</h3>
             <div class="admin-form">
               <div class="admin-form-row">
@@ -3106,7 +3112,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               <p class="empty" id="wallet-backfill-status" hidden></p>
             </div>
           </div>
-          <div class="panel">
+          <div class="${adminRunsClass}">
             <h3>Schedules & runs</h3>
             <p class="admin-helper">This panel shows what the server is scheduled to do, when each job should run next, and the last recorded result stored in SQLite.</p>
             ${scheduleTable}
@@ -6692,31 +6698,33 @@ function renderPage(model, { experimental = false } = {}) {
   const overviewIngestCard = metricCard({
     label: 'Ingest health',
     value: ingestRun ? (ingestRun.ok ? 'Healthy' : 'Failed') : '—',
-    subtext: ingestRun
-      ? `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}${ingestRun.fallback_used ? ' • fallback used' : ''}`
-      : 'No ingest run recorded',
+    subtext: ingestRun ? `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}` : 'No ingest run recorded',
     tone: ingestRun ? (ingestRun.ok ? 'positive' : 'negative') : 'neutral',
   });
   const overviewSnapshotCard = metricCard({
     label: 'Snapshot freshness',
     value: latest ? formatRelativeIso(latest.captured_at) : '—',
-    subtext: latest ? `Source: ${latest.source}${latest.block_number ? ` • block ${latest.block_number}` : ''}` : 'No current snapshot',
+    subtext: latest ? `Source: ${latest.source}` : 'No current snapshot',
     tone: latest ? 'positive' : 'neutral',
   });
   const overviewWalletCard = metricCard({
     label: 'Wallet cache',
     value: walletActivityStatus?.lastRunAtIso ? formatRelativeIso(walletActivityStatus.lastRunAtIso) : '—',
-    subtext: walletActivityText || 'Wallet activity unavailable',
+    subtext: walletActivityStatus?.lastRunAtIso
+      ? `Rows cached: ${Number.isFinite(Number(walletActivityStatus.transactionCount)) ? compact(walletActivityStatus.transactionCount, 0) : '—'}`
+      : 'Wallet activity unavailable',
     tone: walletActivityStatus?.lastRunAtIso ? 'positive' : 'neutral',
   });
   const overviewQueueCard = metricCard({
     label: 'Next scheduled work',
     value: scheduleQueue?.[0]?.title || '—',
-    subtext: scheduleQueue?.[0]?.detail || 'No queued jobs at the moment',
+    subtext: scheduleQueue?.[0]
+      ? `${scheduleQueue[0].statusLabel || 'Queued'} • ${scheduleQueue[0].detail || '—'}`
+      : 'No queued jobs at the moment',
     tone: scheduleQueue?.[0] ? 'accent' : 'neutral',
   });
   const experimentalOverviewSection = experimental ? `
-      <section class="section">
+      <section class="section experimental-overview">
         <h2>Overview</h2>
         <div class="grid stats">
           ${overviewSnapshotCard}
@@ -6952,6 +6960,33 @@ function renderPage(model, { experimental = false } = {}) {
         font-weight: 700;
         letter-spacing: 0.06em;
         text-transform: uppercase;
+      }
+      .experimental-page .experimental-overview .card {
+        padding: 12px;
+      }
+      .experimental-page .experimental-overview .card-value {
+        font-size: 16px;
+      }
+      .experimental-page .experimental-overview .card-subtext {
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      .experimental-page .admin-panel.experimental-admin {
+        border-color: rgba(143, 163, 184, 0.20);
+        background: rgba(10, 15, 23, 0.58);
+      }
+      .experimental-page .admin-panel.experimental-admin > summary {
+        color: rgba(231, 238, 247, 0.9);
+      }
+      .experimental-page .admin-panel.experimental-admin .admin-panel-body {
+        padding-top: 14px;
+      }
+      .experimental-page .admin-panel.experimental-admin .panel {
+        border-color: rgba(143, 163, 184, 0.16);
+        background: rgba(16, 23, 34, 0.62);
+      }
+      .experimental-page .admin-panel.experimental-admin .button {
+        background: rgba(16, 23, 34, 0.92);
       }
       .poll-switcher {
         display: inline-flex;
@@ -8801,7 +8836,7 @@ function renderPage(model, { experimental = false } = {}) {
     </style>
   </head>
   <body>
-    <div class="shell" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" data-latest-snapshot-signature="${escapeHtml(latest?.captured_at ? `${latest.captured_at}|${latest.block_number ?? ''}|${latest.source ?? ''}` : '')}" data-latest-ingest-run-id="${escapeHtml(ingestRun?.id ?? '')}">
+    <div class="shell${experimental ? ' experimental-page' : ''}" data-tao-price-usd="${escapeHtml(latestTaoPriceUsd ?? '')}" data-next-poll-at="${escapeHtml(nextPollAtIso ?? '')}" data-latest-snapshot-signature="${escapeHtml(latest?.captured_at ? `${latest.captured_at}|${latest.block_number ?? ''}|${latest.source ?? ''}` : '')}" data-latest-ingest-run-id="${escapeHtml(ingestRun?.id ?? '')}">
       <div class="topbar">
         <div class="muted">${experimental ? 'Experimental layout' : 'Local Taostats tracker'} for ${escapeHtml(subnetLabel || `SN${netuid}`)}</div>
         <div class="actions">
@@ -8819,7 +8854,7 @@ function renderPage(model, { experimental = false } = {}) {
         <div class="experimental-banner-copy">
           <div class="experimental-banner-title">
             <span class="experimental-pill">Experimental</span>
-            <span>Overview-first layout</span>
+            <span>Compact overview-first layout</span>
           </div>
           <p>This page reorders the same live data so we can iterate on presentation without touching the stable dashboard.</p>
         </div>
@@ -8843,6 +8878,7 @@ function renderPage(model, { experimental = false } = {}) {
         scheduleQueue,
         alphaHolderBackfillActive,
         alphaHolderBackfillStartedAtIso,
+        experimental,
       })}
 
       <div class="footer">
