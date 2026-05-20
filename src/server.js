@@ -7140,7 +7140,7 @@ function renderDashboardClientScript({ netuid, config }) {
           }
           removeLayoutDropPlaceholder(section);
           persistLayoutPrefsFromDom();
-        }, { animateCards: false });
+        });
       }
 
       function bindLayoutCustomization() {
