@@ -7751,6 +7751,50 @@ function renderPage(model, { experimental = false } = {}) {
         .experimental-page .grid.stats {
           grid-template-columns: 1fr !important;
         }
+        .experimental-page .experimental-details-body {
+          grid-template-columns: 1fr !important;
+          gap: 16px !important;
+          padding: 16px !important;
+        }
+        .experimental-page .experimental-details-body .panel,
+        .experimental-page .experimental-details-body .financial-panel {
+          height: auto;
+        }
+        .experimental-page .card--compact,
+        .experimental-page .card--deep {
+          min-height: 0;
+        }
+        .experimental-page .wallet-hologram-card {
+          padding: 18px !important;
+          gap: 14px;
+          min-height: 0;
+        }
+        .experimental-page .wallet-hologram-card .wallet-balance-main {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 6px;
+        }
+        .experimental-page .wallet-hologram-card .card-value {
+          font-size: 24px !important;
+        }
+        .experimental-page .wallet-hologram-card .wallet-ratio-labels {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 2px;
+        }
+        .experimental-page .wallet-hologram-card .wallet-positions-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+        .experimental-page .wallet-hologram-card .pos-val {
+          white-space: normal !important;
+          overflow-wrap: anywhere;
+        }
+        .experimental-page .wallet-hologram-card .wallet-card-footer {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 4px;
+        }
       }
 
       /* Premium Expandable Control Drawer (Explore More details panel) */
@@ -7840,6 +7884,52 @@ function renderPage(model, { experimental = false } = {}) {
         height: 100%;
         display: flex;
         flex-direction: column;
+      }
+      @media (max-width: 600px) {
+        .experimental-page .experimental-details-body {
+          grid-template-columns: 1fr !important;
+          gap: 16px !important;
+          padding: 16px !important;
+        }
+        .experimental-page .experimental-details-body .panel,
+        .experimental-page .experimental-details-body .financial-panel {
+          height: auto;
+        }
+        .experimental-page .card--compact,
+        .experimental-page .card--deep {
+          min-height: 0;
+        }
+        .experimental-page .wallet-hologram-card {
+          padding: 18px !important;
+          gap: 14px;
+          min-height: 0;
+        }
+        .experimental-page .wallet-hologram-card .wallet-balance-main {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 6px;
+        }
+        .experimental-page .wallet-hologram-card .card-value {
+          font-size: 24px !important;
+        }
+        .experimental-page .wallet-hologram-card .wallet-ratio-labels {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 2px;
+        }
+        .experimental-page .wallet-hologram-card .wallet-positions-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+        .experimental-page .wallet-hologram-card .pos-val {
+          white-space: normal !important;
+          overflow-wrap: anywhere;
+        }
+        .experimental-page .wallet-hologram-card .wallet-card-footer {
+          flex-direction: column;
+          align-items: flex-start;
+          gap: 4px;
+        }
       }
 
       /* Premium Admin Control Panel Overrides */
