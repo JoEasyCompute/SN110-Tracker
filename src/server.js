@@ -3122,7 +3122,11 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
   const adminQueueClass = experimental ? 'panel admin-queue admin-queue-secondary' : 'panel';
   const adminBackfillClass = experimental ? 'panel admin-backfill admin-backfill-secondary' : 'panel';
   const adminWalletClass = experimental ? 'panel admin-wallet admin-wallet-secondary' : 'panel';
+  const adminWalletExportClass = experimental ? 'panel admin-wallet-export admin-wallet-export-secondary' : 'panel admin-wallet-export';
   const adminRunsClass = experimental ? 'panel admin-runs admin-runs-secondary' : 'panel';
+  const today = new Date();
+  const defaultExportEnd = formatDateInputValue(today);
+  const defaultExportStart = formatDateInputValue(new Date(today.getTime() - (29 * 24 * 60 * 60 * 1000)));
   return `
       <details class="${adminPanelClass}">
         <summary>Admin panel</summary>
@@ -3193,6 +3197,26 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               </div>
               <progress class="admin-progress" id="wallet-backfill-progress" hidden></progress>
               <p class="empty" id="wallet-backfill-status" hidden></p>
+            </div>
+          </div>
+          <div class="${adminWalletExportClass}">
+            <h3>Alpha stake export</h3>
+            <div class="admin-form">
+              <div class="admin-form-row">
+                <label>
+                  Start date
+                  <input type="date" id="wallet-stake-export-start" value="${escapeHtml(defaultExportStart)}">
+                </label>
+                <label>
+                  End date
+                  <input type="date" id="wallet-stake-export-end" value="${escapeHtml(defaultExportEnd)}">
+                </label>
+              </div>
+              <p class="admin-helper">Downloads a CSV of daily alpha-stake totals for every stored wallet using the selected date range.</p>
+              <div class="admin-actions">
+                <button class="button primary" type="button" id="wallet-stake-export-btn">Download CSV</button>
+              </div>
+              <p class="empty" id="wallet-stake-export-status" hidden></p>
             </div>
           </div>
           <div class="${adminRunsClass}">
@@ -3467,6 +3491,10 @@ function renderDashboardClientScript({ netuid, config }) {
       const walletBackfillButton = document.getElementById('wallet-backfill-btn');
       const walletBackfillStatus = document.getElementById('wallet-backfill-status');
       const walletBackfillProgress = document.getElementById('wallet-backfill-progress');
+      const walletStakeExportStartInput = document.getElementById('wallet-stake-export-start');
+      const walletStakeExportEndInput = document.getElementById('wallet-stake-export-end');
+      const walletStakeExportButton = document.getElementById('wallet-stake-export-btn');
+      const walletStakeExportStatus = document.getElementById('wallet-stake-export-status');
 
       const chartConfigs = ${JSON.stringify(getChartMetricConfigs())};
 
@@ -5211,6 +5239,25 @@ function renderDashboardClientScript({ netuid, config }) {
         };
       }
 
+      function readWalletStakeExportOptions() {
+        const start = String(walletStakeExportStartInput?.value || '').trim();
+        const end = String(walletStakeExportEndInput?.value || '').trim();
+        return { start, end };
+      }
+
+      function updateWalletStakeExportStatus(message, kind = 'info') {
+        if (!walletStakeExportStatus) return;
+        if (!message) {
+          walletStakeExportStatus.hidden = true;
+          walletStakeExportStatus.textContent = '';
+          walletStakeExportStatus.dataset.status = '';
+          return;
+        }
+        walletStakeExportStatus.hidden = false;
+        walletStakeExportStatus.textContent = message;
+        walletStakeExportStatus.dataset.status = kind;
+      }
+
       async function runAdminBackfill() {
         if (!backfillButton) return;
         const options = readBackfillOptions();
@@ -5303,6 +5350,45 @@ function renderDashboardClientScript({ netuid, config }) {
         } finally {
           setProgressVisible(walletBackfillProgress, false);
           walletBackfillButton.disabled = false;
+        }
+      }
+
+      async function runWalletStakeExport() {
+        if (!walletStakeExportButton) return;
+        const { start, end } = readWalletStakeExportOptions();
+        const startDate = start ? new Date(start + 'T00:00:00.000Z') : null;
+        const endDate = end ? new Date(end + 'T23:59:59.999Z') : null;
+        if (start && Number.isNaN(startDate?.getTime())) {
+          updateWalletStakeExportStatus('Start date must be a valid date.', 'error');
+          return;
+        }
+        if (end && Number.isNaN(endDate?.getTime())) {
+          updateWalletStakeExportStatus('End date must be a valid date.', 'error');
+          return;
+        }
+        if (start && end && startDate.getTime() > endDate.getTime()) {
+          updateWalletStakeExportStatus('Start date must be on or before end date.', 'error');
+          return;
+        }
+        const params = new URLSearchParams();
+        if (start) params.set('start', start);
+        if (end) params.set('end', end);
+        updateWalletStakeExportStatus('Preparing CSV export…', 'info');
+        try {
+          const query = params.toString();
+          const url = '/api/wallets/stake-export.csv' + (query ? '?' + query : '');
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = '';
+          link.rel = 'noopener';
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          updateWalletStakeExportStatus('CSV export requested. Check your downloads.', 'success');
+        } catch (error) {
+          updateWalletStakeExportStatus(error?.message || 'CSV export failed', 'error');
+          console.error(error);
         }
       }
 
@@ -6712,6 +6798,10 @@ function renderDashboardClientScript({ netuid, config }) {
 
       walletBackfillButton?.addEventListener('click', () => {
         void runWalletBackfill();
+      });
+
+      walletStakeExportButton?.addEventListener('click', () => {
+        void runWalletStakeExport();
       });
 
       taoPriceLabel?.addEventListener('click', () => {
@@ -9822,6 +9912,12 @@ function parseDays(searchParams) {
   return Math.min(raw, 3650);
 }
 
+function formatDateInputValue(date) {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return '';
+  return value.toISOString().slice(0, 10);
+}
+
 function parseIsoDateQuery(value, boundary = 'start') {
   if (value === null || value === undefined || value === '') return null;
   const text = String(value).trim();
@@ -10110,6 +10206,12 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
       }
 
       if (req.method === 'GET' && url.pathname === '/api/wallets/stake-export.csv') {
+        const authError = requireAdminApiKey(req, config);
+        if (authError) {
+          res.writeHead(authError.status, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: authError.error }, null, 2));
+          return;
+        }
         const hasExplicitRange = url.searchParams.has('start') || url.searchParams.has('end') || url.searchParams.has('days');
         let startIso = parseIsoDateQuery(url.searchParams.get('start'), 'start');
         let endIso = parseIsoDateQuery(url.searchParams.get('end'), 'end');

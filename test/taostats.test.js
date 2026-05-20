@@ -3217,6 +3217,52 @@ test('renderPage hides admin tools when no admin api key is configured', () => {
   db.close();
 });
 
+test('renderPage exposes wallet alpha stake export controls in the admin drawer', () => {
+  const html = renderPage({
+    latest: {
+      captured_at: '2026-04-30T00:00:00Z',
+      block_number: 1,
+      source: 'scrape',
+      remote_timestamp: '2026-04-30T00:00:00Z',
+    },
+    recent: [],
+    ingestRun: { ok: true, started_at: '2026-04-30T00:00:00Z', source: 'scrape', duration_ms: 1234 },
+    totalSnapshots: 1,
+    totalWalletSnapshots: 1,
+    comparisons: [],
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      adminAuthEnabled: true,
+      adminAuthenticated: true,
+      pollIntervalMinutes: 60,
+      wallets: [],
+      taostatsPublicBaseUrl: '',
+    },
+    netuid: 110,
+    latestTaoPriceUsd: 100,
+    nextPollAtIso: null,
+    walletEntries: [],
+    walletActivityStatus: { transactionCount: 12, lastRunAtIso: '2026-04-30T00:00:00Z', nextSyncAtIso: null, syncIntervalMinutes: 60 },
+    alphaHolderRows: [],
+    alphaHolderRowCount: 0,
+    alphaHolderRankingRows: [],
+    alphaHolderCurrentRankRow: null,
+    alphaHolderRankHistoryStartAt: null,
+    scheduleStatus: [],
+    scheduleQueue: [],
+    alphaHolderBackfillActive: false,
+    alphaHolderBackfillStartedAtIso: null,
+    subnetLabel: 'Green Compute (SN110)',
+  });
+
+  assert.equal(html.includes('Alpha stake export'), true);
+  assert.equal(html.includes('id="wallet-stake-export-start"'), true);
+  assert.equal(html.includes('id="wallet-stake-export-end"'), true);
+  assert.equal(html.includes('id="wallet-stake-export-btn"'), true);
+});
+
 test('experimental render uses an overview-first layout with collapsed details', () => {
   const html = renderPage({
     latest: {
@@ -3786,11 +3832,13 @@ test('wallet alpha stake csv export returns daily wallet totals', async () => {
   const app = createDashboardServer({
     db,
     ingestService: { ingestOnce: async () => ({ ok: true }) },
-    config: { netuid: 110, taostatsAuthHeader: '', pollIntervalMinutes: 60, nextPollAtIso: null },
+    config: { netuid: 110, taostatsAuthHeader: '', taostatsAdminApiKey: 'secret', pollIntervalMinutes: 60, nextPollAtIso: null },
   });
   const server = await app.start(0);
   const { port } = server.address();
-  const response = await fetch(`http://127.0.0.1:${port}/api/wallets/stake-export.csv?start=2026-04-01&end=2026-04-02`);
+  const response = await fetch(`http://127.0.0.1:${port}/api/wallets/stake-export.csv?start=2026-04-01&end=2026-04-02`, {
+    headers: { 'X-Admin-API-Key': 'secret' },
+  });
   const text = await response.text();
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type').startsWith('text/csv'), true);
