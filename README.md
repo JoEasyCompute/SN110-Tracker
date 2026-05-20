@@ -98,6 +98,7 @@ Add `--no-overwrite` if you want the historical importer to keep existing local 
 Use `npm run wallet-backfill -- --days 60` to prefill wallet activity rows for every configured coldkey.
 That command uses the same wallet activity sync flow as the admin-panel trigger and the scheduled refresh, so overlapping windows dedupe safely in SQLite.
 Use `npm run wallet-stake-backfill -- --start 2026-03-01 --end 2026-05-02` to backfill wallet alpha-stake history for the configured wallets over an explicit date range without deleting existing rows first. Add `--overwrite` only if you intentionally want to replace rows already stored in that window.
+Use `GET /api/wallets/stake-export.csv` to download a CSV of daily wallet alpha-stake totals in the format `wallet,date,alpha stake balance`. You can add `?start=2026-03-01&end=2026-05-02` or `?days=30` to narrow the export.
 Use `npm run subnet-name-backfill` to refresh the local subnet metadata cache for every discovered subnet. It fills friendly names from the Taostats subnet catalog, falls back to the latest subnet snapshot when the catalog row is unnamed, and uses a small concurrent worker queue so the fallback lookups do not run strictly one at a time.
 Use `npm run alpha-holder-backfill` or `npm run alpha-holder-history-backfill` to snapshot the current holder rows for every discovered subnet. Those commands seed the local alpha-holder ranking/history views with a baseline, and the daily UTC snapshot job keeps those charts growing after the initial collection starts.
 The `alpha-holder-history-backfill` alias now reuses the supported snapshot path instead of calling an unsupported Taostats subnet-history endpoint; both CLI commands stream per-subnet progress to stderr and include a live ETA so long fills are easier to monitor from the terminal.
@@ -220,6 +221,7 @@ Implementation notes:
 - `/api/subnets/110/alpha-holder-rank-history?days=30` - historical SN110 rank series built from local alpha-holder snapshots across subnets
 - `/api/wallets/<ss58>/latest` - latest stored wallet snapshot for a configured coldkey ss58 address
 - `/api/wallets/<ss58>/history?days=30` - historical wallet balance rows for a configured coldkey ss58 address
+- `/api/wallets/stake-export.csv` - CSV export of daily wallet alpha-stake totals across all stored wallets
 - `/api/wallets/<ss58>/stake-history?days=30` - historical hotkey stake rows for a configured coldkey ss58 address
 - `/api/wallets/<ss58>/transactions?days=7` - wallet activity timeline from local SQLite, with `?refresh=1` for a live sync fallback
 - `/api/tao-price/history?days=30` - stored TAO/USD price history

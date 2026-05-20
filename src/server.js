@@ -14,6 +14,7 @@ const {
   getLatestWalletStakePositions,
   getWalletHistory,
   getWalletStakePositionsHistory,
+  getWalletStakePositionsInRange,
   getWalletTransactions,
   getLatestIngestRun,
   getLatestIngestRunBySource,
@@ -40,6 +41,7 @@ const {
   fetchExtrinsicsHistory,
   fetchTransferHistory,
   fetchHistoricalStakeBalance,
+  resolveHistoricalWindow,
 } = require('./taostats');
 
 const TAO_PER_RAO = 1_000_000_000;
@@ -9820,6 +9822,107 @@ function parseDays(searchParams) {
   return Math.min(raw, 3650);
 }
 
+function parseIsoDateQuery(value, boundary = 'start') {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return boundary === 'end'
+      ? `${text}T23:59:59.999Z`
+      : `${text}T00:00:00.000Z`;
+  }
+  const date = new Date(text);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function toAlphaUnits(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.abs(num) >= 1e6 ? num / 1e9 : num;
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return text;
+}
+
+function formatCsvDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function buildWalletStakeDailyCsvRows(rows = []) {
+  const dailyByWallet = new Map();
+  const walletNames = new Map();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || !row.wallet_address_ss58) continue;
+    const walletAddress = String(row.wallet_address_ss58);
+    const walletName = String(row.wallet_name || walletAddress);
+    const day = formatCsvDate(row.captured_at);
+    if (!day) continue;
+    const hotkeyKey = String(row.hotkey_address_ss58 || row.hotkey_name || row.netuid || 'unknown');
+    const alphaBalance = toAlphaUnits(row.balance_num ?? row.balance ?? row.balance_as_tao_num ?? null);
+    if (!Number.isFinite(alphaBalance)) continue;
+
+    walletNames.set(walletAddress, walletName);
+    if (!dailyByWallet.has(walletAddress)) dailyByWallet.set(walletAddress, new Map());
+    const walletDays = dailyByWallet.get(walletAddress);
+    if (!walletDays.has(day)) walletDays.set(day, new Map());
+    const dayHotkeys = walletDays.get(day);
+    dayHotkeys.set(hotkeyKey, alphaBalance);
+  }
+
+  const lines = [];
+  const sortedWallets = [...dailyByWallet.entries()].sort((left, right) => {
+    const leftName = walletNames.get(left[0]) || left[0];
+    const rightName = walletNames.get(right[0]) || right[0];
+    return leftName.localeCompare(rightName) || left[0].localeCompare(right[0]);
+  });
+
+  for (const [walletAddress, walletDays] of sortedWallets) {
+    const walletLabel = walletNames.get(walletAddress) || walletAddress;
+    const sortedDays = [...walletDays.entries()].sort((left, right) => left[0].localeCompare(right[0]));
+    for (const [day, dayHotkeys] of sortedDays) {
+      let total = 0;
+      for (const balance of dayHotkeys.values()) {
+        total += Number(balance) || 0;
+      }
+      lines.push({
+        wallet: walletLabel,
+        date: day,
+        alphaStakeBalance: total,
+      });
+    }
+  }
+
+  return lines;
+}
+
+function buildWalletStakeCsv({ rows = [], fileName = 'wallet-alpha-stake-export.csv' } = {}) {
+  const dailyRows = buildWalletStakeDailyCsvRows(rows);
+  const header = ['wallet', 'date', 'alpha stake balance'];
+  const csvLines = [header.join(',')];
+  for (const row of dailyRows) {
+    csvLines.push([
+      csvEscape(row.wallet),
+      csvEscape(row.date),
+      csvEscape(Number.isFinite(row.alphaStakeBalance) ? row.alphaStakeBalance.toFixed(9).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1') : ''),
+    ].join(','));
+  }
+  return {
+    fileName,
+    csv: `${csvLines.join('\n')}\n`,
+    rowCount: dailyRows.length,
+  };
+}
+
 function parseBackfillFrequency(value, fallback = 'by_hour') {
   const allowed = new Set(['by_hour', 'by_day', 'by_block']);
   const text = String(value || fallback || '').trim();
@@ -10003,6 +10106,28 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         const history = attachTaoPrice(getTaoFlowHistory(db, netuid, sinceIso), getTaoPriceHistory(db, sinceIso));
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ netuid, days, history }, null, 2));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/wallets/stake-export.csv') {
+        const hasExplicitRange = url.searchParams.has('start') || url.searchParams.has('end') || url.searchParams.has('days');
+        let startIso = parseIsoDateQuery(url.searchParams.get('start'), 'start');
+        let endIso = parseIsoDateQuery(url.searchParams.get('end'), 'end');
+        if (url.searchParams.has('days') && !startIso && !endIso) {
+          const window = resolveHistoricalWindow({ days: parseDays(url.searchParams) });
+          startIso = window.startIso;
+          endIso = window.endIso;
+        }
+        const rows = getWalletStakePositionsInRange(db, { startIso, endIso });
+        const exportResult = buildWalletStakeCsv({ rows });
+        const fileSuffix = hasExplicitRange
+          ? `-${(startIso || 'start').slice(0, 10)}_to_${(endIso || 'end').slice(0, 10)}`
+          : '';
+        res.writeHead(200, {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': `attachment; filename="wallet-alpha-stake${fileSuffix}.csv"`,
+        });
+        res.end(exportResult.csv);
         return;
       }
 

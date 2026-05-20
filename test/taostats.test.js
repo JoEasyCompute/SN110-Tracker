@@ -3711,6 +3711,99 @@ test('wallet stake history endpoint returns stored hotkey history', async () => 
   db.close();
 });
 
+test('wallet alpha stake csv export returns daily wallet totals', async () => {
+  const db = openDatabase(':memory:');
+  const walletA = '5WalletAlpha123456789ABCDEFGH';
+  const walletB = '5WalletBeta123456789ABCDEFGH';
+
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: walletA, hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 9,
+    subnet_total_holders: 256,
+    balance: '1000000000',
+    balance_as_tao: '1000000000',
+    timestamp: '2026-04-01T00:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: walletA, capturedAt: '2026-04-01T00:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: walletA, hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 9,
+    subnet_total_holders: 256,
+    balance: '2000000000',
+    balance_as_tao: '2000000000',
+    timestamp: '2026-04-01T12:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: walletA, capturedAt: '2026-04-01T12:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: walletA, hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyTwo', hex: '0x222' },
+    hotkey_name: 'Miner Two',
+    netuid: 112,
+    subnet_rank: 8,
+    subnet_total_holders: 256,
+    balance: '3000000000',
+    balance_as_tao: '3000000000',
+    timestamp: '2026-04-01T13:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: walletA, capturedAt: '2026-04-01T13:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: walletB, hex: '0xdef' },
+    hotkey: { ss58: '5HotkeyThree', hex: '0x333' },
+    hotkey_name: 'Validator One',
+    netuid: 113,
+    subnet_rank: 7,
+    subnet_total_holders: 256,
+    balance: '4000000000',
+    balance_as_tao: '4000000000',
+    timestamp: '2026-04-02T00:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Beta Treasury', address: walletB, capturedAt: '2026-04-02T00:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: walletA, hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyOne', hex: '0x111' },
+    hotkey_name: 'Miner One',
+    netuid: 111,
+    subnet_rank: 9,
+    subnet_total_holders: 256,
+    balance: '4000000000',
+    balance_as_tao: '4000000000',
+    timestamp: '2026-04-02T06:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: walletA, capturedAt: '2026-04-02T06:00:00.000Z' }));
+  insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({
+    coldkey: { ss58: walletA, hex: '0xabc' },
+    hotkey: { ss58: '5HotkeyTwo', hex: '0x222' },
+    hotkey_name: 'Miner Two',
+    netuid: 112,
+    subnet_rank: 8,
+    subnet_total_holders: 256,
+    balance: '6000000000',
+    balance_as_tao: '6000000000',
+    timestamp: '2026-04-02T07:00:00Z',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid', walletName: 'Alpha Treasury', address: walletA, capturedAt: '2026-04-02T07:00:00.000Z' }));
+
+  const app = createDashboardServer({
+    db,
+    ingestService: { ingestOnce: async () => ({ ok: true }) },
+    config: { netuid: 110, taostatsAuthHeader: '', pollIntervalMinutes: 60, nextPollAtIso: null },
+  });
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/wallets/stake-export.csv?start=2026-04-01&end=2026-04-02`);
+  const text = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type').startsWith('text/csv'), true);
+  assert.equal(text.startsWith('wallet,date,alpha stake balance'), true);
+  const lines = text.trim().split('\n');
+  assert.equal(lines.length, 4);
+  assert.equal(lines[1], 'Alpha Treasury,2026-04-01,5');
+  assert.equal(lines[2], 'Alpha Treasury,2026-04-02,10');
+  assert.equal(lines[3], 'Beta Treasury,2026-04-02,4');
+  await app.close();
+  db.close();
+});
+
 test('wallet transactions endpoint downgrades stake history 429 to a warning', async () => {
   const db = openDatabase(':memory:');
   insertWalletStakePosition(db, normalizeStakeBalanceSnapshot({

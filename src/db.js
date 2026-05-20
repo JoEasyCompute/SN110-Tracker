@@ -1675,6 +1675,29 @@ function getWalletStakePositionsHistory(db, address, sinceIso) {
   return stmt.all(address, sinceIso);
 }
 
+function getWalletStakePositionsInRange(db, { startIso = null, endIso = null } = {}) {
+  const clauses = [];
+  const params = [];
+
+  if (startIso) {
+    clauses.push('captured_at >= ?');
+    params.push(startIso);
+  }
+  if (endIso) {
+    clauses.push('captured_at <= ?');
+    params.push(endIso);
+  }
+
+  const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const stmt = db.prepare(`
+    SELECT *
+    FROM wallet_stake_positions
+    ${whereClause}
+    ORDER BY wallet_address_ss58 ASC, captured_at ASC, netuid ASC, hotkey_address_ss58 ASC, id ASC
+  `);
+  return stmt.all(...params);
+}
+
 function getWalletTransactions(db, address, sinceIso = null) {
   if (sinceIso) {
     const stmt = db.prepare(`
@@ -2028,6 +2051,7 @@ module.exports = {
   getAlphaHolderSnapshotHistory,
   getAlphaHolderSnapshotCounts,
   getWalletStakePositionsHistory,
+  getWalletStakePositionsInRange,
   getWalletTransactions,
   getWalletHistory,
   getLatestIngestRun,
