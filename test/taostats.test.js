@@ -3310,8 +3310,9 @@ test('experimental render uses an overview-first layout with collapsed details',
   assert.equal(html.includes('data-layout-section="subnet-stats"'), true);
   assert.equal(html.includes('experimental-details-panel'), true);
   assert.equal(html.includes('pool-growth-entity-card'), true);
-  assert.equal(html.includes('drag-over-before'), true);
-  assert.equal(html.includes('drag-over-after'), true);
+  assert.equal(html.includes('layout-drop-placeholder'), true);
+  assert.equal(html.includes('layout-drop-placeholder-label'), true);
+  assert.equal(html.includes('Drop here'), true);
   assert.equal(html.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(html.includes('Latest snapshot captured'), false);
   assert.equal(html.includes('Open stable dashboard'), true);

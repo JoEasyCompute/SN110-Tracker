@@ -6993,13 +6993,65 @@ function renderDashboardClientScript({ netuid, config }) {
         card.style.willChange = '';
       }
 
+      function getLayoutDropPlaceholder(section) {
+        return section?.querySelector('[data-layout-drop-placeholder]');
+      }
+
+      function removeLayoutDropPlaceholder(section) {
+        const placeholder = getLayoutDropPlaceholder(section);
+        if (placeholder) {
+          placeholder.remove();
+        }
+      }
+
       function clearLayoutDropIndicators() {
         document.querySelectorAll('.layout-card.drag-over, .layout-card.drag-over-before, .layout-card.drag-over-after').forEach((candidate) => {
           candidate.classList.remove('drag-over', 'drag-over-before', 'drag-over-after');
         });
         document.querySelectorAll('[data-layout-section][data-layout-drop-placement]').forEach((section) => {
           section.removeAttribute('data-layout-drop-placement');
+          removeLayoutDropPlaceholder(section);
         });
+      }
+
+      function createLayoutDropPlaceholder(targetCard, placement) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'layout-card layout-drop-placeholder';
+        placeholder.dataset.layoutDropPlaceholder = 'true';
+        placeholder.setAttribute('aria-hidden', 'true');
+        placeholder.setAttribute('role', 'presentation');
+        const label = document.createElement('span');
+        label.className = 'layout-drop-placeholder-label';
+        label.textContent = 'Drop here';
+        placeholder.appendChild(label);
+        const rect = targetCard ? targetCard.getBoundingClientRect() : null;
+        if (rect && rect.height) {
+          placeholder.style.minHeight = Math.max(72, Math.round(rect.height)) + 'px';
+        }
+        placeholder.classList.add(placement === 'after' ? 'drag-over-after' : 'drag-over-before');
+        return placeholder;
+      }
+
+      function updateLayoutDropPlaceholder(section, targetCard, placement) {
+        if (!section) return;
+        const existing = getLayoutDropPlaceholder(section);
+        if (existing) existing.remove();
+        const placeholder = createLayoutDropPlaceholder(targetCard, placement);
+        if (targetCard && targetCard.parentElement === section) {
+          if (placement === 'after') {
+            const afterTarget = targetCard.nextElementSibling;
+            if (afterTarget) {
+              section.insertBefore(placeholder, afterTarget);
+            } else {
+              section.appendChild(placeholder);
+            }
+          } else {
+            section.insertBefore(placeholder, targetCard);
+          }
+        } else {
+          section.appendChild(placeholder);
+        }
+        section.dataset.layoutDropPlacement = placement || 'before';
       }
 
       function animateLayoutSectionFlow(section, mutate) {
@@ -7046,7 +7098,7 @@ function renderDashboardClientScript({ netuid, config }) {
         section.getBoundingClientRect();
         scheduleFrame(() => {
           for (const card of animatedCards) {
-            card.style.transition = 'transform 240ms cubic-bezier(0.16, 1, 0.3, 1), opacity 240ms cubic-bezier(0.16, 1, 0.3, 1)';
+            card.style.transition = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms cubic-bezier(0.22, 1, 0.36, 1)';
             card.style.transform = '';
           }
           window.setTimeout(() => {
@@ -7064,20 +7116,30 @@ function renderDashboardClientScript({ netuid, config }) {
         if (targetCard && targetCard === sourceCard) return;
         if (targetCard && targetCard.parentElement !== section) return;
         animateLayoutSectionFlow(section, () => {
+          const placeholder = getLayoutDropPlaceholder(section);
           if (targetCard) {
             if (placement === 'after') {
-              const afterTarget = targetCard.nextElementSibling;
-              if (afterTarget) {
-                section.insertBefore(sourceCard, afterTarget);
+              if (placeholder && placeholder.parentElement === section) {
+                section.insertBefore(sourceCard, placeholder.nextElementSibling);
               } else {
-                section.appendChild(sourceCard);
+                const afterTarget = targetCard.nextElementSibling;
+                if (afterTarget) {
+                  section.insertBefore(sourceCard, afterTarget);
+                } else {
+                  section.appendChild(sourceCard);
+                }
               }
             } else {
-              section.insertBefore(sourceCard, targetCard);
+              if (placeholder && placeholder.parentElement === section) {
+                section.insertBefore(sourceCard, placeholder);
+              } else {
+                section.insertBefore(sourceCard, targetCard);
+              }
             }
           } else {
             section.appendChild(sourceCard);
           }
+          removeLayoutDropPlaceholder(section);
           persistLayoutPrefsFromDom();
         });
       }
@@ -7155,13 +7217,13 @@ function renderDashboardClientScript({ netuid, config }) {
           const targetCard = event.target?.closest('[data-layout-card-id]');
           if (targetCard && targetCard.parentElement === section && targetCard !== sourceCard) {
             event.preventDefault();
-            clearLayoutDropIndicators();
             const placement = getDropPlacement(event, targetCard);
-            targetCard.classList.add('drag-over', 'drag-over-' + placement);
-            section.dataset.layoutDropPlacement = placement;
+            clearLayoutDropIndicators();
+            updateLayoutDropPlaceholder(section, targetCard, placement);
           } else if (section.contains(sourceCard)) {
             event.preventDefault();
             clearLayoutDropIndicators();
+            updateLayoutDropPlaceholder(section, null, 'before');
           }
         };
         const handleDrop = (event) => {
@@ -7171,12 +7233,15 @@ function renderDashboardClientScript({ netuid, config }) {
           const sourceCard = state.layoutDraggingId ? getLayoutCardById(state.layoutDraggingId) : null;
           if (!sourceCard) return;
           const targetCard = event.target?.closest('[data-layout-card-id]');
-          clearLayoutDropIndicators();
-          if (targetCard && targetCard.parentElement === section && targetCard !== sourceCard) {
+          const placeholder = getLayoutDropPlaceholder(section);
+          if (placeholder && placeholder.parentElement === section) {
+            moveLayoutCard(section, sourceCard, placeholder, placeholder.classList.contains('drag-over-after') ? 'after' : 'before');
+          } else if (targetCard && targetCard.parentElement === section && targetCard !== sourceCard) {
             moveLayoutCard(section, sourceCard, targetCard, getDropPlacement(event, targetCard));
           } else if (section.contains(sourceCard)) {
             moveLayoutCard(section, sourceCard, null);
           }
+          clearLayoutDropIndicators();
         };
 
         layoutCustomizeToggle?.addEventListener('click', handleToggle);
@@ -7896,11 +7961,32 @@ function renderPage(model, { experimental = false } = {}) {
         outline: 2px solid rgba(0, 219, 188, 0.75);
         outline-offset: -3px;
       }
-      .experimental-page .layout-card.drag-over-before {
-        box-shadow: inset 0 3px 0 rgba(0, 219, 188, 0.9), 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px 2px rgba(0, 219, 188, 0.06) !important;
+      .experimental-page .layout-drop-placeholder {
+        display: grid;
+        place-items: center;
+        gap: 8px;
+        border: 1px dashed rgba(0, 219, 188, 0.65) !important;
+        border-radius: 20px !important;
+        background: linear-gradient(135deg, rgba(0, 219, 188, 0.08), rgba(255, 255, 255, 0.02)) !important;
+        box-shadow: inset 0 0 0 1px rgba(0, 219, 188, 0.08), 0 10px 24px rgba(0, 0, 0, 0.22) !important;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        opacity: 0.98;
       }
-      .experimental-page .layout-card.drag-over-after {
-        box-shadow: inset 0 -3px 0 rgba(0, 219, 188, 0.9), 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px 2px rgba(0, 219, 188, 0.06) !important;
+      .experimental-page .layout-drop-placeholder.drag-over-before {
+        box-shadow: inset 0 3px 0 rgba(0, 219, 188, 0.92), inset 0 0 0 1px rgba(0, 219, 188, 0.12), 0 10px 24px rgba(0, 0, 0, 0.22) !important;
+      }
+      .experimental-page .layout-drop-placeholder.drag-over-after {
+        box-shadow: inset 0 -3px 0 rgba(0, 219, 188, 0.92), inset 0 0 0 1px rgba(0, 219, 188, 0.12), 0 10px 24px rgba(0, 0, 0, 0.22) !important;
+      }
+      .experimental-page .layout-drop-placeholder-label {
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: rgba(4, 10, 17, 0.68);
+        color: rgba(255, 255, 255, 0.78);
       }
       .experimental-page .card--compact {
         padding: 14px !important;
