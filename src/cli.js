@@ -31,6 +31,19 @@ function boolArg(name, fallback) {
   return fallback;
 }
 
+function parseIsoArg(value, boundary = 'start') {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return boundary === 'end'
+      ? `${text}T23:59:59.999Z`
+      : `${text}T00:00:00.000Z`;
+  }
+  const date = new Date(text);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 function formatDuration(ms) {
   const value = Math.max(0, Math.round(Number(ms) || 0));
   const seconds = Math.floor(value / 1000);
@@ -118,6 +131,7 @@ async function run() {
   const ingestService = createIngestService({ db, config });
   const backfill = process.argv.includes('--backfill');
   const walletBackfill = process.argv.includes('--wallet-backfill') || process.argv.includes('--wallet-activity-backfill');
+  const walletStakeBackfill = process.argv.includes('--wallet-stake-backfill');
   const subnetNameBackfill = process.argv.includes('--subnet-name-backfill');
   const alphaHolderBackfill = process.argv.includes('--alpha-holder-backfill');
   const alphaHolderHistoryBackfill = process.argv.includes('--alpha-holder-history-backfill');
@@ -125,9 +139,20 @@ async function run() {
   const once = process.argv.includes('--once');
   const alphaHolderProgress = createProgressPrinter(alphaHolderHistoryBackfill ? 'alpha-holder-history-backfill' : (alphaHolderBackfill ? 'alpha-holder-backfill' : 'alpha-holder-sync'));
   const subnetNameProgress = createProgressPrinter('subnet-name-backfill');
+  const walletStakeProgress = createProgressPrinter('wallet-stake-backfill');
 
   let result;
-  if (walletBackfill) {
+  if (walletStakeBackfill) {
+    result = await ingestService.backfillWalletStakeHistory({
+      wallets: config.wallets || [],
+      days: intArg(readArg('days', config.taostatsWalletActivityBackfillDays || config.taostatsBackfillDays || 60), config.taostatsWalletActivityBackfillDays || config.taostatsBackfillDays || 60),
+      startIso: parseIsoArg(readArg('start', null), 'start'),
+      endIso: parseIsoArg(readArg('end', null), 'end'),
+      limit: intArg(readArg('limit', 200), 200),
+      overwrite: boolArg('overwrite', false),
+      onProgress: walletStakeProgress,
+    });
+  } else if (walletBackfill) {
     result = await ingestService.backfillWalletActivity({
       days: intArg(readArg('days', config.taostatsWalletActivityBackfillDays || 60), config.taostatsWalletActivityBackfillDays || 60),
       limit: intArg(readArg('limit', 200), 200),
@@ -169,7 +194,7 @@ async function run() {
   }
   console.log(JSON.stringify(result, null, 2));
 
-  if (!once && !backfill && !walletBackfill && !subnetNameBackfill && !alphaHolderBackfill && !alphaHolderHistoryBackfill && !alphaHolderSync) {
+  if (!once && !backfill && !walletBackfill && !walletStakeBackfill && !subnetNameBackfill && !alphaHolderBackfill && !alphaHolderHistoryBackfill && !alphaHolderSync) {
     console.log('Use --once to run the ingest command and exit.');
   }
 

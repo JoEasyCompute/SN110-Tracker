@@ -20,6 +20,7 @@ const {
   snapshotExists,
   taoFlowSnapshotExists,
   walletSnapshotExists,
+  walletStakePositionExists,
   deleteSnapshotsInRange,
   deleteTaoPriceHistoryInRange,
   deleteTaoFlowHistoryInRange,
@@ -1350,6 +1351,253 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     });
   }
 
+  async function backfillWalletStakeHistory({
+    wallets = config.wallets || [],
+    days = config.taostatsWalletActivityBackfillDays ?? config.taostatsBackfillDays ?? 60,
+    startIso = null,
+    endIso = null,
+    limit = 200,
+    overwrite = false,
+    onProgress = null,
+  } = {}) {
+    if (active) {
+      return activeSkipResult();
+    }
+    if (isAlphaHolderBackfillActive()) {
+      return { skipped: true, reason: 'alpha-holder backfill is running' };
+    }
+    if (!config.taostatsAuthHeader) {
+      return {
+        ok: false,
+        skipped: true,
+        source: 'wallet-stake-backfill',
+        days,
+        startIso: startIso || null,
+        endIso: endIso || null,
+        overwrite: Boolean(overwrite),
+        fetched: 0,
+        inserted: 0,
+        skipped: 0,
+        deleted: 0,
+        results: [],
+        reason: 'Taostats API access is required to backfill wallet stake history.',
+      };
+    }
+
+    const walletList = Array.isArray(wallets) ? wallets : [];
+    const startedAt = beginActiveJob('wallet-stake-backfill', {
+      label: 'Wallet stake history backfill',
+      wallets: walletList.length,
+      days,
+      startIso: startIso || null,
+      endIso: endIso || null,
+      overwrite: Boolean(overwrite),
+    });
+    const startedIso = startedAt.toISOString();
+    const emitProgress = (payload) => {
+      if (typeof onProgress === 'function') {
+        onProgress(payload);
+      }
+    };
+    const results = [];
+    let fetched = 0;
+    let inserted = 0;
+    let skipped = 0;
+    let deleted = 0;
+    let ok = true;
+    const detail = {
+      wallets: walletList.length,
+      days,
+      limit,
+      startIso: startIso || null,
+      endIso: endIso || null,
+      overwrite: Boolean(overwrite),
+    };
+
+    emitProgress({
+      phase: 'start',
+      operation: 'wallet-stake-backfill',
+      total: walletList.length,
+      completed: 0,
+      remaining: walletList.length,
+      elapsedMs: 0,
+      etaMs: null,
+      etaIso: null,
+      ok: true,
+      days,
+      startIso: startIso || null,
+      endIso: endIso || null,
+      overwrite: Boolean(overwrite),
+    });
+
+    try {
+      for (const [index, wallet] of walletList.entries()) {
+        const hotkeys = Array.isArray(wallet?.hotkeys) ? wallet.hotkeys : [];
+        const walletDetail = {
+          wallet: wallet?.name || wallet?.ss58 || `Wallet ${index + 1}`,
+          address: wallet?.ss58 || wallet?.coldkey || null,
+          hotkeys: hotkeys.length,
+          fetched: 0,
+          inserted: 0,
+          skipped: 0,
+          deleted: 0,
+          ok: true,
+        };
+
+        emitProgress({
+          phase: 'item-start',
+          operation: 'wallet-stake-backfill',
+          total: walletList.length,
+          completed: index,
+          remaining: Math.max(0, walletList.length - index),
+          elapsedMs: Date.now() - startedAt.getTime(),
+          etaMs: null,
+          etaIso: null,
+          wallet: walletDetail.wallet,
+          address: walletDetail.address,
+          hotkeys: hotkeys.length,
+          ok: true,
+        });
+
+        for (const hotkey of hotkeys) {
+          try {
+            const history = await fetchHistoricalStakeBalance({
+              coldkey: wallet.ss58,
+              hotkey: hotkey.ss58,
+              netuid: hotkey.netuid ?? null,
+              taostatsBaseUrl: config.taostatsBaseUrl,
+              taostatsAuthHeader: config.taostatsAuthHeader,
+              rateLimiter: config.taostatsRateLimiter || null,
+              days,
+              startIso,
+              endIso,
+              limit,
+            });
+            walletDetail.fetched += history.length;
+            fetched += history.length;
+
+            if (overwrite && history.length > 0) {
+              const capturedAts = history
+                .map((row) => row.captured_at)
+                .filter(Boolean)
+                .sort();
+              const deleteStartIso = capturedAts[0];
+              const deleteEndIso = capturedAts[capturedAts.length - 1];
+              const removed = deleteWalletStakePositionsInRange(db, wallet.ss58, deleteStartIso, deleteEndIso);
+              deleted += removed;
+              walletDetail.deleted += removed;
+            }
+
+            for (const row of history) {
+              const netuidValue = row.netuid ?? hotkey.netuid ?? null;
+              const capturedAt = row.captured_at || row.remote_timestamp || row.timestamp || null;
+              const hotkeyAddress = row.hotkey_address_ss58 ?? hotkey.ss58 ?? null;
+              if (!overwrite && walletStakePositionExists(db, wallet.ss58, netuidValue, hotkeyAddress, capturedAt)) {
+                skipped += 1;
+                walletDetail.skipped += 1;
+                continue;
+              }
+              row.wallet_name = wallet.name;
+              insertWalletStakePosition(db, row);
+              inserted += 1;
+              walletDetail.inserted += 1;
+            }
+          } catch (error) {
+            ok = false;
+            const reason = error instanceof Error ? error.message : String(error);
+            walletDetail.ok = false;
+            walletDetail.error = reason;
+            walletDetail.reason = reason;
+          }
+        }
+
+        results.push(walletDetail);
+        const completed = index + 1;
+        const elapsedMs = Date.now() - startedAt.getTime();
+        const etaMs = completed > 0 && completed < walletList.length
+          ? Math.max(0, Math.round((elapsedMs / completed) * (walletList.length - completed)))
+          : 0;
+        emitProgress({
+          phase: 'item',
+          operation: 'wallet-stake-backfill',
+          total: walletList.length,
+          completed,
+          remaining: Math.max(0, walletList.length - completed),
+          elapsedMs,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          wallet: walletDetail.wallet,
+          address: walletDetail.address,
+          hotkeys: hotkeys.length,
+          fetched: walletDetail.fetched,
+          inserted: walletDetail.inserted,
+          skipped: walletDetail.skipped,
+          deleted: walletDetail.deleted,
+          ok: walletDetail.ok,
+          message: walletDetail.wallet,
+        });
+      }
+
+      detail.fetched = fetched;
+      detail.inserted = inserted;
+      detail.skipped = skipped;
+      detail.deleted = deleted;
+      detail.results = results;
+      emitProgress({
+        phase: 'done',
+        operation: 'wallet-stake-backfill',
+        total: walletList.length,
+        completed: walletList.length,
+        remaining: 0,
+        elapsedMs: Date.now() - startedAt.getTime(),
+        etaMs: 0,
+        etaIso: null,
+        fetched,
+        inserted,
+        skipped,
+        deleted,
+        ok,
+        days,
+        startIso: startIso || null,
+        endIso: endIso || null,
+        overwrite: Boolean(overwrite),
+        results,
+      });
+
+      return {
+        ok,
+        skipped: false,
+        source: 'wallet-stake-backfill',
+        days,
+        startIso: startIso || null,
+        endIso: endIso || null,
+        overwrite: Boolean(overwrite),
+        fetched,
+        inserted,
+        skipped,
+        deleted,
+        results,
+        detail,
+      };
+    } finally {
+      const finishedAt = new Date();
+      insertIngestRun(db, {
+        netuid: config.netuid,
+        started_at: startedIso,
+        finished_at: finishedAt.toISOString(),
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+        source: 'wallet-stake-backfill',
+        fallback_used: false,
+        ok,
+        snapshot_id: null,
+        message: ok ? 'Wallet stake history backfill completed' : 'Wallet stake history backfill completed with errors',
+        error: null,
+        detail_json: JSON.stringify(detail),
+      });
+      finishActiveJob();
+    }
+  }
+
   async function backfillAlphaHolderSnapshots({
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = false,
@@ -2142,6 +2390,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     syncWalletActivity,
     syncWalletActivityForWallet,
     backfillWalletActivity,
+    backfillWalletStakeHistory,
     isActive: () => active,
     getActiveJob,
     isAlphaHolderBackfillActive,

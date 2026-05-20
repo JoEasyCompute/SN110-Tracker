@@ -20,6 +20,7 @@ const {
   extractSubnetHoldersCountFromHtml,
   createRateLimiter,
   fetchStakeBalanceLatest,
+  resolveHistoricalWindow,
 } = require('../src/taostats');
 const {
   estimatePoolGrowth,
@@ -45,6 +46,7 @@ const {
   getTaoFlowHistory,
   getLatestWalletSnapshot,
   getLatestWalletStakePositions,
+  getWalletStakePositionsHistory,
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
   getAlphaHolderSnapshotLatestCapturedAt,
@@ -1154,6 +1156,119 @@ test('wallet activity sync deduplicates overlapping backfill windows', async () 
   const rows = getWalletTransactions(db, '5WalletAlpha123456789ABCDEFGH');
   assert.equal(rows.length, 3);
   assert.equal(new Set(rows.map((row) => row.dedupe_key)).size, 3);
+
+  db.close();
+});
+
+test('resolveHistoricalWindow expands date-only boundaries to full-day ISO strings', () => {
+  const window = resolveHistoricalWindow({ startIso: '2026-03-01', endIso: '2026-05-02' });
+  assert.equal(window.startIso, '2026-03-01T00:00:00.000Z');
+  assert.equal(window.endIso, '2026-05-02T23:59:59.999Z');
+});
+
+test('wallet stake backfill can fill a range without overwriting existing rows', async () => {
+  const db = openDatabase(':memory:');
+  const walletAddress = '5WalletAlpha123456789ABCDEFGH';
+  const hotkeyAddress = '5HotkeyOne';
+
+  const existingRow = normalizeStakeBalanceSnapshot({
+    block_number: 500,
+    timestamp: '2026-04-01T00:00:00Z',
+    netuid: 110,
+    subnet_rank: 1,
+    subnet_total_holders: 2,
+    balance: '1000000000',
+    balance_as_tao: '1000000000',
+    coldkey: { ss58: walletAddress, hex: '0xwallet' },
+    hotkey: { ss58: hotkeyAddress, hex: '0xhotkey' },
+    hotkey_name: 'Hotkey One',
+  }, {
+    source: 'api-history',
+    sourceUrl: 'https://example.invalid',
+    walletName: 'Miner',
+    address: walletAddress,
+    capturedAt: '2026-04-01T00:00:00.000Z',
+  });
+  existingRow.wallet_name = 'Miner';
+  insertWalletStakePosition(db, existingRow);
+
+  const calls = [];
+  const taostats = {
+    fetchHistoricalStakeBalance: async (args) => {
+      calls.push(args);
+      return [
+        normalizeStakeBalanceSnapshot({
+          block_number: 500,
+          timestamp: '2026-04-01T00:00:00Z',
+          netuid: 110,
+          subnet_rank: 1,
+          subnet_total_holders: 2,
+          balance: '9000000000',
+          balance_as_tao: '9000000000',
+          coldkey: { ss58: walletAddress, hex: '0xwallet' },
+          hotkey: { ss58: hotkeyAddress, hex: '0xhotkey' },
+          hotkey_name: 'Hotkey One',
+        }, {
+          source: 'api-history',
+          sourceUrl: 'https://example.invalid',
+          walletName: 'Miner',
+          address: walletAddress,
+          capturedAt: '2026-04-01T00:00:00.000Z',
+        }),
+        normalizeStakeBalanceSnapshot({
+          block_number: 501,
+          timestamp: '2026-04-02T00:00:00Z',
+          netuid: 110,
+          subnet_rank: 1,
+          subnet_total_holders: 2,
+          balance: '10000000000',
+          balance_as_tao: '10000000000',
+          coldkey: { ss58: walletAddress, hex: '0xwallet' },
+          hotkey: { ss58: hotkeyAddress, hex: '0xhotkey' },
+          hotkey_name: 'Hotkey One',
+        }, {
+          source: 'api-history',
+          sourceUrl: 'https://example.invalid',
+          walletName: 'Miner',
+          address: walletAddress,
+          capturedAt: '2026-04-02T00:00:00.000Z',
+        }),
+      ];
+    },
+  };
+
+  const config = {
+    netuid: 110,
+    taostatsBaseUrl: 'https://example.invalid',
+    taostatsAuthHeader: 'secret',
+    taostatsRateLimiter: null,
+    wallets: [{
+      name: 'Miner',
+      ss58: walletAddress,
+      coldkey: walletAddress,
+      network: 'finney',
+      hotkeys: [{ name: 'Hotkey One', ss58: hotkeyAddress, netuid: 110, network: 'finney' }],
+    }],
+  };
+  const service = createIngestService({ db, config, taostats });
+
+  const result = await service.backfillWalletStakeHistory({
+    startIso: '2026-03-01',
+    endIso: '2026-05-02',
+    overwrite: false,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.inserted, 1);
+  assert.equal(result.skipped, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].startIso, '2026-03-01');
+  assert.equal(calls[0].endIso, '2026-05-02');
+
+  const history = getWalletStakePositionsHistory(db, walletAddress, '2026-03-01T00:00:00.000Z');
+  assert.equal(history.length, 2);
+  assert.equal(Number(history[0].balance_as_tao_num), 1);
+  assert.equal(Number(history[1].balance_as_tao_num), 10);
 
   db.close();
 });

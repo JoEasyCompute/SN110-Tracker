@@ -566,6 +566,41 @@ function historyTimestampToIso(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function normalizeRangeBoundaryIso(value, boundary = 'start') {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const dateOnly = text.match(/^\d{4}-\d{2}-\d{2}$/);
+  if (dateOnly) {
+    return boundary === 'end'
+      ? `${text}T23:59:59.999Z`
+      : `${text}T00:00:00.000Z`;
+  }
+  const date = new Date(text);
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function resolveHistoricalWindow({ days = 30, startIso = null, endIso = null } = {}) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const parsedEndIso = normalizeRangeBoundaryIso(endIso, 'end');
+  const parsedStartIso = normalizeRangeBoundaryIso(startIso, 'start');
+  const fallbackDays = Math.max(1, Number(days) || 1);
+  const endMs = parsedEndIso ? new Date(parsedEndIso).getTime() : nowMs;
+  const startMs = parsedStartIso ? new Date(parsedStartIso).getTime() : endMs - fallbackDays * dayMs;
+  const safeStartMs = Number.isFinite(startMs) ? startMs : nowMs - fallbackDays * dayMs;
+  const safeEndMs = Number.isFinite(endMs) ? endMs : nowMs;
+  const rangeStartMs = Math.min(safeStartMs, safeEndMs);
+  const rangeEndMs = Math.max(safeStartMs, safeEndMs);
+  return {
+    startIso: new Date(rangeStartMs).toISOString(),
+    endIso: new Date(rangeEndMs).toISOString(),
+    timestampStart: Math.floor(rangeStartMs / 1000),
+    timestampEnd: Math.floor(rangeEndMs / 1000),
+  };
+}
+
 function mergeHistoryPayloads({ subnetRecord = null, poolRecord = null }) {
   return {
     ...(poolRecord || {}),
@@ -1107,16 +1142,15 @@ async function fetchHistoricalStakeBalance({
   taostatsAuthHeader,
   rateLimiter = null,
   days = 30,
+  startIso = null,
+  endIso = null,
   limit = 200,
 }) {
   if (!taostatsAuthHeader) {
     return [];
   }
 
-  const now = Date.now();
-  const startIso = new Date(now - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString();
-  const timestampStart = Math.floor(new Date(startIso).getTime() / 1000);
-  const timestampEnd = Math.floor(now / 1000);
+  const window = resolveHistoricalWindow({ days, startIso, endIso });
   const headers = { authorization: taostatsAuthHeader };
   const rows = [];
 
@@ -1125,8 +1159,8 @@ async function fetchHistoricalStakeBalance({
     if (coldkey) url.searchParams.set('coldkey', coldkey);
     if (hotkey) url.searchParams.set('hotkey', hotkey);
     if (netuid !== null && netuid !== undefined) url.searchParams.set('netuid', String(netuid));
-    url.searchParams.set('timestamp_start', String(timestampStart));
-    url.searchParams.set('timestamp_end', String(timestampEnd));
+    url.searchParams.set('timestamp_start', String(window.timestampStart));
+    url.searchParams.set('timestamp_end', String(window.timestampEnd));
     url.searchParams.set('order', 'timestamp_asc');
     url.searchParams.set('limit', String(limit));
     url.searchParams.set('page', String(page));
@@ -1366,6 +1400,8 @@ module.exports = {
   normalizeTaoFlowSnapshot,
   normalizeAccountSnapshot,
   normalizeStakeBalanceSnapshot,
+  normalizeRangeBoundaryIso,
+  resolveHistoricalWindow,
   pickRecord,
   extractRecords,
   countAlphaHolders,

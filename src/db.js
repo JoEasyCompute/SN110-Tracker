@@ -1770,6 +1770,19 @@ function deleteWalletStakePositionsInRange(db, address, startIso, endIso) {
   }
 }
 
+function walletStakePositionExists(db, address, netuid, hotkeyAddress, capturedAt) {
+  const stmt = db.prepare(`
+    SELECT 1
+    FROM wallet_stake_positions
+    WHERE wallet_address_ss58 = ?
+      AND netuid IS ?
+      AND hotkey_address_ss58 IS ?
+      AND captured_at = ?
+    LIMIT 1
+  `);
+  return Boolean(stmt.get(address, netuid ?? null, hotkeyAddress ?? null, capturedAt));
+}
+
 function walletSnapshotExists(db, address, blockNumber) {
   if (blockNumber === null || blockNumber === undefined) return false;
   const stmt = db.prepare(`
@@ -2027,6 +2040,7 @@ module.exports = {
   snapshotExists,
   taoFlowSnapshotExists,
   walletSnapshotExists,
+  walletStakePositionExists,
   deleteWalletStakePositions,
   deleteWalletStakePositionsInRange,
   deleteAlphaHolderSnapshotsInRange,

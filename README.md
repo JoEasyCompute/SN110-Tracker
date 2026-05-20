@@ -97,6 +97,7 @@ npm run backfill -- --days 30 --frequency by_hour
 Add `--no-overwrite` if you want the historical importer to keep existing local rows instead of replacing the overlapping window.
 Use `npm run wallet-backfill -- --days 60` to prefill wallet activity rows for every configured coldkey.
 That command uses the same wallet activity sync flow as the admin-panel trigger and the scheduled refresh, so overlapping windows dedupe safely in SQLite.
+Use `npm run wallet-stake-backfill -- --start 2026-03-01 --end 2026-05-02` to backfill wallet alpha-stake history for the configured wallets over an explicit date range without deleting existing rows first. Add `--overwrite` only if you intentionally want to replace rows already stored in that window.
 Use `npm run subnet-name-backfill` to refresh the local subnet metadata cache for every discovered subnet. It fills friendly names from the Taostats subnet catalog, falls back to the latest subnet snapshot when the catalog row is unnamed, and uses a small concurrent worker queue so the fallback lookups do not run strictly one at a time.
 Use `npm run alpha-holder-backfill` or `npm run alpha-holder-history-backfill` to snapshot the current holder rows for every discovered subnet. Those commands seed the local alpha-holder ranking/history views with a baseline, and the daily UTC snapshot job keeps those charts growing after the initial collection starts.
 The `alpha-holder-history-backfill` alias now reuses the supported snapshot path instead of calling an unsupported Taostats subnet-history endpoint; both CLI commands stream per-subnet progress to stderr and include a live ETA so long fills are easier to monitor from the terminal.
@@ -201,6 +202,7 @@ Implementation notes:
 - `npm run ingest -- --once` - fetch one snapshot and exit
 - `npm run backfill -- --days 30 --frequency by_hour` - backfill historical API data, then refresh the live snapshot
 - `npm run wallet-backfill -- --days 60` - backfill wallet activity for all configured coldkeys
+- `npm run wallet-stake-backfill -- --start 2026-03-01 --end 2026-05-02` - backfill wallet alpha-stake history for configured wallets over a date range without deleting existing rows first
 - `npm run subnet-name-backfill` - refresh the local subnet metadata cache so friendly labels like `Chutes (SN64)` work even when the current subnet snapshot is missing; uses a small concurrent worker queue and prints live progress plus skip reasons
 - `npm run alpha-holder-backfill` - snapshot the current alpha-holder row set for every discovered subnet so the ranking/history views start with a local baseline; uses a 3-worker manual queue, prints live progress, worker ids, page heartbeats, retry waits, and ETA to stderr
 - `npm run alpha-holder-history-backfill` - alias for the alpha-holder backfill command; reuses the supported snapshot path, uses the same 3-worker manual queue, and prints live progress, worker ids, page heartbeats, retry waits, and ETA to stderr
