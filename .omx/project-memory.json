@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-16T00:00:00Z",
+  "updated_at": "2026-05-17T12:11:08Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -25,10 +25,10 @@
     "The wallet modal previously regressed because renderWalletDetails referenced a nonexistent walletStakeHistory variable; keep the browser modal using state.modalStakeHistory and guard wallet-specific rendering so a hotkey-history issue cannot blank the main wallet chart.",
     "The dashboard now includes a standalone Pool growth estimator section directly underneath the wallet section; it uses the latest local subnet pool snapshot, simulates TAO injection locally, and must fail closed if the pool reserves or price are missing.",
     "The pool growth estimator now also shows implied projected subnet market cap plus reserve impact alongside the alpha and price estimates; those market-cap figures are derived from the current snapshot and should be treated as estimates.",
-    "The pool growth estimator also includes a collapsible compact scenario curve for projected alpha price change versus TAO injected across a fixed 0\u20132,500 TAO range; when the curve is collapsed, the cards reflow to fill the panel, and when expanded the curve returns beside the stacked result cards on wide screens with a smooth layout transition, hover crosshairs, tooltip readouts, and no point markers on the line for precise inspection.",
+    "The pool growth estimator also includes a collapsible compact scenario curve for projected alpha price change versus TAO injected across a fixed 0–2,500 TAO range; when the curve is collapsed, the cards reflow to fill the panel, and when expanded the curve returns beside the stacked result cards on wide screens with a smooth layout transition, hover crosshairs, tooltip readouts, and no point markers on the line for precise inspection.",
     "The scenario chart toggle should render as a mixed-case Show chart / Hide chart pill rather than all caps, so the control reads naturally alongside the rest of the estimator panel.",
     "The pool growth estimator source lives in src/pool-estimator.js and the behavior should stay documented in docs/pool-growth-estimator.md so future edits keep the local constant-product approximation, the implied market-cap output, the fixed-range scenario curve, the hover interaction, and the unavailable-state behavior aligned.",
-    "Ctrl/Cmd-clicking a wallet card now opens a wallet transaction modal that combines Taostats extrinsics, transfers, and hotkey stake deltas so the user can inspect the activity behind a wallet change, and the modal reads from the local SQLite cache first with a visible 'Fetching wallet activity\u2026' loading state before falling back to Taostats on cache misses or manual refresh.",
+    "Ctrl/Cmd-clicking a wallet card now opens a wallet transaction modal that combines Taostats extrinsics, transfers, and hotkey stake deltas so the user can inspect the activity behind a wallet change, and the modal reads from the local SQLite cache first with a visible 'Fetching wallet activity…' loading state before falling back to Taostats on cache misses or manual refresh.",
     "The TAO price badge opens a historical TAO/USD modal chart.",
     "Historical metric modals support 24H, 7D, 14D, 30D, and 60D windows, default to 7D on open, include beginner-friendly metric explanations, and can slide by 24 hours with arrow buttons or keyboard shortcuts.",
     "The main dashboard keeps the Latest JSON, History JSON, Recent snapshots, and Latest ingest run inside a collapsible admin panel, and that admin panel is only rendered when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -42,6 +42,10 @@
     "Missing metric values must remain null in charts and render as gaps, not zeroes.",
     "Current hotkey stake positions are fetched live, and the wallet modal can now show an estimated income-sources section that splits wallet growth into validator/owner buckets for known hotkeys while leaving any untagged remainder in the residual/unclassified bucket.",
     "Subnet stats use a 4-column grid, and collapsible panels use a visible chevron affordance.",
-    "Taomarketcap's public subnet table endpoint exposes a cached chain_buys_per_block field, so the repo can source the homepage Chain Buys value locally once it is wired into the cached subnet snapshot model."
+    "Taomarketcap's public subnet table endpoint exposes a cached chain_buys_per_block field, so the repo can source the homepage Chain Buys value locally once it is wired into the cached subnet snapshot model.",
+    "Taostats wallet/API calls are currently blocked by 429 \"Insufficient credits (remaining: 0, required: 1)\" responses, so wallet snapshots, stake-balance, and extrinsic requests cannot advance until credits are replenished.",
+    "The subnet polling path is scrape-based and separate from the Taostats API wallet path; the wallet data staleness is not caused by the scrape-based subnet source.",
+    "Both TAOSTATS_API_KEY and TAOSTATS_API_KEY2 currently hit the same Taostats insufficient-credits response.",
+    "The wallet ingest path now short-circuits when the snapshot call reports exhausted credits and backs off for hours instead of retrying every minute."
   ]
 }

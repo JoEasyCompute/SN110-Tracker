@@ -2061,7 +2061,7 @@ async function buildWalletTransactionTimeline({
   return result;
 }
 
-function renderWalletSection(walletEntries, latestSubnet = null, walletActivityStatus = null) {
+function renderWalletSection(walletEntries, latestSubnet = null, walletActivityStatus = null, experimental = false) {
   if (!Array.isArray(walletEntries) || !walletEntries.length) return '';
   const poolEstimator = buildPoolGrowthEstimatorState(latestSubnet);
   const cards = walletEntries.map(({ wallet, latest, stakePositions = [], hotkeys = [] }) => {
@@ -2128,6 +2128,79 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
       })),
     };
     const value = total === null ? '—' : tao(total, 2);
+
+    if (experimental) {
+      const walletColor = wallet.color || '#00dbbc';
+      const freePct = total && total > 0 && free !== null ? Math.max(0, Math.min(100, Math.round((free / total) * 100))) : 0;
+      const stakedPct = total && total > 0 && staked !== null ? Math.max(0, Math.min(100, Math.round((staked / total) * 100))) : (total ? 100 - freePct : 0);
+      const tone = change24h === null ? 'neutral' : (change24h >= 0 ? 'positive' : 'negative');
+      const badgeText = String(hotkeySummary || '').trim();
+      const changeText = change24h === null ? '—' : signedTao(change24h, 2);
+      const metricAttr = metricData ? ` data-metric="${escapeHtml(JSON.stringify(metricData || {}))}"` : '';
+
+      return `
+        <button type="button" class="card card-button wallet-hologram-card ${tone}" ${metricAttr} style="--wallet-theme-color: ${walletColor};">
+          <div class="hologram-glow"></div>
+          <span class="card-info-badge" title="${escapeHtml(metricData.description)}" aria-label="${escapeHtml(metricData.description)}" aria-hidden="true">i</span>
+          
+          <div class="wallet-card-header">
+            <div class="wallet-avatar" style="background: ${walletColor}1a; border: 1px solid ${walletColor}55;">
+              <span style="color: ${walletColor};">${escapeHtml(wallet.name.charAt(0).toUpperCase())}</span>
+            </div>
+            <div class="wallet-identity">
+              <div class="card-label">${escapeHtml(wallet.name)}</div>
+              <div class="wallet-address-badge">${escapeHtml(shortAddress(wallet.ss58))}</div>
+            </div>
+            ${badgeText ? `<div class="card-badge wallet-badge" style="border-color: ${walletColor}44; color: ${walletColor};">${escapeHtml(badgeText)}</div>` : ''}
+          </div>
+
+          <div class="wallet-balance-row">
+            <div class="wallet-balance-main">
+              <div class="card-value">${escapeHtml(value)}</div>
+              <div class="wallet-24h-change ${change24h >= 0 ? 'positive' : 'negative'}">
+                ${change24h >= 0 ? '▲' : '▼'} ${escapeHtml(changeText.replace('+', '').replace('-', ''))}
+              </div>
+            </div>
+          </div>
+
+          <div class="wallet-ratio-section">
+            <div class="wallet-ratio-labels">
+              <span>Free: <strong>${freePct}%</strong></span>
+              <span>Staked: <strong>${stakedPct}%</strong></span>
+            </div>
+            <div class="wallet-ratio-bar">
+              <div class="free-segment" style="width: ${freePct}%; background: ${walletColor};"></div>
+              <div class="staked-segment" style="width: ${stakedPct}%;"></div>
+            </div>
+          </div>
+
+          <div class="wallet-positions-grid">
+            <div class="position-item">
+              <span class="pos-label">Free</span>
+              <span class="pos-val">${free === null ? '—' : tao(free, 1)}</span>
+            </div>
+            <div class="position-item">
+              <span class="pos-label">Staked</span>
+              <span class="pos-val">${staked === null ? '—' : tao(staked, 1)}</span>
+            </div>
+            <div class="position-item">
+              <span class="pos-label">Root</span>
+              <span class="pos-val">${root === null ? '—' : tao(root, 1)}</span>
+            </div>
+            <div class="position-item">
+              <span class="pos-label">Alpha</span>
+              <span class="pos-val">${alpha === null ? '—' : tao(alpha, 1)}</span>
+            </div>
+          </div>
+
+          <div class="wallet-card-footer">
+            <span>Rank ${Number.isFinite(Number(walletProfile?.rank)) ? compact(walletProfile.rank, 0) : '—'}</span>
+            <span>Network: ${escapeHtml(walletProfile?.createdOnNetwork || wallet.network || 'finney')}</span>
+          </div>
+        </button>
+      `;
+    }
+
     const positionsLabel = positions.length ? ` • Stakes ${positions.length} subnet${positions.length === 1 ? '' : 's'}` : '';
     const subtext = latest
       ? `${shortAddress(wallet.ss58)} • ${wallet.network || 'finney'} • 24h ${change24h === null ? '—' : signedTao(change24h, 2)} • Free ${free === null ? '—' : tao(free, 2)} • Staked ${staked === null ? '—' : tao(staked, 2)}${positionsLabel} • ${Number.isFinite(Number(walletProfile?.rank)) ? ('Rank ' + compact(walletProfile.rank, 0)) : 'Rank —'} • ${walletProfile?.createdOnDate || 'Created date unknown'}`
@@ -6734,7 +6807,7 @@ function renderPage(model, { experimental = false } = {}) {
         </div>
       </section>
     ` : '';
-  const walletSectionHtml = renderWalletSection(walletEntries, latest, walletActivityStatus);
+  const walletSectionHtml = renderWalletSection(walletEntries, latest, walletActivityStatus, experimental);
   const poolGrowthSectionHtml = renderPoolGrowthSection(latest);
   const financialPerspectiveSectionHtml = renderFinancialPerspectiveSection(signal, insight);
   const keyMetricsSectionHtml = `
@@ -7043,6 +7116,209 @@ function renderPage(model, { experimental = false } = {}) {
       .experimental-page .card.accent:hover {
         border-color: var(--accent-color) !important;
         box-shadow: 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px var(--accent-glow) !important;
+      }
+
+      /* Proposal A: Holographic Wallet Card Styling */
+      .experimental-page .wallet-hologram-card {
+        background: linear-gradient(135deg, rgba(16, 23, 34, 0.6) 0%, rgba(8, 12, 19, 0.85) 100%) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 24px !important;
+        padding: 24px !important;
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        text-align: left;
+        align-items: stretch;
+        min-height: 280px;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45) !important;
+        transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1) !important;
+      }
+      .experimental-page .wallet-hologram-card:hover {
+        transform: translateY(-6px) scale(1.01) !important;
+        border-color: var(--wallet-theme-color) !important;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.55), 0 0 20px rgba(255, 255, 255, 0.03), 0 0 25px var(--wallet-theme-color)1a !important;
+      }
+      
+      /* Glowing Hologram Overlay */
+      .experimental-page .wallet-hologram-card .hologram-glow {
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.04) 0%, transparent 50%),
+                    radial-gradient(circle at 70% 70%, var(--wallet-theme-color)08 0%, transparent 60%);
+        pointer-events: none;
+        transition: all 0.5s ease;
+      }
+      .experimental-page .wallet-hologram-card:hover .hologram-glow {
+        transform: translate(5%, 5%);
+      }
+
+      /* Card Header */
+      .experimental-page .wallet-hologram-card .wallet-card-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        position: relative;
+        z-index: 2;
+      }
+      .experimental-page .wallet-hologram-card .wallet-avatar {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        font-size: 16px;
+        flex-shrink: 0;
+      }
+      .experimental-page .wallet-hologram-card .wallet-identity {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+      }
+      .experimental-page .wallet-hologram-card .card-label {
+        font-size: 14px !important;
+        font-weight: 700 !important;
+        color: #ffffff !important;
+        margin: 0 !important;
+      }
+      .experimental-page .wallet-hologram-card .wallet-address-badge {
+        font-size: 11px;
+        font-family: monospace;
+        color: var(--muted);
+      }
+      .experimental-page .wallet-hologram-card .wallet-badge {
+        font-size: 10px !important;
+        padding: 4px 8px !important;
+        border-radius: 6px !important;
+        background: rgba(255, 255, 255, 0.02) !important;
+        border: 1px solid !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.04em !important;
+        text-transform: uppercase !important;
+        position: static !important;
+        margin: 0 !important;
+        color: var(--wallet-theme-color) !important;
+        border-color: var(--wallet-theme-color)44 !important;
+      }
+
+      /* Balance Row */
+      .experimental-page .wallet-hologram-card .wallet-balance-row {
+        position: relative;
+        z-index: 2;
+      }
+      .experimental-page .wallet-hologram-card .wallet-balance-main {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .experimental-page .wallet-hologram-card .card-value {
+        font-size: 26px !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.03em !important;
+        color: #ffffff !important;
+        margin: 0 !important;
+      }
+      .experimental-page .wallet-hologram-card .wallet-24h-change {
+        font-size: 12px;
+        font-weight: 700;
+        padding: 3px 8px;
+        border-radius: 6px;
+      }
+      .experimental-page .wallet-hologram-card .wallet-24h-change.positive {
+        color: var(--positive-color);
+        background: rgba(29, 185, 84, 0.1);
+      }
+      .experimental-page .wallet-hologram-card .wallet-24h-change.negative {
+        color: var(--negative-color);
+        background: rgba(255, 107, 107, 0.1);
+      }
+      .experimental-page .wallet-hologram-card .wallet-24h-change.neutral {
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      /* Ratio Segment Bar */
+      .experimental-page .wallet-hologram-card .wallet-ratio-section {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        position: relative;
+        z-index: 2;
+      }
+      .experimental-page .wallet-hologram-card .wallet-ratio-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .experimental-page .wallet-hologram-card .wallet-ratio-labels strong {
+        color: #ffffff;
+      }
+      .experimental-page .wallet-hologram-card .wallet-ratio-bar {
+        background: rgba(255, 255, 255, 0.05);
+        height: 6px;
+        border-radius: 999px;
+        overflow: hidden;
+        display: flex;
+        margin-top: 6px;
+      }
+      .experimental-page .wallet-hologram-card .wallet-ratio-bar .free-segment {
+        height: 100%;
+        border-radius: 999px 0 0 999px;
+      }
+      .experimental-page .wallet-hologram-card .wallet-ratio-bar .staked-segment {
+        background: rgba(255, 255, 255, 0.15);
+        height: 100%;
+        border-radius: 0 999px 999px 0;
+      }
+
+      /* Positions Grid */
+      .experimental-page .wallet-hologram-card .wallet-positions-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding-top: 14px;
+        position: relative;
+        z-index: 2;
+      }
+      .experimental-page .wallet-hologram-card .position-item {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .experimental-page .wallet-hologram-card .pos-label {
+        font-size: 9px;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      .experimental-page .wallet-hologram-card .pos-val {
+        font-size: 12px;
+        font-weight: 700;
+        color: #e2e8f0;
+      }
+
+      /* Card Footer */
+      .experimental-page .wallet-hologram-card .wallet-card-footer {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--muted);
+        border-top: 1px solid rgba(255, 255, 255, 0.04);
+        padding-top: 12px;
+        margin-top: auto;
+        position: relative;
+        z-index: 2;
       }
 
       /* Premium Card Interior Layout */
