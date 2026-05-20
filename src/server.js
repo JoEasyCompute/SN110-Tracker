@@ -6019,6 +6019,11 @@ function renderDashboardClientScript({ netuid, config }) {
         state.modalHistoryAutoFollow = false;
         state.modalHistoryWindowEndMs = clampedEnd;
         renderHistoryChart(state.modalMetric, state.modalHistory);
+        try {
+          renderAlphaHistoryChart();
+        } catch (error) {
+          console.warn('Unable to re-render alpha history chart on window shift', error);
+        }
       }
 
       function buildWindowedHistoryPoints(metric, history, bounds) {
@@ -6352,15 +6357,45 @@ function renderDashboardClientScript({ netuid, config }) {
         canvas.hidden = false;
 
         const days = state.modalHistoryDays || 7;
-        const xMin = points[0].x;
-        const xMax = points[points.length - 1].x;
+
+        // Compute the same window bounds as the main history chart
+        const durationMs = modalWindowDurationMs();
+        const earliest = points[0].x;
+        const latest = points[points.length - 1].x;
+        let rangeEnd, rangeStart;
+        if ((latest - earliest) <= durationMs) {
+          // All data fits in the window — show everything
+          rangeStart = earliest;
+          rangeEnd = latest;
+        } else {
+          const preferredEnd = state.modalHistoryAutoFollow || !Number.isFinite(state.modalHistoryWindowEndMs)
+            ? latest
+            : state.modalHistoryWindowEndMs;
+          rangeEnd = Math.min(latest, Math.max(earliest + durationMs, preferredEnd));
+          rangeStart = rangeEnd - durationMs;
+        }
+
+        // Filter to visible window, padding with one point outside each side for context
+        const visiblePoints = points.filter((p) => p.x >= rangeStart && p.x <= rangeEnd);
+        const priorPoint = [...points].reverse().find((p) => p.x < rangeStart);
+        const nextPoint = points.find((p) => p.x > rangeEnd);
+        const paddedPoints = [
+          ...(priorPoint ? [priorPoint] : []),
+          ...visiblePoints,
+          ...(nextPoint ? [nextPoint] : []),
+        ];
+
+        if (!paddedPoints.length) {
+          panel.hidden = true;
+          return;
+        }
 
         state.modalAlphaChart = new Chart(canvas, {
           type: 'line',
           data: {
             datasets: [{
               label: 'Alpha staked (α)',
-              data: points,
+              data: paddedPoints,
               parsing: false,
               borderColor: '#f59e0b',
               backgroundColor: '#f59e0b22',
@@ -6395,8 +6430,8 @@ function renderDashboardClientScript({ netuid, config }) {
             scales: {
               x: {
                 type: 'linear',
-                min: xMin,
-                max: xMax,
+                min: rangeStart,
+                max: rangeEnd,
                 ticks: {
                   color: '#8fa3b8',
                   maxTicksLimit: 8,
