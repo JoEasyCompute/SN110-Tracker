@@ -3308,6 +3308,63 @@ test('experimental render uses an overview-first layout with collapsed details',
   assert.equal(html.includes('Open stable dashboard'), true);
 });
 
+test('experimental render shows 24h comparison cards in a two-row deep grid', () => {
+  const comparisons = Array.from({ length: 6 }, (_, index) => ({
+    field: `metric_${index}`,
+    label: `Metric ${index + 1}`,
+    currencyMode: 'tao',
+    latestValue: index + 1,
+    priorValue: index,
+    latestTaoPriceUsd: 100,
+    priorTaoPriceUsd: 100,
+    delta: 1,
+    pct: 10,
+    prior: { captured_at: '2026-04-29T00:00:00Z' },
+  }));
+
+  const html = renderPage({
+    latest: {
+      captured_at: '2026-04-30T00:00:00Z',
+      block_number: 1,
+      source: 'scrape',
+      remote_timestamp: '2026-04-30T00:00:00Z',
+    },
+    recent: [],
+    ingestRun: { ok: true, started_at: '2026-04-30T00:00:00Z', source: 'scrape', duration_ms: 1234 },
+    totalSnapshots: 1,
+    totalWalletSnapshots: 1,
+    comparisons,
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      adminAuthEnabled: true,
+      adminAuthenticated: true,
+      pollIntervalMinutes: 60,
+      wallets: [],
+      taostatsPublicBaseUrl: '',
+    },
+    netuid: 110,
+    latestTaoPriceUsd: 100,
+    nextPollAtIso: null,
+    walletEntries: [],
+    walletActivityStatus: { transactionCount: 12, lastRunAtIso: '2026-04-30T00:00:00Z', nextSyncAtIso: null, syncIntervalMinutes: 60 },
+    alphaHolderRows: [],
+    alphaHolderRowCount: 0,
+    alphaHolderRankingRows: [],
+    alphaHolderCurrentRankRow: null,
+    alphaHolderRankHistoryStartAt: null,
+    scheduleStatus: [],
+    scheduleQueue: [{ title: 'Subnet poll ingest', detail: 'Due 30 Apr 2026, 00:00', statusLabel: 'Queued' }],
+    alphaHolderBackfillActive: false,
+    alphaHolderBackfillStartedAtIso: null,
+    subnetLabel: 'Green Compute (SN110)',
+  }, { experimental: true });
+
+  assert.equal(html.includes('comparison-grid'), true);
+  assert.equal((html.match(/vs 24h ago/g) || []).length, 6);
+});
+
 test('dashboard admin panel requires an authenticated admin session', async () => {
   const db = openDatabase(':memory:');
   const ingestService = {

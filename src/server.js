@@ -2992,6 +2992,10 @@ function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = 
 }
 
 function renderComparisonCard(comparison) {
+  return renderComparisonCardWithVariant(comparison, 'compact');
+}
+
+function renderComparisonCardWithVariant(comparison, variant = 'compact') {
   const pctLabel = comparison.pct === null ? '—' : signedPercent(comparison.pct, 2);
   const latestValue = comparison.latestValue;
   const priorValue = comparison.priorValue;
@@ -3005,7 +3009,7 @@ function renderComparisonCard(comparison) {
       ? `Prior sample: ${formatIso(comparison.prior.captured_at)}`
       : 'No sample at least 24h ago',
     tone: comparison.delta !== null && comparison.delta >= 0 ? 'positive' : 'negative',
-    variant: 'compact',
+    variant,
     metricData: {
       kind: 'comparison',
       field: comparison.field,
@@ -3021,11 +3025,13 @@ function renderComparisonCard(comparison) {
   });
 }
 
-function renderComparisonSection(comparisons) {
+function renderComparisonSection(comparisons, { experimental = false } = {}) {
   if (!comparisons.length) {
     return '<p class="empty">No 24h comparison data yet. After the tracker collects at least one day of history, the deltas will appear here.</p>';
   }
-  return `<div class="grid compact">${comparisons.map(renderComparisonCard).join('')}</div>`;
+  const variant = experimental ? 'deep' : 'compact';
+  const gridClass = experimental ? 'grid comparison-grid' : 'grid compact';
+  return `<div class="${gridClass}">${comparisons.map((comparison) => renderComparisonCardWithVariant(comparison, variant)).join('')}</div>`;
 }
 
 function renderHistoryTable(rows) {
@@ -7095,7 +7101,7 @@ function renderPage(model, { experimental = false } = {}) {
   const comparisonsSectionHtml = `
       <section class="section">
         <h2>What changed in the last 24h</h2>
-        ${renderComparisonSection(comparisons)}
+        ${renderComparisonSection(comparisons, { experimental })}
       </section>
     `;
   const trendChartsSectionHtml = `
@@ -7454,6 +7460,10 @@ function renderPage(model, { experimental = false } = {}) {
         color: var(--muted) !important;
         line-height: 1.45 !important;
       }
+      .experimental-page .comparison-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+        gap: 16px !important;
+      }
       .experimental-page .card.positive:hover {
         border-color: var(--positive-color) !important;
         box-shadow: 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px var(--positive-glow) !important;
@@ -7749,6 +7759,9 @@ function renderPage(model, { experimental = false } = {}) {
       }
       @media (max-width: 600px) {
         .experimental-page .grid.stats {
+          grid-template-columns: 1fr !important;
+        }
+        .experimental-page .comparison-grid {
           grid-template-columns: 1fr !important;
         }
         .experimental-page .experimental-details-body {
