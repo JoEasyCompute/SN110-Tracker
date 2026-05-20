@@ -6969,107 +6969,335 @@ function renderPage(model, { experimental = false } = {}) {
         letter-spacing: 0.06em;
         text-transform: uppercase;
       }
+      /* Scoped Glassmorphism Design Tokens & Premium Overrides */
+      .experimental-page {
+        --bg-glass: rgba(11, 15, 20, 0.7);
+        --panel-glass: rgba(16, 23, 34, 0.65);
+        --panel-glass-hover: rgba(22, 32, 47, 0.85);
+        --border-glass: rgba(255, 255, 255, 0.08);
+        --border-glass-hover: rgba(0, 219, 188, 0.45);
+        --accent-glow: rgba(0, 219, 188, 0.15);
+        --positive-glow: rgba(29, 185, 84, 0.15);
+        --negative-glow: rgba(255, 107, 107, 0.15);
+        --accent-color: #00dbbc;
+        --positive-color: #1db954;
+        --negative-color: #ff6b6b;
+      }
+
+      /* Animated Lifeline Breathing Glows */
+      @keyframes experimental-pulse-positive {
+        0%, 100% { box-shadow: 0 0 6px 1px rgba(29, 185, 84, 0.3), 0 0 0 0 rgba(29, 185, 84, 0.2); }
+        50% { box-shadow: 0 0 12px 3px rgba(29, 185, 84, 0.7), 0 0 0 4px rgba(29, 185, 84, 0.1); }
+      }
+      @keyframes experimental-pulse-negative {
+        0%, 100% { box-shadow: 0 0 6px 1px rgba(255, 107, 107, 0.3), 0 0 0 0 rgba(255, 107, 107, 0.2); }
+        50% { box-shadow: 0 0 12px 3px rgba(255, 107, 107, 0.7), 0 0 0 4px rgba(255, 107, 107, 0.1); }
+      }
+      @keyframes experimental-pulse-accent {
+        0%, 100% { box-shadow: 0 0 6px 1px rgba(0, 219, 188, 0.3), 0 0 0 0 rgba(0, 219, 188, 0.2); }
+        50% { box-shadow: 0 0 12px 3px rgba(0, 219, 188, 0.7), 0 0 0 4px rgba(0, 219, 188, 0.1); }
+      }
+
+      /* Glassmorphic Panel Overrides */
+      .experimental-page .panel {
+        background: var(--panel-glass) !important;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid var(--border-glass) !important;
+        border-radius: 20px !important;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3) !important;
+        transition: border-color 0.25s ease, box-shadow 0.25s ease !important;
+      }
+      .experimental-page .panel:hover {
+        border-color: rgba(0, 219, 188, 0.2) !important;
+        box-shadow: 0 10px 35px rgba(0, 219, 188, 0.05) !important;
+      }
+
+      /* Premium Card Overrides */
+      .experimental-page .card {
+        background: var(--panel-glass) !important;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid var(--border-glass) !important;
+        border-radius: 20px !important;
+        padding: 18px !important;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3) !important;
+        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        position: relative;
+        overflow: hidden;
+      }
+      .experimental-page .card:hover {
+        transform: translateY(-4px) !important;
+        background: var(--panel-glass-hover) !important;
+        border-color: rgba(255, 255, 255, 0.15) !important;
+        box-shadow: 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px 2px rgba(255, 255, 255, 0.03) !important;
+      }
+      .experimental-page .card.positive:hover {
+        border-color: var(--positive-color) !important;
+        box-shadow: 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px var(--positive-glow) !important;
+      }
+      .experimental-page .card.negative:hover {
+        border-color: var(--negative-color) !important;
+        box-shadow: 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px var(--negative-glow) !important;
+      }
+      .experimental-page .card.accent:hover {
+        border-color: var(--accent-color) !important;
+        box-shadow: 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px var(--accent-glow) !important;
+      }
+
+      /* Premium Card Interior Layout */
       .experimental-page .experimental-overview .card {
-        padding: 10px;
+        padding: 18px !important;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 120px;
+      }
+      /* Lifeline Status Lights via absolute CSS ::before pseudo elements */
+      .experimental-page .experimental-overview .card::before {
+        content: '';
+        position: absolute;
+        top: 18px;
+        right: 18px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+      .experimental-page .experimental-overview .card.positive::before {
+        background: var(--positive-color);
+        animation: experimental-pulse-positive 2s infinite ease-in-out;
+      }
+      .experimental-page .experimental-overview .card.negative::before {
+        background: var(--negative-color);
+        animation: experimental-pulse-negative 2s infinite ease-in-out;
+      }
+      .experimental-page .experimental-overview .card.accent::before {
+        background: var(--accent-color);
+        animation: experimental-pulse-accent 2s infinite ease-in-out;
+      }
+
+      .experimental-page .experimental-overview .card-label {
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase !important;
+        color: var(--muted) !important;
+        margin: 0 !important;
+        max-width: calc(100% - 20px);
       }
       .experimental-page .experimental-overview .card-value {
-        margin-top: 6px;
-        font-size: 15px;
+        margin-top: auto !important;
+        font-size: 20px !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.02em !important;
+        color: #ffffff !important;
+      }
+      .experimental-page .experimental-overview .card.positive .card-value {
+        color: var(--positive-color) !important;
+      }
+      .experimental-page .experimental-overview .card.negative .card-value {
+        color: var(--negative-color) !important;
+      }
+      .experimental-page .experimental-overview .card.accent .card-value {
+        color: var(--accent-color) !important;
       }
       .experimental-page .experimental-overview .card-subtext {
-        margin-top: 4px;
-        font-size: 10px;
-        line-height: 1.3;
+        margin-top: 6px !important;
+        font-size: 11px !important;
+        color: var(--muted) !important;
+        line-height: 1.45 !important;
       }
+
+      /* Premium Card Grid Responsive Wrap */
+      @media (max-width: 1024px) {
+        .experimental-page .grid.stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+      }
+      @media (max-width: 600px) {
+        .experimental-page .grid.stats {
+          grid-template-columns: 1fr !important;
+        }
+      }
+
+      /* Premium Expandable Control Drawer (Explore More details panel) */
       .experimental-page .experimental-details-panel {
-        margin-top: 16px;
-        border: 1px solid rgba(143, 163, 184, 0.20);
-        border-radius: 18px;
-        background: rgba(10, 15, 23, 0.62);
+        margin-top: 28px !important;
+        border: 1px solid var(--border-glass) !important;
+        border-radius: 24px !important;
+        background: var(--panel-glass) !important;
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4) !important;
+        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
         overflow: hidden;
+      }
+      .experimental-page .experimental-details-panel[open] {
+        border-color: rgba(0, 219, 188, 0.25) !important;
+        box-shadow: 0 16px 50px 0 rgba(0, 0, 0, 0.5), 0 0 20px 0 rgba(0, 219, 188, 0.05) !important;
       }
       .experimental-page .experimental-details-panel > summary {
         list-style: none;
         cursor: pointer;
-        padding: 12px 14px;
+        padding: 18px 24px !important;
         font-weight: 700;
-        color: rgba(231, 238, 247, 0.92);
-        border-bottom: 1px solid rgba(143, 163, 184, 0.12);
+        font-size: 16px !important;
+        letter-spacing: 0.02em !important;
+        color: #ffffff !important;
+        border-bottom: 1px solid var(--border-glass) !important;
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 12px !important;
+        user-select: none;
+        transition: all 0.2s ease !important;
+      }
+      .experimental-page .experimental-details-panel > summary:hover {
+        background: rgba(255, 255, 255, 0.03) !important;
+        color: var(--accent-color) !important;
       }
       .experimental-page .experimental-details-panel > summary::-webkit-details-marker {
         display: none;
       }
       .experimental-page .experimental-details-panel > summary::before {
-        content: '▸';
+        content: '→' !important;
+        font-size: 18px !important;
+        font-family: monospace !important;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 16px;
-        height: 16px;
-        color: var(--accent);
-        transition: transform 0.18s ease;
+        width: 24px !important;
+        height: 24px !important;
+        color: var(--accent-color) !important;
+        transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
         flex: 0 0 auto;
       }
       .experimental-page .experimental-details-panel[open] > summary::before {
-        transform: rotate(90deg);
+        transform: rotate(90deg) !important;
       }
+
+      /* Responsive Multi-column Grid for Drawer Body */
       .experimental-page .experimental-details-body {
-        display: grid;
-        gap: 12px;
-        padding: 12px;
+        display: grid !important;
+        grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)) !important;
+        gap: 24px !important;
+        padding: 24px !important;
+        background: rgba(8, 12, 19, 0.4) !important;
       }
       .experimental-page .experimental-details-body .section {
-        margin-top: 0;
+        margin-top: 0 !important;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
       }
+      .experimental-page .experimental-details-body .section > h2 {
+        font-size: 16px !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.08em !important;
+        color: var(--muted) !important;
+        margin-bottom: 12px !important;
+      }
+      .experimental-page .experimental-details-body .panel,
       .experimental-page .experimental-details-body .financial-panel {
-        margin-top: 0;
+        margin-top: 0 !important;
+        background: rgba(16, 23, 34, 0.45) !important;
+        border: 1px solid var(--border-glass) !important;
+        border-radius: 20px !important;
+        padding: 20px !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
       }
+
+      /* Premium Admin Control Panel Overrides */
       .experimental-page .admin-panel.experimental-admin {
-        border-color: rgba(143, 163, 184, 0.20);
-        background: rgba(10, 15, 23, 0.58);
+        border-color: var(--border-glass) !important;
+        background: var(--panel-glass) !important;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border-radius: 24px !important;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35) !important;
+        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        margin-top: 24px !important;
+      }
+      .experimental-page .admin-panel.experimental-admin[open] {
+        border-color: rgba(0, 219, 188, 0.25) !important;
+        box-shadow: 0 16px 50px 0 rgba(0, 0, 0, 0.5), 0 0 20px 0 rgba(0, 219, 188, 0.05) !important;
       }
       .experimental-page .admin-panel.experimental-admin > summary {
-        color: rgba(231, 238, 247, 0.9);
+        color: #ffffff !important;
+        padding: 18px 24px !important;
+        font-weight: 700;
+        font-size: 16px !important;
+        letter-spacing: 0.02em !important;
+        display: flex;
+        align-items: center;
+        gap: 12px !important;
+        transition: all 0.2s ease !important;
+        user-select: none;
+      }
+      .experimental-page .admin-panel.experimental-admin > summary:hover {
+        background: rgba(255, 255, 255, 0.03) !important;
+        color: var(--accent-color) !important;
       }
       .experimental-page .admin-panel.experimental-admin .admin-panel-body {
-        padding: 12px;
+        padding: 24px !important;
+        background: rgba(8, 12, 19, 0.4) !important;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
       }
       .experimental-page .admin-panel.experimental-admin .panel {
-        border-color: rgba(143, 163, 184, 0.16);
-        background: rgba(16, 23, 34, 0.62);
-        padding: 12px;
+        border-color: var(--border-glass) !important;
+        background: rgba(16, 23, 34, 0.5) !important;
+        border-radius: 20px !important;
+        padding: 20px !important;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15) !important;
+        transition: all 0.2s ease !important;
+      }
+      .experimental-page .admin-panel.experimental-admin .panel:hover {
+        border-color: rgba(255, 255, 255, 0.12) !important;
+        background: rgba(16, 23, 34, 0.6) !important;
       }
       .experimental-page .admin-panel.experimental-admin .admin-actions {
-        margin-bottom: 12px;
+        margin-bottom: 16px !important;
       }
       .experimental-page .admin-panel.experimental-admin .schedule-queue {
-        gap: 8px;
+        gap: 12px !important;
       }
       .experimental-page .admin-panel.experimental-admin .schedule-queue-list {
-        gap: 8px;
+        gap: 10px !important;
       }
       .experimental-page .admin-panel.experimental-admin .schedule-queue-item {
-        padding: 10px 12px;
-        border-radius: 12px;
+        padding: 12px 14px !important;
+        border-radius: 14px !important;
+        background: rgba(255, 255, 255, 0.02) !important;
+        border: 1px solid rgba(255, 255, 255, 0.04) !important;
+        transition: all 0.2s ease !important;
+      }
+      .experimental-page .admin-panel.experimental-admin .schedule-queue-item:hover {
+        background: rgba(255, 255, 255, 0.04) !important;
+        border-color: rgba(255, 255, 255, 0.08) !important;
+        transform: translateX(2px);
       }
       .experimental-page .admin-panel.experimental-admin .schedule-queue-item-title {
-        font-size: 13px;
+        font-size: 14px !important;
+        font-weight: 600 !important;
       }
       .experimental-page .admin-panel.experimental-admin .schedule-queue-item-meta {
-        margin-top: 4px;
-        font-size: 11px;
-        line-height: 1.35;
+        margin-top: 6px !important;
+        font-size: 12px !important;
+        color: var(--muted) !important;
+        line-height: 1.4 !important;
       }
       .experimental-page .admin-panel.experimental-admin .schedule-status-table th,
       .experimental-page .admin-panel.experimental-admin .schedule-status-table td {
-        padding-top: 8px;
-        padding-bottom: 8px;
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
       }
       .experimental-page .admin-panel.experimental-admin .button {
-        background: rgba(16, 23, 34, 0.92);
+        background: rgba(16, 23, 34, 0.92) !important;
       }
       .poll-switcher {
         display: inline-flex;
