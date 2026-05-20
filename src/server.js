@@ -1227,8 +1227,11 @@ function renderLatestSnapshotCards(latest, defs) {
   return renderMetricCards(latest, defs, { defaultSubtext: true, variant: 'deep' });
 }
 
-function renderSubnetDataCards(latest, subnetLabel = null) {
-  return renderMetricCards(latest, getSubnetDataMetricDefs(subnetLabel), { defaultSubtext: false, variant: 'compact' });
+function renderSubnetDataCards(latest, subnetLabel = null, { experimental = false } = {}) {
+  return renderMetricCards(latest, getSubnetDataMetricDefs(subnetLabel), {
+    defaultSubtext: false,
+    variant: experimental ? 'deep' : 'compact',
+  });
 }
 
 function renderAlphaHolderSection(rows, {
@@ -1580,7 +1583,7 @@ function buildWatchlistSummary(latest, comparisons, signal) {
   };
 }
 
-function renderInsightSection(insight) {
+function renderInsightSection(insight, { experimental = false } = {}) {
   if (!insight) return '';
   const bullets = insight.bullets.length
     ? insight.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join('')
@@ -1591,7 +1594,7 @@ function renderInsightSection(insight) {
     subtext: card.subtext,
     tone: card.tone || 'neutral',
     clickable: false,
-    variant: 'compact',
+    variant: experimental ? 'deep' : 'compact',
   })).join('');
   return `
     <section class="section insight-section">
@@ -1611,7 +1614,7 @@ function renderInsightSection(insight) {
   `;
 }
 
-function renderWatchlistSection(watchlist) {
+function renderWatchlistSection(watchlist, { experimental = false } = {}) {
   if (!watchlist) return '';
   const bullets = watchlist.bullets.length
     ? watchlist.bullets.map((bullet) => `<li>${escapeHtml(bullet)}</li>`).join('')
@@ -1622,7 +1625,7 @@ function renderWatchlistSection(watchlist) {
     subtext: card.subtext,
     tone: card.tone || 'neutral',
     clickable: false,
-    variant: 'compact',
+    variant: experimental ? 'deep' : 'compact',
   })).join('');
   return `
     <section class="section watchlist-section">
@@ -2698,7 +2701,7 @@ function renderPoolGrowthSection(latestSubnet = null) {
   `;
 }
 
-function renderFinancialPerspectiveSection(signal, insight) {
+function renderFinancialPerspectiveSection(signal, insight, { experimental = false } = {}) {
   const watchlist = buildWatchlistSummary(
     signal ? signal.latest : null,
     signal ? signal.comparisons : [],
@@ -2710,8 +2713,8 @@ function renderFinancialPerspectiveSection(signal, insight) {
       <summary>Financial perspective</summary>
       <div class="financial-panel-body">
         ${renderSignalSection(signal)}
-        ${renderInsightSection(insight)}
-        ${renderWatchlistSection(watchlist)}
+        ${renderInsightSection(insight, { experimental })}
+        ${renderWatchlistSection(watchlist, { experimental })}
       </div>
     </details>
   `;
@@ -7042,19 +7045,22 @@ function renderPage(model, { experimental = false } = {}) {
         value: ingestRun.ok ? 'OK' : 'Failed',
         subtext: `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}${ingestRun.fallback_used ? ' • fallback used' : ''} • ${ingestRun.duration_ms} ms`,
         tone: ingestRun.ok ? 'positive' : 'negative',
+        variant: experimental ? 'deep' : 'compact',
       })
-    : metricCard({ label: 'Latest ingest', value: '—', subtext: 'No run yet' });
+    : metricCard({ label: 'Latest ingest', value: '—', subtext: 'No run yet', variant: experimental ? 'deep' : 'compact' });
   const overviewIngestCard = metricCard({
     label: 'Ingest health',
     value: ingestRun ? (ingestRun.ok ? 'Healthy' : 'Failed') : '—',
     subtext: ingestRun ? `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}` : 'No ingest run recorded',
     tone: ingestRun ? (ingestRun.ok ? 'positive' : 'negative') : 'neutral',
+    variant: 'deep',
   });
   const overviewSnapshotCard = metricCard({
     label: 'Snapshot freshness',
     value: latest ? formatRelativeIso(latest.captured_at) : '—',
     subtext: latest ? `Source: ${latest.source}` : 'No current snapshot',
     tone: latest ? 'positive' : 'neutral',
+    variant: 'deep',
   });
   const overviewWalletCard = metricCard({
     label: 'Wallet cache',
@@ -7063,6 +7069,7 @@ function renderPage(model, { experimental = false } = {}) {
       ? `Rows cached: ${Number.isFinite(Number(walletActivityStatus.transactionCount)) ? compact(walletActivityStatus.transactionCount, 0) : '—'}`
       : 'Wallet activity unavailable',
     tone: walletActivityStatus?.lastRunAtIso ? 'positive' : 'neutral',
+    variant: 'deep',
   });
   const overviewQueueCard = metricCard({
     label: 'Next scheduled work',
@@ -7071,6 +7078,7 @@ function renderPage(model, { experimental = false } = {}) {
       ? `${scheduleQueue[0].statusLabel || 'Queued'} • ${scheduleQueue[0].detail || '—'}`
       : 'No queued jobs at the moment',
     tone: scheduleQueue?.[0] ? 'accent' : 'neutral',
+    variant: 'deep',
   });
   const experimentalOverviewSection = experimental ? `
       <section class="section experimental-overview">
@@ -7085,7 +7093,7 @@ function renderPage(model, { experimental = false } = {}) {
     ` : '';
   const walletSectionHtml = renderWalletSection(walletEntries, latest, walletActivityStatus, experimental);
   const poolGrowthSectionHtml = renderPoolGrowthSection(latest);
-  const financialPerspectiveSectionHtml = renderFinancialPerspectiveSection(signal, insight);
+  const financialPerspectiveSectionHtml = renderFinancialPerspectiveSection(signal, insight, { experimental });
   const keyMetricsSectionHtml = `
       <section class="section">
         <h2>Key metrics</h2>
@@ -7095,7 +7103,7 @@ function renderPage(model, { experimental = false } = {}) {
   const subnetStatsSectionHtml = `
       <section class="section">
         <h2>Subnet stats</h2>
-        <div class="grid stats">${latest ? renderSubnetDataCards(latest, subnetLabel) : ''}</div>
+        <div class="grid stats">${latest ? renderSubnetDataCards(latest, subnetLabel, { experimental }) : ''}</div>
       </section>
     `;
   const comparisonsSectionHtml = `
