@@ -3238,6 +3238,7 @@ function renderDashboardClientScript({ netuid, config }) {
         historyLoading: new Map(),
         charts: new Map(),
         modalChart: null,
+        modalAlphaChart: null,
         modalMetric: null,
         modalHistory: null,
         modalStakeHistory: null,
@@ -3415,6 +3416,8 @@ function renderDashboardClientScript({ netuid, config }) {
         explanation: document.getElementById('history-modal-explanation'),
         walletDetails: document.getElementById('history-modal-wallet-details'),
         canvas: document.getElementById('history-modal-canvas'),
+        alphaCanvas: document.getElementById('history-modal-alpha-canvas'),
+        alphaChartPanel: document.getElementById('history-modal-alpha-chart-panel'),
         empty: document.getElementById('history-modal-empty'),
         note: document.getElementById('history-modal-note'),
         close: document.getElementById('history-modal-close'),
@@ -6304,6 +6307,119 @@ function renderDashboardClientScript({ netuid, config }) {
         updateChartGapNote('history-modal-note', historyValues);
       }
 
+      function renderAlphaHistoryChart() {
+        const canvas = modalElements.alphaCanvas;
+        const panel = modalElements.alphaChartPanel;
+        if (!canvas || !panel) return;
+
+        if (state.modalAlphaChart) {
+          state.modalAlphaChart.destroy();
+          state.modalAlphaChart = null;
+        }
+
+        const metric = state.modalMetric;
+        if (!metric || metric.kind !== 'wallet') {
+          panel.hidden = true;
+          return;
+        }
+
+        // Build series from stake history: sum alpha units across all hotkeys by capture time
+        const stakeHistory = Array.isArray(state.modalStakeHistory) ? state.modalStakeHistory : [];
+        if (!stakeHistory.length) {
+          panel.hidden = true;
+          return;
+        }
+
+        const totalsByCapture = new Map();
+        for (const row of stakeHistory) {
+          const capturedAt = row?.captured_at ? new Date(row.captured_at).getTime() : null;
+          if (!Number.isFinite(capturedAt)) continue;
+          const raw = toAlphaUnits(row.balance_num ?? row.balance ?? row.balance_as_tao_num ?? null);
+          if (!Number.isFinite(raw)) continue;
+          totalsByCapture.set(capturedAt, (totalsByCapture.get(capturedAt) || 0) + raw);
+        }
+
+        const points = [...totalsByCapture.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([x, y]) => ({ x, y }));
+
+        if (!points.length) {
+          panel.hidden = true;
+          return;
+        }
+
+        panel.hidden = false;
+        canvas.hidden = false;
+
+        const days = state.modalHistoryDays || 7;
+        const xMin = points[0].x;
+        const xMax = points[points.length - 1].x;
+
+        state.modalAlphaChart = new Chart(canvas, {
+          type: 'line',
+          data: {
+            datasets: [{
+              label: 'Alpha staked (α)',
+              data: points,
+              parsing: false,
+              borderColor: '#f59e0b',
+              backgroundColor: '#f59e0b22',
+              fill: true,
+              pointRadius: 2,
+              pointHoverRadius: 4,
+              tension: 0.28,
+              spanGaps: false,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                mode: 'index',
+                intersect: false,
+                callbacks: {
+                  title(items) {
+                    return items.length ? formatChartDate(items[0].parsed.x, days) : '';
+                  },
+                  label(context) {
+                    const val = context.parsed.y;
+                    if (!Number.isFinite(val)) return ' —';
+                    return ' α ' + new Intl.NumberFormat('en-US', { maximumFractionDigits: 2, notation: 'compact' }).format(val);
+                  },
+                },
+              },
+            },
+            scales: {
+              x: {
+                type: 'linear',
+                min: xMin,
+                max: xMax,
+                ticks: {
+                  color: '#8fa3b8',
+                  maxTicksLimit: 8,
+                  callback(value) {
+                    return formatChartDate(value, days);
+                  },
+                },
+                grid: { color: 'rgba(143, 163, 184, 0.12)' },
+              },
+              y: {
+                ticks: {
+                  color: '#8fa3b8',
+                  callback(value) {
+                    return 'α ' + new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(value);
+                  },
+                },
+                grid: { color: 'rgba(143, 163, 184, 0.12)' },
+              },
+            },
+          },
+        });
+      }
+
       function renderModalMetric(metric) {
         if (!metric) return;
         modalElements.title.textContent = metric.label + ' history';
@@ -6356,6 +6472,11 @@ function renderDashboardClientScript({ netuid, config }) {
                 renderWalletDetails(metric);
               } catch (error) {
                 console.warn('Unable to update wallet details for', metric.label, error);
+              }
+              try {
+                renderAlphaHistoryChart();
+              } catch (error) {
+                console.warn('Unable to render alpha history chart for', metric.label, error);
               }
             }
           });
@@ -6439,6 +6560,13 @@ function renderDashboardClientScript({ netuid, config }) {
         modalElements.note.hidden = true;
         modalElements.empty.hidden = true;
         modalElements.canvas.hidden = false;
+        if (modalElements.alphaChartPanel) {
+          modalElements.alphaChartPanel.hidden = true;
+        }
+        if (state.modalAlphaChart) {
+          state.modalAlphaChart.destroy();
+          state.modalAlphaChart = null;
+        }
         openModal();
         try {
           renderModalMetric(metric);
@@ -7319,10 +7447,9 @@ function renderPage(model, { experimental = false } = {}) {
 
       /* Custom Responsive Width for Wallet Grid in Experimental mode */
       .experimental-page .wallet-section .grid.compact {
-        grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)) !important;
-        gap: 20px !important;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)) !important;
+        gap: 16px !important;
       }
-
 
       /* Card Footer */
       .experimental-page .wallet-hologram-card .wallet-card-footer {
@@ -8975,6 +9102,21 @@ function renderPage(model, { experimental = false } = {}) {
       .modal-chart {
         min-height: 360px;
       }
+      .modal-alpha-chart {
+        margin-top: 16px;
+      }
+      .modal-alpha-chart-badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 6px;
+        background: rgba(245, 158, 11, 0.15);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.3);
+        vertical-align: middle;
+        margin-left: 6px;
+      }
       .wallet-transactions-panel {
         width: min(1240px, 100%);
       }
@@ -9544,6 +9686,10 @@ function renderPage(model, { experimental = false } = {}) {
           <div class="chart-frame modal"><canvas id="history-modal-canvas"></canvas></div>
           <div class="chart-note" id="history-modal-note" hidden></div>
           <p class="empty" id="history-modal-empty" hidden></p>
+        </div>
+        <div class="panel modal-chart modal-alpha-chart" id="history-modal-alpha-chart-panel" hidden>
+          <h3>Alpha stake over time <span class="modal-alpha-chart-badge">α</span></h3>
+          <div class="chart-frame modal"><canvas id="history-modal-alpha-canvas"></canvas></div>
         </div>
       </div>
     </div>
