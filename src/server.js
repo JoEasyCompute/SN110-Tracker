@@ -7461,7 +7461,7 @@ function renderPage(model, { experimental = false } = {}) {
         line-height: 1.45 !important;
       }
       .experimental-page .comparison-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
         gap: 16px !important;
       }
       .experimental-page .card.positive:hover {

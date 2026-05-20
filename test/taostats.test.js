@@ -3309,7 +3309,7 @@ test('experimental render uses an overview-first layout with collapsed details',
 });
 
 test('experimental render shows 24h comparison cards in a two-row deep grid', () => {
-  const comparisons = Array.from({ length: 6 }, (_, index) => ({
+  const comparisons = Array.from({ length: 8 }, (_, index) => ({
     field: `metric_${index}`,
     label: `Metric ${index + 1}`,
     currencyMode: 'tao',
@@ -3362,7 +3362,7 @@ test('experimental render shows 24h comparison cards in a two-row deep grid', ()
   }, { experimental: true });
 
   assert.equal(html.includes('comparison-grid'), true);
-  assert.equal((html.match(/vs 24h ago/g) || []).length, 6);
+  assert.equal((html.match(/vs 24h ago/g) || []).length, 8);
 });
 
 test('dashboard admin panel requires an authenticated admin session', async () => {
