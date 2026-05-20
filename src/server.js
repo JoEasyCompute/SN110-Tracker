@@ -7054,25 +7054,24 @@ function renderDashboardClientScript({ netuid, config }) {
         section.dataset.layoutDropPlacement = placement || 'before';
       }
 
-      function animateLayoutSectionFlow(section, mutate) {
+      function animateLayoutSectionFlow(section, mutate, options = {}) {
         if (!section || typeof mutate !== 'function') {
           mutate?.();
           return;
         }
+        const animateCards = options.animateCards !== false;
         const reduceMotion = shouldReduceLayoutMotion();
+        if (!animateCards || reduceMotion) {
+          mutate();
+          return;
+        }
         const beforeCards = getLayoutCardElements(section).filter((card) => card && !card.classList.contains('layout-card-hidden'));
         const beforeRects = new Map();
-        if (!reduceMotion) {
-          for (const card of beforeCards) {
-            beforeRects.set(card, card.getBoundingClientRect());
-          }
+        for (const card of beforeCards) {
+          beforeRects.set(card, card.getBoundingClientRect());
         }
 
         mutate();
-
-        if (reduceMotion) {
-          return;
-        }
 
         const afterCards = getLayoutCardElements(section).filter((card) => card && !card.classList.contains('layout-card-hidden'));
         const animatedCards = [];
@@ -7141,7 +7140,7 @@ function renderDashboardClientScript({ netuid, config }) {
           }
           removeLayoutDropPlaceholder(section);
           persistLayoutPrefsFromDom();
-        });
+        }, { animateCards: false });
       }
 
       function bindLayoutCustomization() {
@@ -7163,7 +7162,7 @@ function renderDashboardClientScript({ netuid, config }) {
           const section = getLayoutSectionByCard(card);
           animateLayoutSectionFlow(section, () => {
             setLayoutCardHidden(card, hidden);
-          });
+          }, { animateCards: false });
           const sectionId = section?.dataset.layoutSection;
           const cardId = card.dataset.layoutCardId;
           if (!sectionId || !cardId) return;
@@ -7975,12 +7974,16 @@ function renderPage(model, { experimental = false } = {}) {
         letter-spacing: 0.08em;
         text-transform: uppercase;
         opacity: 0.98;
+        transition: opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+        transform: scale(0.985);
       }
       .experimental-page .layout-drop-placeholder.drag-over-before {
         box-shadow: inset 0 3px 0 rgba(0, 219, 188, 0.92), inset 0 0 0 1px rgba(0, 219, 188, 0.12), 0 10px 24px rgba(0, 0, 0, 0.22) !important;
+        transform: scale(1);
       }
       .experimental-page .layout-drop-placeholder.drag-over-after {
         box-shadow: inset 0 -3px 0 rgba(0, 219, 188, 0.92), inset 0 0 0 1px rgba(0, 219, 188, 0.12), 0 10px 24px rgba(0, 0, 0, 0.22) !important;
+        transform: scale(1);
       }
       .experimental-page .layout-drop-placeholder-label {
         padding: 2px 10px;
