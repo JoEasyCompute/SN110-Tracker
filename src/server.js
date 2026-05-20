@@ -1207,7 +1207,7 @@ function buildSignalSummary(latest, comparisons, latestMetricDefs = getLatestMet
   };
 }
 
-function renderMetricCards(latest, defs, { defaultSubtext = true, variant = 'compact' } = {}) {
+function renderMetricCards(latest, defs, { defaultSubtext = true, variant = 'compact', sectionId = null } = {}) {
   return defs.map((def) => {
     const model = buildMetricCardModel(latest, def, { defaultSubtext });
 
@@ -1219,18 +1219,21 @@ function renderMetricCards(latest, defs, { defaultSubtext = true, variant = 'com
       clickable: def.clickable,
       metricData: model.metricData,
       variant,
+      cardId: sectionId ? `${sectionId}-${def.key}` : def.key,
+      sectionId,
     });
   }).join('');
 }
 
-function renderLatestSnapshotCards(latest, defs) {
-  return renderMetricCards(latest, defs, { defaultSubtext: true, variant: 'deep' });
+function renderLatestSnapshotCards(latest, defs, { sectionId = null } = {}) {
+  return renderMetricCards(latest, defs, { defaultSubtext: true, variant: 'deep', sectionId });
 }
 
 function renderSubnetDataCards(latest, subnetLabel = null, { experimental = false } = {}) {
   return renderMetricCards(latest, getSubnetDataMetricDefs(subnetLabel), {
     defaultSubtext: false,
     variant: experimental ? 'deep' : 'compact',
+    sectionId: 'subnet-stats',
   });
 }
 
@@ -1385,6 +1388,8 @@ function renderSignalSection(signal) {
     clickable: Boolean(card.metricData),
     metricData: card.metricData,
     variant: 'deep',
+    cardId: card.metricData?.key ? `signal-${card.metricData.key}` : slugify(card.label),
+    sectionId: 'signal',
   })).join('');
   return `
     <section class="section signal-section">
@@ -1404,7 +1409,7 @@ function renderSignalSection(signal) {
         <h2>Why this signal?</h2>
         <p class="muted">These four cards explain the main forces that shape the read above: price, money flow, sentiment, and supply pressure.</p>
       </div>
-      <div class="grid signal-grid">${cards}</div>
+      <div class="grid signal-grid" data-layout-section="signal">${cards}</div>
     </section>
   `;
 }
@@ -1595,6 +1600,8 @@ function renderInsightSection(insight, { experimental = false } = {}) {
     tone: card.tone || 'neutral',
     clickable: false,
     variant: experimental ? 'deep' : 'compact',
+    cardId: `insight-${slugify(card.label)}`,
+    sectionId: 'insight',
   })).join('');
   return `
     <section class="section insight-section">
@@ -1609,7 +1616,7 @@ function renderInsightSection(insight, { experimental = false } = {}) {
         </div>
         <ul class="signal-bullets">${bullets}</ul>
       </div>
-      <div class="grid compact">${cards}</div>
+      <div class="grid compact" data-layout-section="insight">${cards}</div>
     </section>
   `;
 }
@@ -1626,6 +1633,8 @@ function renderWatchlistSection(watchlist, { experimental = false } = {}) {
     tone: card.tone || 'neutral',
     clickable: false,
     variant: experimental ? 'deep' : 'compact',
+    cardId: `watchlist-${slugify(card.label)}`,
+    sectionId: 'watchlist',
   })).join('');
   return `
     <section class="section watchlist-section">
@@ -1634,7 +1643,7 @@ function renderWatchlistSection(watchlist, { experimental = false } = {}) {
         <p class="muted">${escapeHtml(watchlist.summary || '')}</p>
       </div>
       <div class="signal-badge">${escapeHtml(watchlist.badge || 'Keep watching')}</div>
-      <div class="grid compact">${cards}</div>
+      <div class="grid compact" data-layout-section="watchlist">${cards}</div>
       <ul class="signal-bullets" style="margin-top: 14px;">${bullets}</ul>
     </section>
   `;
@@ -1644,6 +1653,15 @@ function shortAddress(address) {
   const text = String(address || '').trim();
   if (text.length <= 14) return text || '—';
   return `${text.slice(0, 6)}…${text.slice(-6)}`;
+}
+
+function slugify(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'item';
 }
 
 function normalizeHotkeyRole(role) {
@@ -2154,9 +2172,11 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
       const actualAlphaText = actualAlpha !== null ? formatAlpha(actualAlpha, 1) : '—';
 
       return `
-        <button type="button" class="card card-button card--entity wallet-hologram-card ${tone}" ${metricAttr} style="--wallet-theme-color: ${walletColor};">
+        <button type="button" class="card card-button card--entity wallet-hologram-card layout-card ${tone}" ${metricAttr} data-layout-card-id="wallet-${escapeHtml(wallet.ss58)}" data-layout-section-id="wallets" style="--wallet-theme-color: ${walletColor};">
           <div class="hologram-glow"></div>
           <span class="card-info-badge" title="${escapeHtml(metricData.description)}" aria-label="${escapeHtml(metricData.description)}" aria-hidden="true">i</span>
+          <span class="card-layout-control card-layout-drag-handle" data-layout-drag-handle title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+          <span class="card-layout-control card-layout-hide-toggle" data-layout-hide-toggle role="button" tabindex="0" title="Hide card" aria-label="Hide card">✕</span>
           
           <div class="wallet-card-header">
             <div class="wallet-avatar" style="background: ${walletColor}1a; border: 1px solid ${walletColor}55;">
@@ -2225,13 +2245,15 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
     const extra = latest
       ? `Root ${root === null ? '—' : tao(root, 2)} • Alpha ${alpha === null ? '—' : tao(alpha, 2)}`
       : 'History will appear after the first ingest or backfill.';
-    return metricCard({
+      return metricCard({
       label: wallet.name,
       value,
       subtext: `${subtext} • ${extra}`,
       tone: change24h === null ? 'neutral' : (change24h >= 0 ? 'positive' : 'negative'),
       clickable: true,
       metricData,
+      cardId: `wallet-${wallet.ss58}`,
+      sectionId: 'wallets',
     });
   }).join('');
   const activityText = formatWalletActivityStatusText(walletActivityStatus);
@@ -2246,7 +2268,7 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
         <p class="muted">Configured ss58 addresses from the .env file. Click a wallet card to inspect its historical balance chart.</p>
         ${activityLine}
       </div>
-      <div class="grid compact">${cards}</div>
+      <div class="grid compact" data-layout-section="wallets">${cards}</div>
     </section>
   `;
 }
@@ -2650,28 +2672,38 @@ function renderPoolGrowthSection(latestSubnet = null) {
                 </div>
                 <div class="pool-estimator-summary" id="pool-growth-summary">Current pool: ${escapeHtml(tao(currentPool.taoInPool, 2))} • ${escapeHtml(alpha(currentPool.alphaInPool, 2))} • price ${escapeHtml(tao(currentPool.currentPrice, 6))} / α</div>
               </div>
-              <div class="wallet-breakdown-grid pool-estimator-results">
-                <div class="wallet-breakdown-card pool-growth-entity-card">
+              <div class="wallet-breakdown-grid pool-estimator-results" data-layout-section="pool-growth-results">
+                <div class="wallet-breakdown-card pool-growth-entity-card layout-card" data-layout-card-id="pool-growth-alpha-received" data-layout-section-id="pool-growth-results">
+                  <span class="card-layout-control card-layout-drag-handle" data-layout-drag-handle title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+                  <span class="card-layout-control card-layout-hide-toggle" data-layout-hide-toggle role="button" tabindex="0" title="Hide card" aria-label="Hide card">✕</span>
                   <div class="label">Estimated alpha received</div>
                   <div class="value" id="pool-growth-alpha-received">${escapeHtml(alpha(initialResult.alphaReceived, 4))}</div>
                   <div class="subtext" id="pool-growth-alpha-ideal">No-slippage baseline: ${escapeHtml(alpha(initialResult.idealAlphaReceived, 4))}</div>
                 </div>
-                <div class="wallet-breakdown-card pool-growth-entity-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card layout-card" data-layout-card-id="pool-growth-projected-price" data-layout-section-id="pool-growth-results">
+                  <span class="card-layout-control card-layout-drag-handle" data-layout-drag-handle title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+                  <span class="card-layout-control card-layout-hide-toggle" data-layout-hide-toggle role="button" tabindex="0" title="Hide card" aria-label="Hide card">✕</span>
                   <div class="label">Projected alpha price</div>
                   <div class="value" id="pool-growth-projected-price">${escapeHtml(tao(initialResult.projectedPrice, 6))} / α</div>
                   <div class="subtext" id="pool-growth-post-pool">Projected alpha reserve: ${escapeHtml(alpha(initialResult.projectedAlphaInPool, 2))}</div>
                 </div>
-                <div class="wallet-breakdown-card pool-growth-entity-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card layout-card" data-layout-card-id="pool-growth-price-change" data-layout-section-id="pool-growth-results">
+                  <span class="card-layout-control card-layout-drag-handle" data-layout-drag-handle title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+                  <span class="card-layout-control card-layout-hide-toggle" data-layout-hide-toggle role="button" tabindex="0" title="Hide card" aria-label="Hide card">✕</span>
                   <div class="label">Price change %</div>
                   <div class="value" id="pool-growth-price-change">${escapeHtml(signedPercent(initialResult.priceChangePct, 2))}</div>
                   <div class="subtext" id="pool-growth-slippage">Slippage: ${escapeHtml(alpha(initialResult.alphaShortfall, 4))} • ${escapeHtml(signedPercent(initialResult.slippagePct, 2))} of ideal</div>
                 </div>
-                <div class="wallet-breakdown-card pool-growth-entity-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card layout-card" data-layout-card-id="pool-growth-projected-market-cap" data-layout-section-id="pool-growth-results">
+                  <span class="card-layout-control card-layout-drag-handle" data-layout-drag-handle title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+                  <span class="card-layout-control card-layout-hide-toggle" data-layout-hide-toggle role="button" tabindex="0" title="Hide card" aria-label="Hide card">✕</span>
                   <div class="label">Implied subnet market cap</div>
                   <div class="value" id="pool-growth-projected-market-cap">${escapeHtml(tao(initialResult.projectedMarketCap, 2))}</div>
                   <div class="subtext" id="pool-growth-market-cap-change">${escapeHtml(marketCapChangeText)}</div>
                 </div>
-                <div class="wallet-breakdown-card pool-growth-entity-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card layout-card" data-layout-card-id="pool-growth-projected-tao-reserve" data-layout-section-id="pool-growth-results">
+                  <span class="card-layout-control card-layout-drag-handle" data-layout-drag-handle title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+                  <span class="card-layout-control card-layout-hide-toggle" data-layout-hide-toggle role="button" tabindex="0" title="Hide card" aria-label="Hide card">✕</span>
                   <div class="label">Projected TAO in pool</div>
                   <div class="value" id="pool-growth-projected-tao-reserve">${escapeHtml(tao(initialResult.projectedTaoInPool, 2))}</div>
                   <div class="subtext" id="pool-growth-tao-reserve-change">Pool change: ${escapeHtml(signedTao(initialResult.taoReserveChangeAbsolute, 2))} • ${escapeHtml(signedPercent(initialResult.taoReserveChangePct, 2))}</div>
@@ -2972,19 +3004,28 @@ function metricUnitHint(metricData = null) {
   return '';
 }
 
-function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = false, metricData = null, variant = 'compact' }) {
+function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = false, metricData = null, variant = 'compact', cardId = null, sectionId = null }) {
   const description = metricData?.description || '';
   const unitHint = metricUnitHint(metricData);
   const badgeText = String(metricData?.badge || '').trim();
   const metricAttr = metricDataAttribute(metricData);
   const normalizedVariant = String(variant || 'compact').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   const variantClass = `card--${normalizedVariant || 'compact'}`;
+  const layoutAttrs = [
+    cardId ? `data-layout-card-id="${escapeHtml(cardId)}"` : '',
+    sectionId ? `data-layout-section-id="${escapeHtml(sectionId)}"` : '',
+  ].filter(Boolean).join(' ');
+  const layoutControls = cardId ? `
+      <span class="card-layout-control card-layout-drag-handle" data-layout-drag-handle title="Drag to reorder" aria-hidden="true">⋮⋮</span>
+      <span class="card-layout-control card-layout-hide-toggle" data-layout-hide-toggle role="button" tabindex="0" title="Hide card" aria-label="Hide card">✕</span>
+  ` : '';
   const attrs = clickable
-    ? `type="button" class="card card-button ${variantClass} ${tone}"${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`
-    : `class="card ${variantClass} ${tone}"${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`;
+    ? `type="button" class="card card-button ${variantClass} ${tone}${cardId ? ' layout-card' : ''}"${layoutAttrs}${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`
+    : `class="card ${variantClass} ${tone}${cardId ? ' layout-card' : ''}"${layoutAttrs}${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`;
   const tag = clickable ? 'button' : 'section';
   return `
     <${tag} ${attrs}>
+      ${layoutControls}
       ${description ? `<span class="card-info-badge" title="${escapeHtml(description)}" aria-label="${escapeHtml(description)}" aria-hidden="true">i</span>` : ''}
       <div class="card-label">${escapeHtml(label)}</div>
       ${badgeText ? `<div class="card-badge">${escapeHtml(badgeText)}</div>` : ''}
@@ -3025,6 +3066,8 @@ function renderComparisonCardWithVariant(comparison, variant = 'compact') {
       delta: comparison.delta,
       pct: comparison.pct,
     },
+    cardId: `comparison-${comparison.field}`,
+    sectionId: 'comparisons-24h',
   });
 }
 
@@ -3034,7 +3077,7 @@ function renderComparisonSection(comparisons, { experimental = false } = {}) {
   }
   const variant = experimental ? 'deep' : 'compact';
   const gridClass = experimental ? 'grid comparison-grid' : 'grid compact';
-  return `<div class="${gridClass}">${comparisons.map((comparison) => renderComparisonCardWithVariant(comparison, variant)).join('')}</div>`;
+  return `<div class="${gridClass}" data-layout-section="comparisons-24h">${comparisons.map((comparison) => renderComparisonCardWithVariant(comparison, variant)).join('')}</div>`;
 }
 
 function renderHistoryTable(rows) {
@@ -3247,7 +3290,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
             </div>
             <div class="panel">
               <h3>Latest ingest run</h3>
-              <div class="grid compact">
+              <div class="grid compact" data-layout-section="admin-runs">
                 ${latestRunCard}
               </div>
               ${ingestRun && ingestRun.error ? `<p class="empty"><strong>Error:</strong> ${escapeHtml(ingestRun.error)}</p>` : ''}
@@ -3294,6 +3337,9 @@ function renderDashboardClientScript({ netuid, config }) {
         modalHistoryAutoFollow: true,
         modalTransactionsFilter: 'all',
         explanationOpen: true,
+        layoutCustomizeMode: false,
+        layoutPrefs: null,
+        layoutDraggingId: null,
       };
 
       if (!Number.isFinite(state.latestTaoPriceUsd)) {
@@ -3319,6 +3365,153 @@ function renderDashboardClientScript({ netuid, config }) {
         const text = String(address || '').trim();
         if (text.length <= 14) return text || '—';
         return text.slice(0, 6) + '…' + text.slice(-6);
+      }
+
+      const layoutStorageKey = 'sn110-experimental-layout-v1';
+      const layoutSections = Array.from(document.querySelectorAll('[data-layout-section]'));
+      const layoutCustomizeToggle = document.getElementById('layout-customize-toggle');
+      const layoutResetButton = document.getElementById('layout-reset-button');
+
+      function getLayoutCardElements(section) {
+        return Array.from(section?.children || []).filter((child) => child && child.dataset && child.dataset.layoutCardId);
+      }
+
+      function buildDefaultLayoutPrefs() {
+        const sections = {};
+        for (const section of layoutSections) {
+          const sectionId = section.dataset.layoutSection;
+          if (!sectionId) continue;
+          sections[sectionId] = {
+            order: getLayoutCardElements(section).map((card) => card.dataset.layoutCardId).filter(Boolean),
+            hidden: [],
+          };
+        }
+        return { version: 1, sections };
+      }
+
+      function normalizeLayoutPrefs(input) {
+        const defaults = buildDefaultLayoutPrefs();
+        const prefs = input && typeof input === 'object' ? input : {};
+        const sections = {};
+        for (const [sectionId, defaultSection] of Object.entries(defaults.sections)) {
+          const current = prefs.sections && typeof prefs.sections === 'object' ? prefs.sections[sectionId] : null;
+          const defaultOrder = Array.isArray(defaultSection.order) ? defaultSection.order.slice() : [];
+          const seen = new Set();
+          const order = [];
+          for (const cardId of Array.isArray(current?.order) ? current.order : defaultOrder) {
+            if (!defaultOrder.includes(cardId) || seen.has(cardId)) continue;
+            order.push(cardId);
+            seen.add(cardId);
+          }
+          for (const cardId of defaultOrder) {
+            if (!seen.has(cardId)) {
+              order.push(cardId);
+              seen.add(cardId);
+            }
+          }
+          sections[sectionId] = {
+            order,
+            hidden: Array.from(new Set(Array.isArray(current?.hidden) ? current.hidden.filter((cardId) => defaultOrder.includes(cardId)) : [])),
+          };
+        }
+        return { version: 1, sections };
+      }
+
+      function loadLayoutPrefs() {
+        try {
+          const raw = localStorage.getItem(layoutStorageKey);
+          if (!raw) return normalizeLayoutPrefs(null);
+          return normalizeLayoutPrefs(JSON.parse(raw));
+        } catch {
+          return normalizeLayoutPrefs(null);
+        }
+      }
+
+      function saveLayoutPrefs(prefs) {
+        const normalized = normalizeLayoutPrefs(prefs);
+        state.layoutPrefs = normalized;
+        try {
+          localStorage.setItem(layoutStorageKey, JSON.stringify(normalized));
+        } catch (error) {
+          console.warn('Unable to save experimental layout preferences', error);
+        }
+        return normalized;
+      }
+
+      function getLayoutPrefsFromDom() {
+        const sections = {};
+        for (const section of layoutSections) {
+          const sectionId = section.dataset.layoutSection;
+          if (!sectionId) continue;
+          const cards = getLayoutCardElements(section);
+          sections[sectionId] = {
+            order: cards.map((card) => card.dataset.layoutCardId).filter(Boolean),
+            hidden: cards.filter((card) => card.classList.contains('layout-card-hidden')).map((card) => card.dataset.layoutCardId).filter(Boolean),
+          };
+        }
+        return { version: 1, sections };
+      }
+
+      function setLayoutCardHidden(card, hidden) {
+        if (!card) return;
+        card.classList.toggle('layout-card-hidden', Boolean(hidden));
+        card.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+      }
+
+      function applyLayoutPrefs(prefs) {
+        const normalized = saveLayoutPrefs(prefs);
+        for (const section of layoutSections) {
+          const sectionId = section.dataset.layoutSection;
+          if (!sectionId) continue;
+          const sectionPrefs = normalized.sections[sectionId] || { order: [], hidden: [] };
+          const cards = getLayoutCardElements(section);
+          const cardMap = new Map(cards.map((card) => [card.dataset.layoutCardId, card]));
+          const orderedCards = [];
+          for (const cardId of sectionPrefs.order) {
+            const card = cardMap.get(cardId);
+            if (card) orderedCards.push(card);
+          }
+          for (const card of cards) {
+            if (!orderedCards.includes(card)) {
+              orderedCards.push(card);
+            }
+          }
+          for (const card of orderedCards) {
+            section.appendChild(card);
+          }
+          const hidden = new Set(sectionPrefs.hidden);
+          for (const card of orderedCards) {
+            setLayoutCardHidden(card, hidden.has(card.dataset.layoutCardId));
+          }
+        }
+      }
+
+      function updateLayoutCustomizeMode(active) {
+        state.layoutCustomizeMode = Boolean(active);
+        document.body.classList.toggle('layout-customize-mode', state.layoutCustomizeMode);
+        if (layoutCustomizeToggle) {
+          layoutCustomizeToggle.setAttribute('aria-pressed', state.layoutCustomizeMode ? 'true' : 'false');
+          layoutCustomizeToggle.textContent = state.layoutCustomizeMode ? 'Done customizing' : 'Customize cards';
+        }
+        document.querySelectorAll('.card-layout-control').forEach((control) => {
+          control.style.display = state.layoutCustomizeMode ? 'inline-flex' : 'none';
+        });
+        document.querySelectorAll('.card-info-badge').forEach((badge) => {
+          badge.style.right = state.layoutCustomizeMode ? '72px' : '';
+        });
+        for (const card of document.querySelectorAll('[data-layout-card-id]')) {
+          card.draggable = state.layoutCustomizeMode && !card.classList.contains('layout-card-hidden');
+        }
+        if (!state.layoutCustomizeMode) {
+          document.querySelectorAll('.layout-card.is-dragging, .layout-card.drag-over').forEach((card) => {
+            card.classList.remove('is-dragging', 'drag-over');
+          });
+          state.layoutDraggingId = null;
+        }
+      }
+
+      function persistLayoutPrefsFromDom() {
+        saveLayoutPrefs(getLayoutPrefsFromDom());
       }
 
       function resolveColdkeySwapSummary(rawJson, fallback = null) {
@@ -6755,6 +6948,11 @@ function renderDashboardClientScript({ netuid, config }) {
           }
           if (!metric || !metric.clickable) return;
           button.addEventListener('click', (event) => {
+            if (state.layoutCustomizeMode) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
             if (metric.kind === 'wallet' && (event.ctrlKey || event.metaKey)) {
               event.preventDefault();
               openWalletTransactionsModal(button.dataset.metric);
@@ -6763,6 +6961,134 @@ function renderDashboardClientScript({ netuid, config }) {
             openHistoryModal(button.dataset.metric);
           });
         });
+      }
+
+      function getLayoutCardById(cardId) {
+        const safeId = String(cardId || '').replaceAll('"', '\\"');
+        return document.querySelector('[data-layout-card-id="' + safeId + '"]');
+      }
+
+      function getLayoutSectionByCard(card) {
+        if (!card) return null;
+        return card.closest('[data-layout-section]');
+      }
+
+      function moveLayoutCard(section, sourceCard, targetCard) {
+        if (!section || !sourceCard || !sourceCard.dataset?.layoutCardId) return;
+        const sectionId = section.dataset.layoutSection;
+        if (!sectionId) return;
+        if (targetCard && targetCard === sourceCard) return;
+        if (targetCard && targetCard.parentElement !== section) return;
+        if (targetCard) {
+          section.insertBefore(sourceCard, targetCard);
+        } else {
+          section.appendChild(sourceCard);
+        }
+        persistLayoutPrefsFromDom();
+      }
+
+      function bindLayoutCustomization() {
+        const handleReset = () => {
+          localStorage.removeItem(layoutStorageKey);
+          window.location.reload();
+        };
+        const handleToggle = () => {
+          updateLayoutCustomizeMode(!state.layoutCustomizeMode);
+        };
+        const handleHideToggle = (event) => {
+          const target = event.target?.closest('[data-layout-hide-toggle]');
+          if (!target) return;
+          const card = target.closest('[data-layout-card-id]');
+          if (!card) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const hidden = !card.classList.contains('layout-card-hidden');
+          setLayoutCardHidden(card, hidden);
+          const section = getLayoutSectionByCard(card);
+          const sectionId = section?.dataset.layoutSection;
+          const cardId = card.dataset.layoutCardId;
+          if (!sectionId || !cardId) return;
+          const prefs = getLayoutPrefsFromDom();
+          const sectionPrefs = prefs.sections[sectionId] || { order: [], hidden: [] };
+          sectionPrefs.hidden = hidden
+            ? Array.from(new Set([...(sectionPrefs.hidden || []), cardId]))
+            : (sectionPrefs.hidden || []).filter((id) => id !== cardId);
+          prefs.sections[sectionId] = sectionPrefs;
+          saveLayoutPrefs(prefs);
+          updateLayoutCustomizeMode(true);
+        };
+        const handleDragStart = (event) => {
+          if (!state.layoutCustomizeMode) {
+            event.preventDefault();
+            return;
+          }
+          const card = event.currentTarget;
+          if (!card || card.classList.contains('layout-card-hidden')) {
+            event.preventDefault();
+            return;
+          }
+          state.layoutDraggingId = card.dataset.layoutCardId || null;
+          card.classList.add('is-dragging');
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+            try {
+              event.dataTransfer.setData('text/plain', state.layoutDraggingId || '');
+            } catch {
+              // ignore
+            }
+          }
+        };
+        const handleDragEnd = (event) => {
+          const card = event.currentTarget;
+          card?.classList.remove('is-dragging');
+          document.querySelectorAll('.layout-card.drag-over').forEach((candidate) => candidate.classList.remove('drag-over'));
+          state.layoutDraggingId = null;
+        };
+        const handleDragOver = (event) => {
+          if (!state.layoutCustomizeMode) return;
+          const section = event.currentTarget;
+          const sourceCard = state.layoutDraggingId ? getLayoutCardById(state.layoutDraggingId) : null;
+          if (!sourceCard) return;
+          const targetCard = event.target?.closest('[data-layout-card-id]');
+          if (targetCard && targetCard.parentElement === section && targetCard !== sourceCard) {
+            event.preventDefault();
+            document.querySelectorAll('.layout-card.drag-over').forEach((candidate) => candidate.classList.remove('drag-over'));
+            targetCard.classList.add('drag-over');
+          } else if (section.contains(sourceCard)) {
+            event.preventDefault();
+          }
+        };
+        const handleDrop = (event) => {
+          if (!state.layoutCustomizeMode) return;
+          event.preventDefault();
+          const section = event.currentTarget;
+          const sourceCard = state.layoutDraggingId ? getLayoutCardById(state.layoutDraggingId) : null;
+          if (!sourceCard) return;
+          const targetCard = event.target?.closest('[data-layout-card-id]');
+          document.querySelectorAll('.layout-card.drag-over').forEach((candidate) => candidate.classList.remove('drag-over'));
+          if (targetCard && targetCard.parentElement === section && targetCard !== sourceCard) {
+            moveLayoutCard(section, sourceCard, targetCard);
+          } else if (section.contains(sourceCard)) {
+            moveLayoutCard(section, sourceCard, null);
+          }
+        };
+
+        layoutCustomizeToggle?.addEventListener('click', handleToggle);
+        layoutResetButton?.addEventListener('click', handleReset);
+        document.addEventListener('click', handleHideToggle, true);
+        document.addEventListener('keydown', (event) => {
+          if (event.target && event.target.matches('[data-layout-hide-toggle]') && (event.key === 'Enter' || event.key === ' ')) {
+            handleHideToggle(event);
+          }
+        });
+        for (const section of layoutSections) {
+          section.addEventListener('dragover', handleDragOver);
+          section.addEventListener('drop', handleDrop);
+        }
+        for (const card of document.querySelectorAll('[data-layout-card-id]')) {
+          card.addEventListener('dragstart', handleDragStart);
+          card.addEventListener('dragend', handleDragEnd);
+        }
       }
 
       const refreshButton = document.getElementById('refresh-btn');
@@ -6944,6 +7270,10 @@ function renderDashboardClientScript({ netuid, config }) {
         window.location.reload();
       });
 
+      state.layoutPrefs = loadLayoutPrefs();
+      applyLayoutPrefs(state.layoutPrefs);
+      updateLayoutCustomizeMode(false);
+      bindLayoutCustomization();
       bindMetricClicks();
       updateCurrencyToggleButton();
       updateTaoPriceLabel();
@@ -7017,7 +7347,7 @@ function renderPage(model, { experimental = false } = {}) {
     ? `<a class="subnet-title-link" href="${escapeHtml(taostatsSubnetUrl)}" target="_blank" rel="noopener noreferrer" title="Open ${escapeHtml(subnetHeaderLabel)} on Taostats">${subnetHeaderTitle}</a>`
     : subnetHeaderTitle;
 
-  const cards = latest ? renderLatestSnapshotCards(latest, latestMetricDefs) : '';
+  const cards = latest ? renderLatestSnapshotCards(latest, latestMetricDefs, { sectionId: 'key-metrics' }) : '';
   const pollIntervalButtons = POLL_INTERVAL_OPTIONS.map((minutes) => {
     const active = Number(config.pollIntervalMinutes) === minutes;
     return `<button class="button poll-button${active ? ' active' : ''}" type="button" data-poll-interval="${minutes}" aria-pressed="${active ? 'true' : 'false'}">${minutes / 60}h</button>`;
@@ -7046,14 +7376,18 @@ function renderPage(model, { experimental = false } = {}) {
         subtext: `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}${ingestRun.fallback_used ? ' • fallback used' : ''} • ${ingestRun.duration_ms} ms`,
         tone: ingestRun.ok ? 'positive' : 'negative',
         variant: experimental ? 'deep' : 'compact',
+        cardId: 'latest-ingest',
+        sectionId: 'admin-runs',
       })
-    : metricCard({ label: 'Latest ingest', value: '—', subtext: 'No run yet', variant: experimental ? 'deep' : 'compact' });
+    : metricCard({ label: 'Latest ingest', value: '—', subtext: 'No run yet', variant: experimental ? 'deep' : 'compact', cardId: 'latest-ingest', sectionId: 'admin-runs' });
   const overviewIngestCard = metricCard({
     label: 'Ingest health',
     value: ingestRun ? (ingestRun.ok ? 'Healthy' : 'Failed') : '—',
     subtext: ingestRun ? `${formatRelativeIso(ingestRun.started_at)} • ${ingestRun.source}` : 'No ingest run recorded',
     tone: ingestRun ? (ingestRun.ok ? 'positive' : 'negative') : 'neutral',
     variant: 'deep',
+    cardId: 'overview-ingest-health',
+    sectionId: 'overview',
   });
   const overviewSnapshotCard = metricCard({
     label: 'Snapshot freshness',
@@ -7061,6 +7395,8 @@ function renderPage(model, { experimental = false } = {}) {
     subtext: latest ? `Source: ${latest.source}` : 'No current snapshot',
     tone: latest ? 'positive' : 'neutral',
     variant: 'deep',
+    cardId: 'overview-snapshot-freshness',
+    sectionId: 'overview',
   });
   const overviewWalletCard = metricCard({
     label: 'Wallet cache',
@@ -7070,6 +7406,8 @@ function renderPage(model, { experimental = false } = {}) {
       : 'Wallet activity unavailable',
     tone: walletActivityStatus?.lastRunAtIso ? 'positive' : 'neutral',
     variant: 'deep',
+    cardId: 'overview-wallet-cache',
+    sectionId: 'overview',
   });
   const overviewQueueCard = metricCard({
     label: 'Next scheduled work',
@@ -7079,11 +7417,13 @@ function renderPage(model, { experimental = false } = {}) {
       : 'No queued jobs at the moment',
     tone: scheduleQueue?.[0] ? 'accent' : 'neutral',
     variant: 'deep',
+    cardId: 'overview-next-scheduled-work',
+    sectionId: 'overview',
   });
   const experimentalOverviewSection = experimental ? `
       <section class="section experimental-overview">
         <h2>Overview</h2>
-        <div class="grid stats">
+        <div class="grid stats" data-layout-section="overview">
           ${overviewSnapshotCard}
           ${overviewIngestCard}
           ${overviewWalletCard}
@@ -7097,13 +7437,13 @@ function renderPage(model, { experimental = false } = {}) {
   const keyMetricsSectionHtml = `
       <section class="section">
         <h2>Key metrics</h2>
-        <div class="grid">${cards}</div>
+        <div class="grid" data-layout-section="key-metrics">${cards}</div>
       </section>
     `;
   const subnetStatsSectionHtml = `
       <section class="section">
         <h2>Subnet stats</h2>
-        <div class="grid stats">${latest ? renderSubnetDataCards(latest, subnetLabel, { experimental }) : ''}</div>
+        <div class="grid stats" data-layout-section="subnet-stats">${latest ? renderSubnetDataCards(latest, subnetLabel, { experimental }) : ''}</div>
       </section>
     `;
   const comparisonsSectionHtml = `
@@ -7383,11 +7723,72 @@ function renderPage(model, { experimental = false } = {}) {
         position: relative;
         overflow: hidden;
       }
+      .experimental-page .layout-card {
+        position: relative;
+      }
       .experimental-page .card:hover {
         transform: translateY(-4px) !important;
         background: var(--panel-glass-hover) !important;
         border-color: rgba(255, 255, 255, 0.15) !important;
         box-shadow: 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px 2px rgba(255, 255, 255, 0.03) !important;
+      }
+      .experimental-page .layout-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .experimental-page .card-layout-control {
+        position: absolute;
+        top: 12px;
+        z-index: 3;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        min-width: 22px;
+        height: 22px;
+        padding: 0 6px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(4, 10, 17, 0.78);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        letter-spacing: 0.05em;
+        user-select: none;
+      }
+      .experimental-page .card-layout-drag-handle {
+        right: 40px;
+        cursor: grab;
+      }
+      .experimental-page .card-layout-hide-toggle {
+        right: 12px;
+        cursor: pointer;
+      }
+      body.layout-customize-mode .experimental-page .card-layout-control {
+        display: inline-flex;
+      }
+      body.layout-customize-mode .experimental-page .card-info-badge {
+        right: 72px;
+      }
+      body.layout-customize-mode .experimental-page .layout-card {
+        outline: 1px dashed rgba(0, 219, 188, 0.28);
+        outline-offset: -2px;
+      }
+      body.layout-customize-mode .experimental-page .layout-card:hover {
+        transform: none !important;
+      }
+      .experimental-page .layout-card.layout-card-hidden {
+        display: none !important;
+      }
+      .experimental-page .layout-card.is-dragging {
+        opacity: 0.55;
+        outline: 1px solid rgba(0, 219, 188, 0.55);
+      }
+      .experimental-page .layout-card.drag-over {
+        outline: 2px solid rgba(0, 219, 188, 0.75);
+        outline-offset: -3px;
       }
       .experimental-page .card--compact {
         padding: 14px !important;
@@ -9980,6 +10381,10 @@ function renderPage(model, { experimental = false } = {}) {
             <span>Compact overview-first layout</span>
           </div>
           <p>This page reorders the same live data so we can iterate on presentation without touching the stable dashboard.</p>
+        </div>
+        <div class="layout-toolbar">
+          <button class="button" type="button" id="layout-customize-toggle" aria-pressed="false">Customize cards</button>
+          <button class="button" type="button" id="layout-reset-button">Reset layout</button>
         </div>
         ${config.adminAuthenticated ? `<a class="button primary" href="/subnets/${netuid}">Return to stable dashboard</a>` : ''}
       </section>

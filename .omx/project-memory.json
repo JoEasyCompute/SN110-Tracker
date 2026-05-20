@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-20T18:45:45Z",
+  "updated_at": "2026-05-20T19:06:34Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -50,6 +50,8 @@
     "The experimental UI now uses a tiered card system: compact for lightweight metrics, deep for richer summary cards, and entity for wallets.",
     "In experimental mode, the wallet cards keep the holographic entity treatment, the overview/signal cards use the deep variant, the subnet stats and 24h comparison cards now use the same deep styling, and the financial perspective/watchlist/admin ingest surfaces also follow the tiered card language for consistency.",
     "The experimental 'What changed in the last 24h' section now renders as a 4-column by 2-row grid on desktop and collapses cleanly on mobile.",
-    "The experimental drawer content now collapses to a single column on mobile, and the wallet entity cards use a mobile-specific internal layout so their stats do not overflow the viewport."
+    "The experimental drawer content now collapses to a single column on mobile, and the wallet entity cards use a mobile-specific internal layout so their stats do not overflow the viewport.",
+    "The experimental dashboard will gain a local-only customization mode in the browser: users can reorder cards within a section, hide/show specific cards, and reset the layout with preferences saved to localStorage so the stable dashboard and SQLite data model stay untouched.",
+    "The experimental dashboard now supports a local-only Customize mode in the browser with per-section card reordering, hide/show controls, and a Reset layout action, all persisted in localStorage without changing the stable dashboard."
   ]
 }

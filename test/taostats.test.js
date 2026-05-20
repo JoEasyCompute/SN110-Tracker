@@ -3303,6 +3303,11 @@ test('experimental render uses an overview-first layout with collapsed details',
     subnetLabel: 'Green Compute (SN110)',
   }, { experimental: true });
   assert.equal(html.includes('Compact overview-first layout'), true);
+  assert.equal(html.includes('id="layout-customize-toggle"'), true);
+  assert.equal(html.includes('data-layout-section="overview"'), true);
+  assert.equal(html.includes('data-layout-card-id="overview-snapshot-freshness"'), true);
+  assert.equal(html.includes('data-layout-section="key-metrics"'), true);
+  assert.equal(html.includes('data-layout-section="subnet-stats"'), true);
   assert.equal(html.includes('experimental-details-panel'), true);
   assert.equal(html.includes('pool-growth-entity-card'), true);
   assert.equal(html.includes('Latest snapshot captured'), false);
