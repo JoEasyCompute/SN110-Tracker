@@ -6500,7 +6500,7 @@ function renderDashboardClientScript({ netuid, config }) {
         if (!history) return;
         if (metric.kind === 'wallet') {
           state.modalStakeHistory = [];
-          void loadWalletStakeHistory(metric, days).then((stakeHistory) => {
+          void loadWalletStakeHistory(metric, modalHistoryFetchDays(metric, days)).then((stakeHistory) => {
             if (state.modalMetric === metric && state.modalHistoryDays === days) {
               state.modalStakeHistory = Array.isArray(stakeHistory) ? stakeHistory : [];
               try {
