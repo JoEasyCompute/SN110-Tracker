@@ -2063,6 +2063,7 @@ async function buildWalletTransactionTimeline({
 
 function renderWalletSection(walletEntries, latestSubnet = null, walletActivityStatus = null, experimental = false) {
   if (!Array.isArray(walletEntries) || !walletEntries.length) return '';
+  const formatAlpha = alpha; // Capture global alpha function before shadowing
   const poolEstimator = buildPoolGrowthEstimatorState(latestSubnet);
   const cards = walletEntries.map(({ wallet, latest, stakePositions = [], hotkeys = [] }) => {
     const total = latest ? numericMetricValue(latest.balance_total_num) : null;
@@ -2138,10 +2139,10 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
       const metricAttr = metricData ? ` data-metric="${escapeHtml(JSON.stringify(metricData || {}))}"` : '';
 
       const tokenPrice = latestSubnet ? numericMetricValue(latestSubnet.price_num) : null;
-      const actualAlpha = (tokenPrice && tokenPrice > 0 && latest?.balance_staked_alpha_as_tao_num !== null)
+      const actualAlpha = (tokenPrice && tokenPrice > 0 && latest && latest.balance_staked_alpha_as_tao_num !== null)
         ? (latest.balance_staked_alpha_as_tao_num / tokenPrice)
         : null;
-      const actualAlphaText = actualAlpha !== null ? alpha(actualAlpha, 1) : '—';
+      const actualAlphaText = actualAlpha !== null ? formatAlpha(actualAlpha, 1) : '—';
 
       return `
         <button type="button" class="card card-button wallet-hologram-card ${tone}" ${metricAttr} style="--wallet-theme-color: ${walletColor};">
