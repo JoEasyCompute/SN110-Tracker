@@ -7314,7 +7314,15 @@ function renderPage(model, { experimental = false } = {}) {
         font-size: 12px;
         font-weight: 700;
         color: #e2e8f0;
+        white-space: nowrap !important;
       }
+
+      /* Custom Responsive Width for Wallet Grid in Experimental mode */
+      .experimental-page .wallet-section .grid.compact {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)) !important;
+        gap: 20px !important;
+      }
+
 
       /* Card Footer */
       .experimental-page .wallet-hologram-card .wallet-card-footer {
