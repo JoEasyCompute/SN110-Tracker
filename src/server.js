@@ -7974,16 +7974,15 @@ function renderPage(model, { experimental = false } = {}) {
         letter-spacing: 0.08em;
         text-transform: uppercase;
         opacity: 0.98;
-        transition: opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
-        transform: scale(0.985);
+        transition: opacity 100ms ease, box-shadow 100ms ease, border-color 100ms ease;
       }
       .experimental-page .layout-drop-placeholder.drag-over-before {
-        box-shadow: inset 0 3px 0 rgba(0, 219, 188, 0.92), inset 0 0 0 1px rgba(0, 219, 188, 0.12), 0 10px 24px rgba(0, 0, 0, 0.22) !important;
-        transform: scale(1);
+        border-color: rgba(0, 219, 188, 0.82) !important;
+        box-shadow: inset 0 2px 0 rgba(0, 219, 188, 0.9), inset 0 0 0 1px rgba(0, 219, 188, 0.12), 0 10px 24px rgba(0, 0, 0, 0.18) !important;
       }
       .experimental-page .layout-drop-placeholder.drag-over-after {
-        box-shadow: inset 0 -3px 0 rgba(0, 219, 188, 0.92), inset 0 0 0 1px rgba(0, 219, 188, 0.12), 0 10px 24px rgba(0, 0, 0, 0.22) !important;
-        transform: scale(1);
+        border-color: rgba(0, 219, 188, 0.82) !important;
+        box-shadow: inset 0 -2px 0 rgba(0, 219, 188, 0.9), inset 0 0 0 1px rgba(0, 219, 188, 0.12), 0 10px 24px rgba(0, 0, 0, 0.18) !important;
       }
       .experimental-page .layout-drop-placeholder-label {
         padding: 2px 10px;

@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-20T19:46:24Z",
+  "updated_at": "2026-05-20T19:47:45Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -54,6 +54,6 @@
     "The experimental dashboard will gain a local-only customization mode in the browser: users can reorder cards within a section, hide/show specific cards, and reset the layout with preferences saved to localStorage so the stable dashboard and SQLite data model stay untouched.",
     "The experimental dashboard now supports a local-only Customize mode in the browser with per-section card reordering, hide/show controls, and a Reset layout action, all persisted in localStorage without changing the stable dashboard.",
     "The experimental dashboard customization mode now animates card reflow with a subtle FLIP-style motion, uses drag-over-before/after cues to show likely drop position, and honors prefers-reduced-motion by disabling the motion path for users who want less animation.",
-    "The experimental dashboard customization mode now uses a placeholder-first drag interaction with a visible Drop here slot, avoids the big card-slide motion that can cause dizziness, and keeps only the placeholder itself softly animated with a prefers-reduced-motion fallback."
+    "The experimental dashboard customization mode now uses a placeholder-first drag interaction with a visible Drop here slot, keeps the placeholder itself calm with no scale-up motion, avoids the big card-slide animation, and still honors prefers-reduced-motion."
   ]
 }
