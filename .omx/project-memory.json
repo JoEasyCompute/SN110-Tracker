@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-17T12:11:08Z",
+  "updated_at": "2026-05-20T18:28:39Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -46,6 +46,10 @@
     "Taostats wallet/API calls are currently blocked by 429 \"Insufficient credits (remaining: 0, required: 1)\" responses, so wallet snapshots, stake-balance, and extrinsic requests cannot advance until credits are replenished.",
     "The subnet polling path is scrape-based and separate from the Taostats API wallet path; the wallet data staleness is not caused by the scrape-based subnet source.",
     "Both TAOSTATS_API_KEY and TAOSTATS_API_KEY2 currently hit the same Taostats insufficient-credits response.",
-    "The wallet ingest path now short-circuits when the snapshot call reports exhausted credits and backs off for hours instead of retrying every minute."
+    "The wallet ingest path now short-circuits when the snapshot call reports exhausted credits and backs off for hours instead of retrying every minute.",
+    "The experimental UI now uses a tiered card system: compact for lightweight metrics, deep for richer summary cards, and entity for wallets.",
+    "In experimental mode, the wallet cards keep the holographic entity treatment, the overview/signal cards use the deep variant, and the key comparison sections use the same deep styling for consistency.",
+    "The experimental 'What changed in the last 24h' section now renders as a 4-column by 2-row grid on desktop and collapses cleanly on mobile.",
+    "The experimental drawer content now collapses to a single column on mobile, and the wallet entity cards use a mobile-specific internal layout so their stats do not overflow the viewport."
   ]
 }
