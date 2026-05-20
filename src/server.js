@@ -2648,27 +2648,27 @@ function renderPoolGrowthSection(latestSubnet = null) {
                 <div class="pool-estimator-summary" id="pool-growth-summary">Current pool: ${escapeHtml(tao(currentPool.taoInPool, 2))} • ${escapeHtml(alpha(currentPool.alphaInPool, 2))} • price ${escapeHtml(tao(currentPool.currentPrice, 6))} / α</div>
               </div>
               <div class="wallet-breakdown-grid pool-estimator-results">
-                <div class="wallet-breakdown-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card">
                   <div class="label">Estimated alpha received</div>
                   <div class="value" id="pool-growth-alpha-received">${escapeHtml(alpha(initialResult.alphaReceived, 4))}</div>
                   <div class="subtext" id="pool-growth-alpha-ideal">No-slippage baseline: ${escapeHtml(alpha(initialResult.idealAlphaReceived, 4))}</div>
                 </div>
-                <div class="wallet-breakdown-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card">
                   <div class="label">Projected alpha price</div>
                   <div class="value" id="pool-growth-projected-price">${escapeHtml(tao(initialResult.projectedPrice, 6))} / α</div>
                   <div class="subtext" id="pool-growth-post-pool">Projected alpha reserve: ${escapeHtml(alpha(initialResult.projectedAlphaInPool, 2))}</div>
                 </div>
-                <div class="wallet-breakdown-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card">
                   <div class="label">Price change %</div>
                   <div class="value" id="pool-growth-price-change">${escapeHtml(signedPercent(initialResult.priceChangePct, 2))}</div>
                   <div class="subtext" id="pool-growth-slippage">Slippage: ${escapeHtml(alpha(initialResult.alphaShortfall, 4))} • ${escapeHtml(signedPercent(initialResult.slippagePct, 2))} of ideal</div>
                 </div>
-                <div class="wallet-breakdown-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card">
                   <div class="label">Implied subnet market cap</div>
                   <div class="value" id="pool-growth-projected-market-cap">${escapeHtml(tao(initialResult.projectedMarketCap, 2))}</div>
                   <div class="subtext" id="pool-growth-market-cap-change">${escapeHtml(marketCapChangeText)}</div>
                 </div>
-                <div class="wallet-breakdown-card">
+                <div class="wallet-breakdown-card pool-growth-entity-card">
                   <div class="label">Projected TAO in pool</div>
                   <div class="value" id="pool-growth-projected-tao-reserve">${escapeHtml(tao(initialResult.projectedTaoInPool, 2))}</div>
                   <div class="subtext" id="pool-growth-tao-reserve-change">Pool change: ${escapeHtml(signedTao(initialResult.taoReserveChangeAbsolute, 2))} • ${escapeHtml(signedPercent(initialResult.taoReserveChangePct, 2))}</div>
@@ -7460,6 +7460,54 @@ function renderPage(model, { experimental = false } = {}) {
         color: var(--muted) !important;
         line-height: 1.45 !important;
       }
+      .experimental-page .pool-estimator-results {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
+        gap: 14px !important;
+      }
+      .experimental-page .pool-growth-entity-card {
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 128px;
+        padding: 18px 18px 16px !important;
+        border-radius: 24px !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        background: linear-gradient(135deg, rgba(16, 23, 34, 0.62) 0%, rgba(8, 12, 19, 0.88) 100%) !important;
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42) !important;
+      }
+      .experimental-page .pool-growth-entity-card::before {
+        content: '';
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent-color);
+        opacity: 0.95;
+      }
+      .experimental-page .pool-growth-entity-card .label {
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase !important;
+        color: var(--muted) !important;
+        margin: 0 !important;
+      }
+      .experimental-page .pool-growth-entity-card .value {
+        margin-top: auto !important;
+        font-size: 22px !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.02em !important;
+        color: #ffffff !important;
+      }
+      .experimental-page .pool-growth-entity-card .subtext {
+        margin-top: 6px !important;
+        font-size: 11px !important;
+        line-height: 1.45 !important;
+        color: var(--muted) !important;
+      }
       .experimental-page .comparison-grid {
         grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
         gap: 16px !important;
@@ -7764,6 +7812,9 @@ function renderPage(model, { experimental = false } = {}) {
         .experimental-page .comparison-grid {
           grid-template-columns: 1fr !important;
         }
+        .experimental-page .pool-estimator-results {
+          grid-template-columns: 1fr !important;
+        }
         .experimental-page .experimental-details-body {
           grid-template-columns: 1fr !important;
           gap: 16px !important;
@@ -7775,6 +7826,9 @@ function renderPage(model, { experimental = false } = {}) {
         }
         .experimental-page .card--compact,
         .experimental-page .card--deep {
+          min-height: 0;
+        }
+        .experimental-page .pool-growth-entity-card {
           min-height: 0;
         }
         .experimental-page .wallet-hologram-card {
