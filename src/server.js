@@ -2134,9 +2134,14 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
       const freePct = total && total > 0 && free !== null ? Math.max(0, Math.min(100, Math.round((free / total) * 100))) : 0;
       const stakedPct = total && total > 0 && staked !== null ? Math.max(0, Math.min(100, Math.round((staked / total) * 100))) : (total ? 100 - freePct : 0);
       const tone = change24h === null ? 'neutral' : (change24h >= 0 ? 'positive' : 'negative');
-      const badgeText = String(hotkeySummary || '').trim();
       const changeText = change24h === null ? '—' : signedTao(change24h, 2);
       const metricAttr = metricData ? ` data-metric="${escapeHtml(JSON.stringify(metricData || {}))}"` : '';
+
+      const tokenPrice = latestSubnet ? numericMetricValue(latestSubnet.price_num) : null;
+      const actualAlpha = (tokenPrice && tokenPrice > 0 && latest?.balance_staked_alpha_as_tao_num !== null)
+        ? (latest.balance_staked_alpha_as_tao_num / tokenPrice)
+        : null;
+      const actualAlphaText = actualAlpha !== null ? alpha(actualAlpha, 1) : '—';
 
       return `
         <button type="button" class="card card-button wallet-hologram-card ${tone}" ${metricAttr} style="--wallet-theme-color: ${walletColor};">
@@ -2151,7 +2156,6 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
               <div class="card-label">${escapeHtml(wallet.name)}</div>
               <div class="wallet-address-badge">${escapeHtml(shortAddress(wallet.ss58))}</div>
             </div>
-            ${badgeText ? `<div class="card-badge wallet-badge" style="border-color: ${walletColor}44; color: ${walletColor};">${escapeHtml(badgeText)}</div>` : ''}
           </div>
 
           <div class="wallet-balance-row">
@@ -2189,7 +2193,10 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
             </div>
             <div class="position-item">
               <span class="pos-label">Alpha</span>
-              <span class="pos-val">${alpha === null ? '—' : tao(alpha, 1)}</span>
+              <span class="pos-val">
+                ${alpha === null ? '—' : tao(alpha, 1)}
+                ${actualAlpha !== null ? `<span style="font-size: 9px; font-weight: 500; opacity: 0.7; display: block; margin-top: 1px;">${actualAlphaText}</span>` : ''}
+              </span>
             </div>
           </div>
 
