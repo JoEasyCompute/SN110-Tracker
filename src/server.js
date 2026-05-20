@@ -1207,7 +1207,7 @@ function buildSignalSummary(latest, comparisons, latestMetricDefs = getLatestMet
   };
 }
 
-function renderMetricCards(latest, defs, { defaultSubtext = true } = {}) {
+function renderMetricCards(latest, defs, { defaultSubtext = true, variant = 'compact' } = {}) {
   return defs.map((def) => {
     const model = buildMetricCardModel(latest, def, { defaultSubtext });
 
@@ -1218,16 +1218,17 @@ function renderMetricCards(latest, defs, { defaultSubtext = true } = {}) {
       tone: def.tone || 'neutral',
       clickable: def.clickable,
       metricData: model.metricData,
+      variant,
     });
   }).join('');
 }
 
 function renderLatestSnapshotCards(latest, defs) {
-  return renderMetricCards(latest, defs, { defaultSubtext: true });
+  return renderMetricCards(latest, defs, { defaultSubtext: true, variant: 'deep' });
 }
 
 function renderSubnetDataCards(latest, subnetLabel = null) {
-  return renderMetricCards(latest, getSubnetDataMetricDefs(subnetLabel), { defaultSubtext: false });
+  return renderMetricCards(latest, getSubnetDataMetricDefs(subnetLabel), { defaultSubtext: false, variant: 'compact' });
 }
 
 function renderAlphaHolderSection(rows, {
@@ -1380,6 +1381,7 @@ function renderSignalSection(signal) {
     tone: card.tone || 'neutral',
     clickable: Boolean(card.metricData),
     metricData: card.metricData,
+    variant: 'deep',
   })).join('');
   return `
     <section class="section signal-section">
@@ -1589,6 +1591,7 @@ function renderInsightSection(insight) {
     subtext: card.subtext,
     tone: card.tone || 'neutral',
     clickable: false,
+    variant: 'compact',
   })).join('');
   return `
     <section class="section insight-section">
@@ -1619,6 +1622,7 @@ function renderWatchlistSection(watchlist) {
     subtext: card.subtext,
     tone: card.tone || 'neutral',
     clickable: false,
+    variant: 'compact',
   })).join('');
   return `
     <section class="section watchlist-section">
@@ -2147,7 +2151,7 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
       const actualAlphaText = actualAlpha !== null ? formatAlpha(actualAlpha, 1) : '—';
 
       return `
-        <button type="button" class="card card-button wallet-hologram-card ${tone}" ${metricAttr} style="--wallet-theme-color: ${walletColor};">
+        <button type="button" class="card card-button card--entity wallet-hologram-card ${tone}" ${metricAttr} style="--wallet-theme-color: ${walletColor};">
           <div class="hologram-glow"></div>
           <span class="card-info-badge" title="${escapeHtml(metricData.description)}" aria-label="${escapeHtml(metricData.description)}" aria-hidden="true">i</span>
           
@@ -2965,14 +2969,16 @@ function metricUnitHint(metricData = null) {
   return '';
 }
 
-function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = false, metricData = null }) {
+function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = false, metricData = null, variant = 'compact' }) {
   const description = metricData?.description || '';
   const unitHint = metricUnitHint(metricData);
   const badgeText = String(metricData?.badge || '').trim();
   const metricAttr = metricDataAttribute(metricData);
+  const normalizedVariant = String(variant || 'compact').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  const variantClass = `card--${normalizedVariant || 'compact'}`;
   const attrs = clickable
-    ? `type="button" class="card card-button ${tone}"${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`
-    : `class="card ${tone}"${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`;
+    ? `type="button" class="card card-button ${variantClass} ${tone}"${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`
+    : `class="card ${variantClass} ${tone}"${metricAttr}${unitHint ? ` title="${escapeHtml(unitHint)}"` : ''}`;
   const tag = clickable ? 'button' : 'section';
   return `
     <${tag} ${attrs}>
@@ -2999,6 +3005,7 @@ function renderComparisonCard(comparison) {
       ? `Prior sample: ${formatIso(comparison.prior.captured_at)}`
       : 'No sample at least 24h ago',
     tone: comparison.delta !== null && comparison.delta >= 0 ? 'positive' : 'negative',
+    variant: 'compact',
     metricData: {
       kind: 'comparison',
       field: comparison.field,
@@ -7367,6 +7374,85 @@ function renderPage(model, { experimental = false } = {}) {
         background: var(--panel-glass-hover) !important;
         border-color: rgba(255, 255, 255, 0.15) !important;
         box-shadow: 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px 2px rgba(255, 255, 255, 0.03) !important;
+      }
+      .experimental-page .card--compact {
+        padding: 14px !important;
+        min-height: 104px;
+      }
+      .experimental-page .card--compact .card-label {
+        font-size: 11px !important;
+        letter-spacing: 0.07em !important;
+      }
+      .experimental-page .card--compact .card-value {
+        font-size: 17px !important;
+      }
+      .experimental-page .card--compact .card-subtext {
+        font-size: 10px !important;
+        line-height: 1.4 !important;
+      }
+      .experimental-page .card--compact .card-badge {
+        margin-top: 6px !important;
+        padding: 3px 8px !important;
+      }
+      .experimental-page .card--deep {
+        padding: 18px !important;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 120px;
+      }
+      .experimental-page .card--deep::before {
+        content: '';
+        position: absolute;
+        top: 18px;
+        right: 18px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+      .experimental-page .card--deep.positive::before {
+        background: var(--positive-color);
+        animation: experimental-pulse-positive 2s infinite ease-in-out;
+      }
+      .experimental-page .card--deep.negative::before {
+        background: var(--negative-color);
+        animation: experimental-pulse-negative 2s infinite ease-in-out;
+      }
+      .experimental-page .card--deep.accent::before {
+        background: var(--accent-color);
+        animation: experimental-pulse-accent 2s infinite ease-in-out;
+      }
+      .experimental-page .card--deep .card-label {
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase !important;
+        color: var(--muted) !important;
+        margin: 0 !important;
+        max-width: calc(100% - 20px);
+      }
+      .experimental-page .card--deep .card-value {
+        margin-top: auto !important;
+        font-size: 20px !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.02em !important;
+        color: #ffffff !important;
+      }
+      .experimental-page .card--deep.positive .card-value {
+        color: var(--positive-color) !important;
+      }
+      .experimental-page .card--deep.negative .card-value {
+        color: var(--negative-color) !important;
+      }
+      .experimental-page .card--deep.accent .card-value {
+        color: var(--accent-color) !important;
+      }
+      .experimental-page .card--deep .card-subtext {
+        margin-top: 6px !important;
+        font-size: 11px !important;
+        color: var(--muted) !important;
+        line-height: 1.45 !important;
       }
       .experimental-page .card.positive:hover {
         border-color: var(--positive-color) !important;
