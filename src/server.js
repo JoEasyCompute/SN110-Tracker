@@ -3503,8 +3503,11 @@ function renderDashboardClientScript({ netuid, config }) {
           card.draggable = state.layoutCustomizeMode && !card.classList.contains('layout-card-hidden');
         }
         if (!state.layoutCustomizeMode) {
-          document.querySelectorAll('.layout-card.is-dragging, .layout-card.drag-over').forEach((card) => {
-            card.classList.remove('is-dragging', 'drag-over');
+          document.querySelectorAll('.layout-card.is-dragging, .layout-card.drag-over, .layout-card.drag-over-before, .layout-card.drag-over-after').forEach((card) => {
+            card.classList.remove('is-dragging', 'drag-over', 'drag-over-before', 'drag-over-after');
+          });
+          document.querySelectorAll('[data-layout-section][data-layout-drop-placement]').forEach((section) => {
+            section.removeAttribute('data-layout-drop-placement');
           });
           state.layoutDraggingId = null;
         }
@@ -6973,18 +6976,110 @@ function renderDashboardClientScript({ netuid, config }) {
         return card.closest('[data-layout-section]');
       }
 
-      function moveLayoutCard(section, sourceCard, targetCard) {
+      function shouldReduceLayoutMotion() {
+        if (typeof window.matchMedia !== 'function') return false;
+        try {
+          return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        } catch {
+          return false;
+        }
+      }
+
+      function clearLayoutCardMotion(card) {
+        if (!card) return;
+        card.style.transition = '';
+        card.style.transform = '';
+        card.style.opacity = '';
+        card.style.willChange = '';
+      }
+
+      function clearLayoutDropIndicators() {
+        document.querySelectorAll('.layout-card.drag-over, .layout-card.drag-over-before, .layout-card.drag-over-after').forEach((candidate) => {
+          candidate.classList.remove('drag-over', 'drag-over-before', 'drag-over-after');
+        });
+        document.querySelectorAll('[data-layout-section][data-layout-drop-placement]').forEach((section) => {
+          section.removeAttribute('data-layout-drop-placement');
+        });
+      }
+
+      function animateLayoutSectionFlow(section, mutate) {
+        if (!section || typeof mutate !== 'function') {
+          mutate?.();
+          return;
+        }
+        const reduceMotion = shouldReduceLayoutMotion();
+        const beforeCards = getLayoutCardElements(section).filter((card) => card && !card.classList.contains('layout-card-hidden'));
+        const beforeRects = new Map();
+        if (!reduceMotion) {
+          for (const card of beforeCards) {
+            beforeRects.set(card, card.getBoundingClientRect());
+          }
+        }
+
+        mutate();
+
+        if (reduceMotion) {
+          return;
+        }
+
+        const afterCards = getLayoutCardElements(section).filter((card) => card && !card.classList.contains('layout-card-hidden'));
+        const animatedCards = [];
+        for (const card of afterCards) {
+          const beforeRect = beforeRects.get(card);
+          if (!beforeRect) continue;
+          const afterRect = card.getBoundingClientRect();
+          const deltaX = beforeRect.left - afterRect.left;
+          const deltaY = beforeRect.top - afterRect.top;
+          if (!deltaX && !deltaY) continue;
+          card.style.transition = 'none';
+          card.style.transform = 'translate(' + deltaX + 'px, ' + deltaY + 'px)';
+          card.style.willChange = 'transform';
+          animatedCards.push(card);
+        }
+        if (!animatedCards.length) {
+          return;
+        }
+
+        const scheduleFrame = typeof window.requestAnimationFrame === 'function'
+          ? window.requestAnimationFrame.bind(window)
+          : (fn) => window.setTimeout(fn, 16);
+        section.getBoundingClientRect();
+        scheduleFrame(() => {
+          for (const card of animatedCards) {
+            card.style.transition = 'transform 240ms cubic-bezier(0.16, 1, 0.3, 1), opacity 240ms cubic-bezier(0.16, 1, 0.3, 1)';
+            card.style.transform = '';
+          }
+          window.setTimeout(() => {
+            for (const card of animatedCards) {
+              clearLayoutCardMotion(card);
+            }
+          }, 260);
+        });
+      }
+
+      function moveLayoutCard(section, sourceCard, targetCard, placement = 'before') {
         if (!section || !sourceCard || !sourceCard.dataset?.layoutCardId) return;
         const sectionId = section.dataset.layoutSection;
         if (!sectionId) return;
         if (targetCard && targetCard === sourceCard) return;
         if (targetCard && targetCard.parentElement !== section) return;
-        if (targetCard) {
-          section.insertBefore(sourceCard, targetCard);
-        } else {
-          section.appendChild(sourceCard);
-        }
-        persistLayoutPrefsFromDom();
+        animateLayoutSectionFlow(section, () => {
+          if (targetCard) {
+            if (placement === 'after') {
+              const afterTarget = targetCard.nextElementSibling;
+              if (afterTarget) {
+                section.insertBefore(sourceCard, afterTarget);
+              } else {
+                section.appendChild(sourceCard);
+              }
+            } else {
+              section.insertBefore(sourceCard, targetCard);
+            }
+          } else {
+            section.appendChild(sourceCard);
+          }
+          persistLayoutPrefsFromDom();
+        });
       }
 
       function bindLayoutCustomization() {
@@ -7003,8 +7098,10 @@ function renderDashboardClientScript({ netuid, config }) {
           event.preventDefault();
           event.stopPropagation();
           const hidden = !card.classList.contains('layout-card-hidden');
-          setLayoutCardHidden(card, hidden);
           const section = getLayoutSectionByCard(card);
+          animateLayoutSectionFlow(section, () => {
+            setLayoutCardHidden(card, hidden);
+          });
           const sectionId = section?.dataset.layoutSection;
           const cardId = card.dataset.layoutCardId;
           if (!sectionId || !cardId) return;
@@ -7041,8 +7138,14 @@ function renderDashboardClientScript({ netuid, config }) {
         const handleDragEnd = (event) => {
           const card = event.currentTarget;
           card?.classList.remove('is-dragging');
-          document.querySelectorAll('.layout-card.drag-over').forEach((candidate) => candidate.classList.remove('drag-over'));
+          clearLayoutDropIndicators();
           state.layoutDraggingId = null;
+        };
+        const getDropPlacement = (event, targetCard) => {
+          if (!targetCard) return 'before';
+          const rect = targetCard.getBoundingClientRect();
+          if (!rect.height) return 'before';
+          return event.clientY >= rect.top + rect.height / 2 ? 'after' : 'before';
         };
         const handleDragOver = (event) => {
           if (!state.layoutCustomizeMode) return;
@@ -7052,10 +7155,13 @@ function renderDashboardClientScript({ netuid, config }) {
           const targetCard = event.target?.closest('[data-layout-card-id]');
           if (targetCard && targetCard.parentElement === section && targetCard !== sourceCard) {
             event.preventDefault();
-            document.querySelectorAll('.layout-card.drag-over').forEach((candidate) => candidate.classList.remove('drag-over'));
-            targetCard.classList.add('drag-over');
+            clearLayoutDropIndicators();
+            const placement = getDropPlacement(event, targetCard);
+            targetCard.classList.add('drag-over', 'drag-over-' + placement);
+            section.dataset.layoutDropPlacement = placement;
           } else if (section.contains(sourceCard)) {
             event.preventDefault();
+            clearLayoutDropIndicators();
           }
         };
         const handleDrop = (event) => {
@@ -7065,9 +7171,9 @@ function renderDashboardClientScript({ netuid, config }) {
           const sourceCard = state.layoutDraggingId ? getLayoutCardById(state.layoutDraggingId) : null;
           if (!sourceCard) return;
           const targetCard = event.target?.closest('[data-layout-card-id]');
-          document.querySelectorAll('.layout-card.drag-over').forEach((candidate) => candidate.classList.remove('drag-over'));
+          clearLayoutDropIndicators();
           if (targetCard && targetCard.parentElement === section && targetCard !== sourceCard) {
-            moveLayoutCard(section, sourceCard, targetCard);
+            moveLayoutCard(section, sourceCard, targetCard, getDropPlacement(event, targetCard));
           } else if (section.contains(sourceCard)) {
             moveLayoutCard(section, sourceCard, null);
           }
@@ -7790,6 +7896,12 @@ function renderPage(model, { experimental = false } = {}) {
         outline: 2px solid rgba(0, 219, 188, 0.75);
         outline-offset: -3px;
       }
+      .experimental-page .layout-card.drag-over-before {
+        box-shadow: inset 0 3px 0 rgba(0, 219, 188, 0.9), 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px 2px rgba(0, 219, 188, 0.06) !important;
+      }
+      .experimental-page .layout-card.drag-over-after {
+        box-shadow: inset 0 -3px 0 rgba(0, 219, 188, 0.9), 0 12px 30px 0 rgba(0, 0, 0, 0.45), 0 0 15px 2px rgba(0, 219, 188, 0.06) !important;
+      }
       .experimental-page .card--compact {
         padding: 14px !important;
         min-height: 104px;
@@ -7872,6 +7984,16 @@ function renderPage(model, { experimental = false } = {}) {
       .experimental-page .pool-estimator-results {
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
         gap: 14px !important;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .experimental-page *,
+        .experimental-page *::before,
+        .experimental-page *::after {
+          animation: none !important;
+          transition-duration: 0.001ms !important;
+          transition-delay: 0ms !important;
+          scroll-behavior: auto !important;
+        }
       }
       .experimental-page .pool-growth-entity-card {
         position: relative;
