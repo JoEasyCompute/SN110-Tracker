@@ -307,7 +307,10 @@ function normalizeSnapshot(raw, { source, sourceUrl, netuid, capturedAt = nowIso
   const recycled24HoursTaoNum = raoToTao(payload.recycled_24_hours);
   const recycledLifetimeTaoNum = raoToTao(payload.recycled_lifetime);
   const recycledSinceRegistrationTaoNum = raoToTao(payload.recycled_since_registration);
-  const chainBuys1dTaoNum = raoToTao(payload.excess_tao);
+  const chainBuys1dTaoNum = (() => {
+    const excessTao = asNumber(payload.excess_tao);
+    return excessTao === null ? null : excessTao * TAO_PER_DAY;
+  })();
   const registrationCostTaoNum = raoToTao(payload.neuron_registration_cost ?? payload.registration_cost);
   const activeKeysNum = i(payload.active_keys);
   const maxNeuronsNum = i(payload.max_neurons);

@@ -1969,7 +1969,7 @@ function backfillChainBuysInRange(db, netuid, startIso, endIso, { overwrite = fa
         skipped += 1;
         continue;
       }
-      updateStmt.run(String(payload.excess_tao), excessTao / 1_000_000_000, row.id);
+      updateStmt.run(String(payload.excess_tao), excessTao * 7200, row.id);
       updated += 1;
     }
     db.exec('COMMIT');

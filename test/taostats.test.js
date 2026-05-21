@@ -552,7 +552,7 @@ test('buildPageModel hydrates chain buys from raw subnet snapshot payloads', () 
     total_tao: '1000',
     alpha_in_pool: '100',
     recycled_24_hours: '500000',
-    excess_tao: '7500000000',
+    excess_tao: '0.0075',
     neuron_registration_cost: '500000',
     active_keys: 256,
     max_neurons: 256,
@@ -574,8 +574,8 @@ test('buildPageModel hydrates chain buys from raw subnet snapshot payloads', () 
   });
   const html = renderPage(model);
 
-  assert.equal(model.latest?.chain_buys_1_day_num, 7.5);
-  assert.equal(model.history[0]?.chain_buys_1_day_num, 7.5);
+  assert.equal(model.latest?.chain_buys_1_day_num, 54);
+  assert.equal(model.history[0]?.chain_buys_1_day_num, 54);
   assert.equal(html.includes('Chain Buys 1D'), true);
   db.close();
 });
@@ -592,7 +592,7 @@ test('chain buys backfill fills missing columns from raw subnet snapshots withou
     total_tao: '1000',
     alpha_in_pool: '100',
     recycled_24_hours: '500000',
-    excess_tao: '7500000000',
+    excess_tao: '0.0075',
     neuron_registration_cost: '500000',
     active_keys: 256,
     max_neurons: 256,
@@ -634,8 +634,8 @@ test('chain buys backfill fills missing columns from raw subnet snapshots withou
   assert.equal(result.ok, true);
   assert.equal(result.updated, 1);
   assert.equal(result.skipped, 0);
-  assert.equal(model.latest?.chain_buys_1_day_num, 7.5);
-  assert.equal(model.history[0]?.chain_buys_1_day_num, 7.5);
+  assert.equal(model.latest?.chain_buys_1_day_num, 54);
+  assert.equal(model.history[0]?.chain_buys_1_day_num, 54);
   db.close();
 });
 
