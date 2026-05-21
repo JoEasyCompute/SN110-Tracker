@@ -4421,6 +4421,38 @@ test('chain buys backfill endpoint runs the range update without requiring live 
   db.close();
 });
 
+test('chain buys backfill endpoint surfaces the skipped reason', async () => {
+  const db = openDatabase(':memory:');
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      backfillHistoricalSnapshots: async () => ({ ok: true, inserted: 0, flowInserted: 0, priceInserted: 0 }),
+      backfillChainBuysHistory: async () => ({ skipped: true, reason: 'ingest already running' }),
+      ingestOnce: async () => ({ ok: true, source: 'api' }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+    },
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/chain-buys-backfill`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
+    body: JSON.stringify({ start: '2026-05-01', end: '2026-05-02' }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 409);
+  assert.equal(payload.error, 'ingest already running');
+  assert.equal(payload.chainBuysBackfill.reason, 'ingest already running');
+  await app.close();
+  db.close();
+});
+
 test('admin backfill endpoint does not run live ingest when backfill is skipped', async () => {
   const db = openDatabase(':memory:');
   let liveCalled = false;

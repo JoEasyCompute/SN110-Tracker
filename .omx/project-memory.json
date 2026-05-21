@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-21T19:32:10.497Z",
+  "updated_at": "2026-05-21T19:38:31.138Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -56,6 +56,7 @@
     "The experimental dashboard customization mode now uses the original FLIP-style reflow with drag-over-before/after cues for actual card moves, and that is the preferred reorder motion in the experimental grid while still honoring prefers-reduced-motion.",
     "In experimental mode, the wallet cards were moved out of the Explore More drawer and promoted above Key Metrics; the wallet card now shows the raw alpha value as the primary alpha figure with the TAO equivalent underneath, the alpha block also shows a 24h raw-alpha delta plus percent, the 24h wallet change pill also shows a percent, the key metrics and subnet stats cards now show a subtle wallet-like 24h status chip inline with the main value, the token price chip keeps precise TAO decimals and a percent delta so tiny moves do not collapse to zero, and deep cards without a delta keep their prime value aligned to the top instead of bottom-aligning it.",
     "The subnet stats section now includes a Chain Buys 1D card sourced from the Taostats excess_tao field; existing rows hydrate the value from raw_json so the card appears immediately even before a fresh ingest writes the new columns.",
-    "The admin drawer now includes a Chain Buys 1D backfill control that fills chain_buys_1_day_* from existing raw_json.excess_tao values over a chosen date range without rewriting other rows."
+    "The admin drawer now includes a Chain Buys 1D backfill control that fills chain_buys_1_day_* from existing raw_json.excess_tao values over a chosen date range without rewriting other rows.",
+    "The Chain Buys 1D backfill admin action now surfaces the actual server skip reason (for example ingest already running) instead of only showing a generic failure message."
   ]
 }

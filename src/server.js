@@ -11544,7 +11544,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         res.end(JSON.stringify({
           netuid,
           chainBuysBackfill,
-          ...(chainBuysBackfill.error ? { error: chainBuysBackfill.error } : {}),
+          ...(chainBuysBackfill.error || chainBuysBackfill.reason ? { error: chainBuysBackfill.error || chainBuysBackfill.reason } : {}),
         }, null, 2));
         return;
       }
