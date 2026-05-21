@@ -554,7 +554,7 @@ function hydrateChainBuysFromRaw(row) {
   return {
     ...row,
     chain_buys_1_day_text: hasText ? row.chain_buys_1_day_text : String(excessTaoRaw),
-    chain_buys_1_day_num: hasNum ? row.chain_buys_1_day_num : excessTaoNum * 7200,
+    chain_buys_1_day_num: hasNum ? row.chain_buys_1_day_num : (excessTaoNum / TAO_PER_RAO) * 7200,
   };
 }
 

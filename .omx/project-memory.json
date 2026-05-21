@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-21T20:02:46.329Z",
+  "updated_at": "2026-05-21T20:22:47.434Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -59,6 +59,7 @@
     "The admin drawer now includes a Chain Buys 1D backfill control that fills chain_buys_1_day_* from existing raw_json.excess_tao values over a chosen date range without rewriting other rows.",
     "The Chain Buys 1D backfill admin action now surfaces the actual server skip reason (for example ingest already running) instead of only showing a generic failure message.",
     "Chain Buys 1D should be derived from Taostats excess_tao as a daily value (per-block excess TAO × 7200), matching the official subnet table rather than using the raw per-block value directly.",
-    "The Chain Buys 1D backfill now supports an overwrite checkbox in the admin drawer so previously stored values can be replaced in place for a selected date range."
+    "The Chain Buys 1D backfill now supports an overwrite checkbox in the admin drawer so previously stored values can be replaced in place for a selected date range.",
+    "Chain Buys 1D is now converted from raw excess_tao units to TAO/day using raoToTao(excess_tao) × 7200, and the admin backfill supports overwrite so previously stored bad values can be corrected in place."
   ]
 }
