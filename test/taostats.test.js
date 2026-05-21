@@ -3270,7 +3270,7 @@ test('experimental render uses an overview-first layout with collapsed details',
       block_number: 1,
       source: 'scrape',
       remote_timestamp: '2026-04-30T00:00:00Z',
-      price_num: 0.006,
+      price_num: 0.0098,
       market_cap_num: 1000,
       liquidity_num: 500,
       emission_num: 10,
@@ -3297,7 +3297,7 @@ test('experimental render uses an overview-first layout with collapsed details',
     history: [
       {
         captured_at: '2026-04-29T00:00:00Z',
-        price_num: 0.005,
+        price_num: 0.0094,
         market_cap_num: 900,
         liquidity_num: 450,
         emission_num: 9,
@@ -3362,6 +3362,7 @@ test('experimental render uses an overview-first layout with collapsed details',
   assert.equal(html.includes('pool-growth-entity-card'), true);
   assert.equal(html.includes('card-status-pill'), true);
   assert.equal(html.includes('card-status-label'), false);
+  assert.equal(html.includes('+τ 0.0004'), true);
   assert.equal(html.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(html.includes('Latest snapshot captured'), false);
   assert.equal(html.includes('Open stable dashboard'), true);

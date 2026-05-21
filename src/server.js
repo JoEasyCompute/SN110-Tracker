@@ -456,6 +456,17 @@ function signedTao(value, digits = 4) {
   return `${sign}τ ${new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(Math.abs(num))}`;
 }
 
+function signedTaoPrecise(value, minimumDigits = 4, maximumDigits = 6) {
+  if (value === null || value === undefined || value === '') return '—';
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  const sign = num > 0 ? '+' : num < 0 ? '-' : '';
+  return `${sign}τ ${new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: minimumDigits,
+    maximumFractionDigits: maximumDigits,
+  }).format(Math.abs(num))}`;
+}
+
 function percentRatio(value, digits = null) {
   if (value === null || value === undefined || value === '') return '—';
   const num = Number(value);
@@ -3040,9 +3051,12 @@ function buildMetricTrend(latest, def, history = []) {
   const tone = def.key === 'rank'
     ? (delta < 0 ? 'positive' : delta > 0 ? 'negative' : 'neutral')
     : (delta > 0 ? 'positive' : delta < 0 ? 'negative' : 'neutral');
+  const value = def.key === 'price_num'
+    ? signedTaoPrecise(delta, 4, 6)
+    : formatMetricTrendDelta(delta, def.valueFormat);
   return {
     label: '24h',
-    value: formatMetricTrendDelta(delta, def.valueFormat),
+    value,
     pct: pct === null || !Number.isFinite(pct) ? null : signedPercent(pct, 2),
     tone,
   };
