@@ -840,6 +840,85 @@ test('ingestOnce refreshes subnet metadata without tripping the catalog refresh 
   db.close();
 });
 
+test('subnet table snapshot backfill stores the live catalog rows for every subnet', async () => {
+  const db = openDatabase(':memory:');
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => ([
+      {
+        netuid: 64,
+        block_number: 640001,
+        timestamp: '2026-05-14T00:00:00Z',
+        name: 'Chutes',
+        symbol: 'CHU',
+        price: '1.0',
+        market_cap: '100',
+        liquidity: '50',
+        total_tao: '1000',
+        total_alpha: '2000',
+        root_prop: '50',
+        emission: '10',
+        projected_emission: '11',
+        incentive_burn: '0.1',
+        recycled_24_hours: '1000',
+        excess_tao: '7500000',
+        neuron_registration_cost: '500000',
+        active_keys: 100,
+        max_neurons: 256,
+        net_flow_1_day: '20',
+        net_flow_7_days: '30',
+        net_flow_30_days: '40',
+        root_sell: 'NO',
+      },
+      {
+        netuid: 65,
+        block_number: 650001,
+        timestamp: '2026-05-14T00:00:00Z',
+        name: 'Mantis',
+        symbol: 'MAN',
+        price: '2.0',
+        market_cap: '200',
+        liquidity: '75',
+        total_tao: '2000',
+        total_alpha: '4000',
+        root_prop: '25',
+        emission: '15',
+        projected_emission: '16',
+        incentive_burn: '0.2',
+        recycled_24_hours: '2000',
+        excess_tao: '7500000',
+        neuron_registration_cost: '600000',
+        active_keys: 200,
+        max_neurons: 512,
+        net_flow_1_day: '25',
+        net_flow_7_days: '35',
+        net_flow_30_days: '45',
+        root_sell: 'NO',
+      },
+    ]),
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+    },
+    taostats,
+  });
+
+  const result = await service.backfillSubnetCatalogSnapshots();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.inserted, 2);
+  assert.equal(result.skipped, 0);
+  assert.equal(getLatestSnapshot(db, 64)?.name, 'Chutes');
+  assert.equal(getLatestSnapshot(db, 65)?.name, 'Mantis');
+  assert.equal(getLatestSnapshot(db, 64)?.chain_buys_1_day_num, 54);
+  assert.equal(getLatestSnapshot(db, 65)?.chain_buys_1_day_num, 54);
+  db.close();
+});
+
 test('wallet activity sync refreshes wallet snapshots and stake positions', async () => {
   const db = openDatabase(':memory:');
   const walletConfig = { name: 'Miner', ss58: '5WalletMiner123456789ABCDEFGH', network: 'finney', hotkeys: [] };
@@ -4459,6 +4538,43 @@ test('chain buys backfill endpoint passes overwrite through', async () => {
     overwrite: true,
   });
   assert.equal(payload.chainBuysBackfill.ok, true);
+  await app.close();
+  db.close();
+});
+
+test('subnet table snapshot backfill endpoint captures the live catalog without requiring live ingest', async () => {
+  const db = openDatabase(':memory:');
+  let backfillArgs = null;
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      backfillHistoricalSnapshots: async () => ({ ok: true, inserted: 0, flowInserted: 0, priceInserted: 0 }),
+      backfillSubnetCatalogSnapshots: async (args) => {
+        backfillArgs = args;
+        return { ok: true, source: 'subnet-catalog-snapshot', fetched: 2, inserted: 2, skipped: 0, deleted: 0 };
+      },
+      ingestOnce: async () => ({ ok: true, source: 'api' }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+    },
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/catalog/backfill`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
+    body: JSON.stringify({ overwrite: true }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(backfillArgs, { overwrite: true });
+  assert.equal(payload.subnetTableBackfill.ok, true);
+  assert.equal(payload.subnetTableBackfill.inserted, 2);
   await app.close();
   db.close();
 });

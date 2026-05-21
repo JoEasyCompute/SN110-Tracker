@@ -3283,6 +3283,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
   const adminControlsClass = experimental ? 'panel admin-controls admin-controls-secondary' : 'panel admin-controls';
   const adminQueueClass = experimental ? 'panel admin-queue admin-queue-secondary' : 'panel';
   const adminBackfillClass = experimental ? 'panel admin-backfill admin-backfill-secondary' : 'panel';
+  const adminCatalogClass = experimental ? 'panel admin-catalog admin-catalog-secondary' : 'panel';
   const adminChainBuysClass = experimental ? 'panel admin-chain-buys admin-chain-buys-secondary' : 'panel';
   const adminWalletClass = experimental ? 'panel admin-wallet admin-wallet-secondary' : 'panel';
   const adminWalletExportClass = experimental ? 'panel admin-wallet-export admin-wallet-export-secondary' : 'panel admin-wallet-export';
@@ -3318,6 +3319,23 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
           <div class="admin-actions">
             <a class="button" href="/api/subnets/${netuid}/latest">Latest JSON</a>
             <a class="button" href="/api/subnets/${netuid}/history?days=30">History JSON</a>
+          </div>
+          <div class="${adminCatalogClass}">
+            <h3>Subnet table snapshot</h3>
+            <div class="admin-form">
+              <div class="admin-form-row">
+                <label class="admin-checkbox">
+                  <input type="checkbox" id="subnet-catalog-backfill-overwrite">
+                  Overwrite existing snapshot rows
+                </label>
+              </div>
+              <p class="admin-helper">Captures the current Taostats <code>/subnets</code> table for every subnet into the local database so you can compare other subnets later. This seeds the table with the live catalog; it does not reconstruct older upstream history.</p>
+              <div class="admin-actions">
+                <button class="button primary" type="button" id="subnet-catalog-backfill-btn">Snapshot all subnets now</button>
+              </div>
+              <progress class="admin-progress" id="subnet-catalog-backfill-progress" hidden></progress>
+              <p class="empty" id="subnet-catalog-backfill-status" hidden></p>
+            </div>
           </div>
           <div class="${adminBackfillClass}">
             <h3>Backfill</h3>
@@ -3830,6 +3848,10 @@ function renderDashboardClientScript({ netuid, config }) {
       const backfillButton = document.getElementById('backfill-btn');
       const backfillStatus = document.getElementById('backfill-status');
       const backfillProgress = document.getElementById('backfill-progress');
+      const subnetCatalogBackfillOverwriteInput = document.getElementById('subnet-catalog-backfill-overwrite');
+      const subnetCatalogBackfillButton = document.getElementById('subnet-catalog-backfill-btn');
+      const subnetCatalogBackfillStatus = document.getElementById('subnet-catalog-backfill-status');
+      const subnetCatalogBackfillProgress = document.getElementById('subnet-catalog-backfill-progress');
       const chainBuysBackfillStartInput = document.getElementById('chain-buys-backfill-start');
       const chainBuysBackfillEndInput = document.getElementById('chain-buys-backfill-end');
       const chainBuysBackfillOverwriteInput = document.getElementById('chain-buys-backfill-overwrite');
@@ -5520,6 +5542,19 @@ function renderDashboardClientScript({ netuid, config }) {
         backfillStatus.dataset.status = kind;
       }
 
+      function updateSubnetCatalogBackfillStatus(message, kind = 'info') {
+        if (!subnetCatalogBackfillStatus) return;
+        if (!message) {
+          subnetCatalogBackfillStatus.hidden = true;
+          subnetCatalogBackfillStatus.textContent = '';
+          subnetCatalogBackfillStatus.dataset.status = '';
+          return;
+        }
+        subnetCatalogBackfillStatus.hidden = false;
+        subnetCatalogBackfillStatus.textContent = message;
+        subnetCatalogBackfillStatus.dataset.status = kind;
+      }
+
       function updateChainBuysBackfillStatus(message, kind = 'info') {
         if (!chainBuysBackfillStatus) return;
         if (!message) {
@@ -5595,6 +5630,12 @@ function renderDashboardClientScript({ netuid, config }) {
         };
       }
 
+      function readSubnetCatalogBackfillOptions() {
+        return {
+          overwrite: Boolean(subnetCatalogBackfillOverwriteInput?.checked),
+        };
+      }
+
       function readChainBuysBackfillOptions() {
         return {
           start: String(chainBuysBackfillStartInput?.value || '').trim(),
@@ -5664,6 +5705,36 @@ function renderDashboardClientScript({ netuid, config }) {
         } finally {
           setProgressVisible(backfillProgress, false);
           backfillButton.disabled = false;
+        }
+      }
+
+      async function runSubnetCatalogBackfill() {
+        if (!subnetCatalogBackfillButton) return;
+        const options = readSubnetCatalogBackfillOptions();
+        subnetCatalogBackfillButton.disabled = true;
+        setProgressVisible(subnetCatalogBackfillProgress, true);
+        updateSubnetCatalogBackfillStatus('Capturing the live Taostats subnet table for all subnets…', 'info');
+        try {
+          const response = await fetch('/api/subnets/catalog/backfill', {
+            method: 'POST',
+            headers: adminFetchHeaders(),
+            body: JSON.stringify(options),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(adminPayloadErrorMessage(payload, 'Subnet table snapshot failed'));
+          }
+          const inserted = Number(payload.subnetTableBackfill?.inserted ?? 0);
+          const skipped = Number(payload.subnetTableBackfill?.skipped ?? 0);
+          const overwriteLabel = options.overwrite ? ' with overwrite' : '';
+          updateSubnetCatalogBackfillStatus('Subnet table snapshot complete' + overwriteLabel + ': ' + inserted + ' subnet rows stored' + (skipped ? ', ' + skipped + ' skipped' : '') + '.', 'success');
+          window.setTimeout(() => window.location.reload(), 1200);
+        } catch (error) {
+          updateSubnetCatalogBackfillStatus(error?.message || 'Subnet table snapshot failed', 'error');
+          console.error(error);
+        } finally {
+          setProgressVisible(subnetCatalogBackfillProgress, false);
+          subnetCatalogBackfillButton.disabled = false;
         }
       }
 
@@ -7442,6 +7513,10 @@ function renderDashboardClientScript({ netuid, config }) {
 
       backfillButton?.addEventListener('click', () => {
         void runAdminBackfill();
+      });
+
+      subnetCatalogBackfillButton?.addEventListener('click', () => {
+        void runSubnetCatalogBackfill();
       });
 
       chainBuysBackfillButton?.addEventListener('click', () => {
@@ -11552,6 +11627,29 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           netuid,
           chainBuysBackfill,
           ...(chainBuysBackfill.error || chainBuysBackfill.reason ? { error: chainBuysBackfill.error || chainBuysBackfill.reason } : {}),
+        }, null, 2));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/api/subnets/catalog/backfill') {
+        const authError = requireAdminApiKey(req, config);
+        if (authError) {
+          res.writeHead(authError.status, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: authError.error }, null, 2));
+          return;
+        }
+        const payload = await readJsonBody(req);
+        const options = {
+          overwrite: typeof payload?.overwrite === 'boolean' ? payload.overwrite : false,
+        };
+        const subnetTableBackfill = await ingestService.backfillSubnetCatalogSnapshots(options);
+        const status = subnetTableBackfill.skipped && !subnetTableBackfill.ok
+          ? 409
+          : (subnetTableBackfill.ok ? 200 : 500);
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          subnetTableBackfill,
+          ...(subnetTableBackfill.error || subnetTableBackfill.reason ? { error: subnetTableBackfill.error || subnetTableBackfill.reason } : {}),
         }, null, 2));
         return;
       }

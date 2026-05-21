@@ -7,6 +7,9 @@ const {
   buildWalletTransactionTimelineFromRows,
 } = require('./wallet-activity');
 const {
+  normalizeSnapshot,
+} = require('./taostats');
+const {
   insertSnapshot,
   insertTaoPriceSnapshot,
   insertTaoFlowSnapshot,
@@ -621,6 +624,129 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     }
 
     return [...netuids].sort((a, b) => a - b);
+  }
+
+  async function backfillSubnetCatalogSnapshots({
+    overwrite = false,
+    limit = 1024,
+  } = {}) {
+    if (active) {
+      return activeSkipResult();
+    }
+    if (isAlphaHolderBackfillActive()) {
+      return { skipped: true, reason: 'alpha-holder backfill is running' };
+    }
+
+    const startedAt = beginActiveJob('subnet-table-snapshot-backfill', {
+      label: 'Subnet table snapshot backfill',
+      netuid: config.netuid,
+      overwrite: Boolean(overwrite),
+      limit,
+    });
+    const startedIso = startedAt.toISOString();
+    let ok = false;
+    let source = 'subnet-catalog-snapshot';
+    let errorMessage = null;
+    let message = 'Subnet table snapshot backfill failed';
+    let snapshotId = null;
+    const detail = { overwrite: Boolean(overwrite), limit };
+    let fetched = 0;
+    let inserted = 0;
+    let skipped = 0;
+    let deleted = 0;
+
+    try {
+      if (!config.taostatsAuthHeader) {
+        throw new Error('Taostats API auth header is required for subnet table snapshots');
+      }
+
+      const { rows: catalog } = await syncSubnetMetadataCatalog({ limit, concurrency: 1 });
+      const capturedAt = new Date().toISOString();
+      const sourceUrl = `${config.taostatsBaseUrl.replace(/\/$/, '')}/api/subnet/latest/v1`;
+
+      fetched = Array.isArray(catalog) ? catalog.length : 0;
+      detail.fetched = fetched;
+      detail.capturedAt = capturedAt;
+
+      for (const row of Array.isArray(catalog) ? catalog : []) {
+        const subnetNetuid = Number.parseInt(String(row?.netuid), 10);
+        if (!Number.isFinite(subnetNetuid) || subnetNetuid <= 0) {
+          skipped += 1;
+          continue;
+        }
+
+        const snapshot = normalizeSnapshot(row, {
+          source,
+          sourceUrl,
+          netuid: subnetNetuid,
+          capturedAt,
+        });
+
+        if (!overwrite && snapshot.block_number !== null && snapshot.block_number !== undefined && snapshotExists(db, subnetNetuid, snapshot.block_number)) {
+          skipped += 1;
+          continue;
+        }
+
+        if (overwrite && snapshot.block_number !== null && snapshot.block_number !== undefined) {
+          const deleteResult = db.prepare(`
+            DELETE FROM snapshots
+            WHERE netuid = ? AND block_number = ?
+          `).run(subnetNetuid, snapshot.block_number);
+          deleted += Number(deleteResult?.changes || 0);
+        }
+
+        snapshotId = insertSnapshot(db, snapshot);
+        inserted += 1;
+      }
+
+      ok = true;
+      message = `Backfilled ${inserted} subnet table snapshots`;
+      detail.inserted = inserted;
+      detail.skipped = skipped;
+      detail.deleted = deleted;
+      return {
+        ok,
+        source,
+        fetched,
+        inserted,
+        skipped,
+        deleted,
+        snapshotId,
+        detail,
+        message,
+      };
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+      detail.error = errorMessage;
+      return {
+        ok: false,
+        source,
+        fetched,
+        inserted,
+        skipped,
+        deleted,
+        snapshotId: null,
+        detail,
+        error: errorMessage,
+        message,
+      };
+    } finally {
+      const finishedAt = new Date();
+      insertIngestRun(db, {
+        netuid: config.netuid,
+        started_at: startedIso,
+        finished_at: finishedAt.toISOString(),
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+        source,
+        fallback_used: false,
+        ok,
+        snapshot_id: snapshotId,
+        message,
+        error: errorMessage,
+        detail_json: detail ? JSON.stringify(detail) : null,
+      });
+      finishActiveJob();
+    }
   }
 
   async function syncAllAlphaHolderSnapshots({
@@ -2479,6 +2605,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     ingestOnce,
     backfillHistoricalSnapshots,
     backfillChainBuysHistory,
+    backfillSubnetCatalogSnapshots,
     syncAlphaHolderSnapshot,
     syncAllAlphaHolderSnapshots,
     backfillAlphaHolderSnapshots,
