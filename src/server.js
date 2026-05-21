@@ -3073,15 +3073,14 @@ function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = 
       ${description ? `<span class="card-info-badge" title="${escapeHtml(description)}" aria-label="${escapeHtml(description)}" aria-hidden="true">i</span>` : ''}
       <div class="card-label">${escapeHtml(label)}</div>
       ${badgeText ? `<div class="card-badge">${escapeHtml(badgeText)}</div>` : ''}
-      <div class="card-value">${escapeHtml(value)}</div>
-      ${trend ? `
-      <div class="card-status">
-        <span class="card-status-pill ${escapeHtml(trend.tone || 'neutral')}">
-          <span class="card-status-label">${escapeHtml(trend.label || '24h')}</span>
+      <div class="card-main-row">
+        <div class="card-value">${escapeHtml(value)}</div>
+        ${trend ? `
+        <span class="card-status-pill ${escapeHtml(trend.tone || 'neutral')}" title="${escapeHtml(trend.label || '24h change')}">
           <span class="card-status-value">${escapeHtml(trend.value || '—')}</span>
         </span>
+        ` : ''}
       </div>
-      ` : ''}
       ${subtext ? `<div class="card-subtext">${escapeHtml(subtext)}</div>` : ''}
     </${tag}>
   `;
@@ -8010,23 +8009,24 @@ function renderPage(model, { experimental = false } = {}) {
         margin: 0 !important;
         max-width: calc(100% - 20px);
       }
+      .experimental-page .card--deep .card-main-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        margin-top: 8px;
+        width: 100%;
+      }
       .experimental-page .card--deep .card-value {
-        margin-top: auto !important;
         font-size: 20px !important;
         font-weight: 800 !important;
         letter-spacing: -0.02em !important;
         color: #ffffff !important;
-      }
-      .experimental-page .card--deep .card-status {
-        display: flex;
-        justify-content: flex-start;
-        align-items: center;
-        margin-top: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
       }
       .experimental-page .card--deep .card-status-pill {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
         max-width: 100%;
         padding: 4px 8px;
         border-radius: 999px;
@@ -8036,13 +8036,7 @@ function renderPage(model, { experimental = false } = {}) {
         font-weight: 700;
         line-height: 1.1;
         white-space: nowrap;
-      }
-      .experimental-page .card--deep .card-status-label {
-        color: var(--muted);
-        font-size: 9px;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+        margin-left: auto;
       }
       .experimental-page .card--deep .card-status-value {
         color: #ffffff;

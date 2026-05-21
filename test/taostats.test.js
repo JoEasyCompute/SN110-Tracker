@@ -3361,7 +3361,7 @@ test('experimental render uses an overview-first layout with collapsed details',
   assert.equal(html.includes('experimental-details-panel'), true);
   assert.equal(html.includes('pool-growth-entity-card'), true);
   assert.equal(html.includes('card-status-pill'), true);
-  assert.equal(html.includes('card-status-label'), true);
+  assert.equal(html.includes('card-status-label'), false);
   assert.equal(html.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(html.includes('Latest snapshot captured'), false);
   assert.equal(html.includes('Open stable dashboard'), true);
