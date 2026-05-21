@@ -3041,7 +3041,7 @@ function buildMetricTrend(latest, def, history = []) {
     ? (delta < 0 ? 'positive' : delta > 0 ? 'negative' : 'neutral')
     : (delta > 0 ? 'positive' : delta < 0 ? 'negative' : 'neutral');
   return {
-    label: '24h change',
+    label: '24h',
     value: formatMetricTrendDelta(delta, def.valueFormat),
     pct: pct === null || !Number.isFinite(pct) ? null : signedPercent(pct, 2),
     tone,
@@ -3075,10 +3075,11 @@ function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = 
       ${badgeText ? `<div class="card-badge">${escapeHtml(badgeText)}</div>` : ''}
       <div class="card-value">${escapeHtml(value)}</div>
       ${trend ? `
-      <div class="card-trend ${escapeHtml(trend.tone || 'neutral')}">
-        <span class="card-trend-label">${escapeHtml(trend.label || '24h change')}</span>
-        <span class="card-trend-value">${escapeHtml(trend.value || '—')}</span>
-        ${trend.pct ? `<span class="card-trend-pct">${escapeHtml(trend.pct)}</span>` : ''}
+      <div class="card-status">
+        <span class="card-status-pill ${escapeHtml(trend.tone || 'neutral')}">
+          <span class="card-status-label">${escapeHtml(trend.label || '24h')}</span>
+          <span class="card-status-value">${escapeHtml(trend.value || '—')}</span>
+        </span>
       </div>
       ` : ''}
       ${subtext ? `<div class="card-subtext">${escapeHtml(subtext)}</div>` : ''}
@@ -8016,47 +8017,61 @@ function renderPage(model, { experimental = false } = {}) {
         letter-spacing: -0.02em !important;
         color: #ffffff !important;
       }
-      .experimental-page .card--deep .card-trend {
-        display: grid;
-        grid-template-columns: auto 1fr auto;
-        gap: 8px;
-        align-items: baseline;
+      .experimental-page .card--deep .card-status {
+        display: flex;
+        justify-content: flex-start;
+        align-items: center;
         margin-top: 8px;
-        padding: 8px 10px;
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.06);
       }
-      .experimental-page .card--deep .card-trend-label {
-        color: var(--muted);
-        font-size: 10px;
+      .experimental-page .card--deep .card-status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 100%;
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.045);
+        font-size: 11px;
         font-weight: 700;
+        line-height: 1.1;
+        white-space: nowrap;
+      }
+      .experimental-page .card--deep .card-status-label {
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 800;
         letter-spacing: 0.08em;
         text-transform: uppercase;
       }
-      .experimental-page .card--deep .card-trend-value {
-        justify-self: start;
+      .experimental-page .card--deep .card-status-value {
+        color: #ffffff;
         font-size: 12px;
         font-weight: 800;
-        color: #ffffff;
       }
-      .experimental-page .card--deep .card-trend-pct {
-        justify-self: end;
-        font-size: 10px;
-        font-weight: 700;
+      .experimental-page .card--deep .card-status-pill.positive {
+        color: var(--positive-color);
+        background: rgba(29, 185, 84, 0.1);
+        border-color: rgba(29, 185, 84, 0.18);
+      }
+      .experimental-page .card--deep .card-status-pill.negative {
+        color: var(--negative-color);
+        background: rgba(255, 107, 107, 0.1);
+        border-color: rgba(255, 107, 107, 0.18);
+      }
+      .experimental-page .card--deep .card-status-pill.neutral {
         color: var(--muted);
+        background: rgba(255, 255, 255, 0.05);
+        border-color: rgba(255, 255, 255, 0.08);
       }
-      .experimental-page .card--deep.positive .card-trend-value,
-      .experimental-page .card--deep.positive .card-trend-pct {
-        color: var(--positive-color) !important;
+      .experimental-page .card--deep .card-status-pill.positive .card-status-value {
+        color: var(--positive-color);
       }
-      .experimental-page .card--deep.negative .card-trend-value,
-      .experimental-page .card--deep.negative .card-trend-pct {
-        color: var(--negative-color) !important;
+      .experimental-page .card--deep .card-status-pill.negative .card-status-value {
+        color: var(--negative-color);
       }
-      .experimental-page .card--deep.accent .card-trend-value,
-      .experimental-page .card--deep.accent .card-trend-pct {
-        color: var(--accent-color) !important;
+      .experimental-page .card--deep .card-status-pill.neutral .card-status-value {
+        color: var(--muted);
       }
       .experimental-page .card--deep.positive .card-value {
         color: var(--positive-color) !important;
