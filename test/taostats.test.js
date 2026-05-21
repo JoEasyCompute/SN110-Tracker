@@ -3364,6 +3364,7 @@ test('experimental render uses an overview-first layout with collapsed details',
   assert.equal(html.includes('card-status-label'), false);
   assert.equal(html.includes('+τ 0.0004'), true);
   assert.equal(html.includes('+4.26%'), true);
+  assert.ok(html.indexOf('data-layout-section="wallets"') < html.indexOf('data-layout-section="key-metrics"'));
   assert.equal(html.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(html.includes('Latest snapshot captured'), false);
   assert.equal(html.includes('Open stable dashboard'), true);

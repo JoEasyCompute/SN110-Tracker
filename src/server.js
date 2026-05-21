@@ -7656,7 +7656,6 @@ function renderPage(model, { experimental = false } = {}) {
       <details class="experimental-details-panel">
         <summary>Explore more</summary>
         <div class="experimental-details-body">
-          ${walletSectionHtml}
           ${poolGrowthSectionHtml}
           ${financialPerspectiveSectionHtml}
           ${alphaHolderSectionHtml}
@@ -7676,6 +7675,7 @@ function renderPage(model, { experimental = false } = {}) {
   ].join('');
   const experimentalSectionsHtml = [
     experimentalOverviewSection,
+    walletSectionHtml,
     keyMetricsSectionHtml,
     subnetStatsSectionHtml,
     comparisonsSectionHtml,
