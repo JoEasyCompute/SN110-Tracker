@@ -2112,7 +2112,7 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
     const free = latest ? numericMetricValue(latest.balance_free_num) : null;
     const staked = latest ? numericMetricValue(latest.balance_staked_num) : null;
     const root = latest ? numericMetricValue(latest.balance_staked_root_num) : null;
-    const alpha = latest ? numericMetricValue(latest.balance_staked_alpha_as_tao_num) : null;
+    const alphaTao = latest ? numericMetricValue(latest.balance_staked_alpha_as_tao_num) : null;
     const change24h = latest ? numericMetricValue(latest.balance_total_change_24hr_num) : null;
     const positions = Array.isArray(stakePositions) ? stakePositions : [];
     const configuredHotkeys = Array.isArray(hotkeys) ? hotkeys : [];
@@ -2176,15 +2176,19 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
       const walletColor = wallet.color || '#00dbbc';
       const freePct = total && total > 0 && free !== null ? Math.max(0, Math.min(100, Math.round((free / total) * 100))) : 0;
       const stakedPct = total && total > 0 && staked !== null ? Math.max(0, Math.min(100, Math.round((staked / total) * 100))) : (total ? 100 - freePct : 0);
-      const tone = change24h === null ? 'neutral' : (change24h >= 0 ? 'positive' : 'negative');
-      const changeText = change24h === null ? '—' : signedTao(change24h, 2);
+      const tone = change24h === null ? 'neutral' : (change24h > 0 ? 'positive' : change24h < 0 ? 'negative' : 'neutral');
+      const changeText = change24h === null ? '—' : signedTao(Math.abs(change24h), 2);
+      const priorTotal = total !== null && change24h !== null ? (total - change24h) : null;
+      const changePct = priorTotal && priorTotal !== 0 ? (change24h / priorTotal) * 100 : null;
+      const changePctText = changePct === null || !Number.isFinite(changePct) ? null : signedPercent(changePct, 2);
       const metricAttr = metricData ? ` data-metric="${escapeHtml(JSON.stringify(metricData || {}))}"` : '';
 
       const tokenPrice = latestSubnet ? numericMetricValue(latestSubnet.price_num) : null;
-      const actualAlpha = (tokenPrice && tokenPrice > 0 && latest && latest.balance_staked_alpha_as_tao_num !== null)
-        ? (latest.balance_staked_alpha_as_tao_num / tokenPrice)
+      const actualAlpha = (tokenPrice && tokenPrice > 0 && alphaTao !== null)
+        ? (alphaTao / tokenPrice)
         : null;
       const actualAlphaText = actualAlpha !== null ? formatAlpha(actualAlpha, 1) : '—';
+      const alphaTaoText = alphaTao === null ? '—' : tao(alphaTao, 1);
 
       return `
         <button type="button" class="card card-button card--entity wallet-hologram-card layout-card ${tone}" ${metricAttr} data-layout-card-id="wallet-${escapeHtml(wallet.ss58)}" data-layout-section-id="wallets" style="--wallet-theme-color: ${walletColor};">
@@ -2206,8 +2210,9 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
           <div class="wallet-balance-row">
             <div class="wallet-balance-main">
               <div class="card-value">${escapeHtml(value)}</div>
-              <div class="wallet-24h-change ${change24h >= 0 ? 'positive' : 'negative'}">
-                ${change24h >= 0 ? '▲' : '▼'} ${escapeHtml(changeText.replace('+', '').replace('-', ''))}
+              <div class="wallet-24h-change ${tone}">
+                <span class="wallet-24h-change-value">${change24h > 0 ? '▲' : change24h < 0 ? '▼' : '•'} ${escapeHtml(changeText.replace('+', '').replace('-', ''))}</span>
+                ${changePctText ? `<span class="wallet-24h-change-pct">${escapeHtml(changePctText)}</span>` : ''}
               </div>
             </div>
           </div>
@@ -2238,10 +2243,8 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
             </div>
             <div class="position-item">
               <span class="pos-label">Alpha</span>
-              <span class="pos-val">
-                ${alpha === null ? '—' : tao(alpha, 1)}
-                ${actualAlpha !== null ? `<span style="font-size: 9px; font-weight: 500; opacity: 0.7; display: block; margin-top: 1px;">${actualAlphaText}</span>` : ''}
-              </span>
+              <span class="pos-val wallet-alpha-main">${actualAlphaText}</span>
+              <span class="wallet-alpha-sub">${alphaTaoText}</span>
             </div>
           </div>
 
@@ -8290,6 +8293,7 @@ function renderPage(model, { experimental = false } = {}) {
         align-items: baseline;
         justify-content: space-between;
         gap: 8px;
+        flex-wrap: wrap;
       }
       .experimental-page .wallet-hologram-card .card-value {
         font-size: 26px !important;
@@ -8299,10 +8303,23 @@ function renderPage(model, { experimental = false } = {}) {
         margin: 0 !important;
       }
       .experimental-page .wallet-hologram-card .wallet-24h-change {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
         font-size: 12px;
         font-weight: 700;
         padding: 3px 8px;
         border-radius: 6px;
+        white-space: nowrap;
+      }
+      .experimental-page .wallet-hologram-card .wallet-24h-change-value {
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .experimental-page .wallet-hologram-card .wallet-24h-change-pct {
+        font-size: 10px;
+        font-weight: 700;
+        opacity: 0.85;
       }
       .experimental-page .wallet-hologram-card .wallet-24h-change.positive {
         color: var(--positive-color);
@@ -8315,6 +8332,16 @@ function renderPage(model, { experimental = false } = {}) {
       .experimental-page .wallet-hologram-card .wallet-24h-change.neutral {
         color: var(--muted);
         background: rgba(255, 255, 255, 0.05);
+      }
+      .experimental-page .wallet-hologram-card .wallet-alpha-main {
+        display: block;
+      }
+      .experimental-page .wallet-hologram-card .wallet-alpha-sub {
+        display: block;
+        margin-top: 1px;
+        font-size: 10px;
+        line-height: 1.2;
+        color: var(--muted);
       }
 
       /* Ratio Segment Bar */
@@ -8383,8 +8410,9 @@ function renderPage(model, { experimental = false } = {}) {
 
       /* Custom Responsive Width for Wallet Grid in Experimental mode */
       .experimental-page .wallet-section .grid.compact {
-        grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)) !important;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 420px)) !important;
         gap: 16px !important;
+        justify-content: center;
       }
 
       /* Card Footer */

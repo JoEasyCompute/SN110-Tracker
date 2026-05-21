@@ -3294,6 +3294,29 @@ test('experimental render uses an overview-first layout with collapsed details',
       sentiment_index_num: 62,
       tao_price_usd: 100,
     },
+    walletEntries: [
+      {
+        wallet: { ss58: '5WalletSample111111111111111111111111111111111111111', name: 'Miner', network: 'finney', color: '#00dbbc' },
+        latest: {
+          balance_total_num: 200,
+          balance_free_num: 20,
+          balance_staked_num: 180,
+          balance_staked_root_num: 0,
+          balance_staked_alpha_as_tao_num: 100,
+          balance_total_change_24hr_num: 20,
+          balance_free_change_24hr_num: 0,
+          balance_staked_change_24hr_num: 20,
+          balance_staked_root_change_24hr_num: 0,
+          balance_staked_alpha_as_tao_change_24hr_num: 20,
+          tao_price_usd: 100,
+          rank: 7,
+          created_on_date: '2026-04-24',
+          created_on_network: 'finney',
+        },
+        stakePositions: [],
+        hotkeys: [],
+      },
+    ],
     history: [
       {
         captured_at: '2026-04-29T00:00:00Z',
@@ -3364,6 +3387,9 @@ test('experimental render uses an overview-first layout with collapsed details',
   assert.equal(html.includes('card-status-label'), false);
   assert.equal(html.includes('+τ 0.0004'), true);
   assert.equal(html.includes('+4.26%'), true);
+  assert.equal(html.includes('wallet-24h-change-pct'), true);
+  assert.equal(html.includes('wallet-alpha-main'), true);
+  assert.equal(html.includes('wallet-alpha-sub'), true);
   assert.ok(html.indexOf('data-layout-section="wallets"') < html.indexOf('data-layout-section="key-metrics"'));
   assert.equal(html.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(html.includes('Latest snapshot captured'), false);
