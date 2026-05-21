@@ -15,6 +15,7 @@ const {
   insertAlphaHolderSnapshot,
   insertWalletTransaction,
   insertIngestRun,
+  backfillChainBuysInRange,
   upsertSubnetMetadata,
   getSubnetMetadataMap,
   snapshotExists,
@@ -2379,9 +2380,105 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     }
   }
 
+  async function backfillChainBuysHistory({
+    netuid = config.netuid,
+    startIso = null,
+    endIso = null,
+    overwrite = false,
+  } = {}) {
+    if (active) {
+      return activeSkipResult();
+    }
+    if (isAlphaHolderBackfillActive()) {
+      return { skipped: true, reason: 'alpha-holder backfill is running' };
+    }
+    if (!startIso || !endIso) {
+      return {
+        ok: false,
+        skipped: true,
+        source: 'chain-buys-backfill',
+        startIso: startIso || null,
+        endIso: endIso || null,
+        overwrite: Boolean(overwrite),
+        scanned: 0,
+        updated: 0,
+        skipped: 0,
+        reason: 'A start and end date are required to backfill chain buys history.',
+      };
+    }
+
+    const startedAt = beginActiveJob('chain-buys-backfill', {
+      label: `Subnet ${netuid} chain buys backfill`,
+      netuid,
+      startIso,
+      endIso,
+      overwrite: Boolean(overwrite),
+    });
+    const startedIso = startedAt.toISOString();
+    let ok = false;
+    let source = 'chain-buys-backfill';
+    let errorMessage = null;
+    let message = 'Chain buys backfill failed';
+    const detail = { startIso, endIso, overwrite: Boolean(overwrite) };
+
+    try {
+      const result = backfillChainBuysInRange(db, netuid, startIso, endIso, { overwrite: Boolean(overwrite) });
+      ok = true;
+      message = `Backfilled ${result.updated} chain buys rows`;
+      detail.scanned = result.scanned;
+      detail.updated = result.updated;
+      detail.skipped = result.skipped;
+      return {
+        ok,
+        source,
+        startIso,
+        endIso,
+        overwrite: Boolean(overwrite),
+        scanned: result.scanned,
+        updated: result.updated,
+        skipped: result.skipped,
+        detail,
+        message,
+      };
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+      detail.error = errorMessage;
+      return {
+        ok: false,
+        source,
+        startIso,
+        endIso,
+        overwrite: Boolean(overwrite),
+        scanned: 0,
+        updated: 0,
+        skipped: 0,
+        detail,
+        error: errorMessage,
+        message,
+      };
+    } finally {
+      const finishedAt = new Date();
+      insertIngestRun(db, {
+        netuid,
+        started_at: startedIso,
+        finished_at: finishedAt.toISOString(),
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+        source,
+        fallback_used: false,
+        ok,
+        snapshot_id: null,
+        message,
+        error: errorMessage,
+        detail_json: detail ? JSON.stringify(detail) : null,
+      });
+      finishActiveJob();
+    }
+  }
+
   return {
     ingestOnce,
     backfillHistoricalSnapshots,
+    backfillChainBuysHistory,
     syncAlphaHolderSnapshot,
     syncAllAlphaHolderSnapshots,
     backfillAlphaHolderSnapshots,

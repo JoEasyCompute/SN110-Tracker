@@ -1921,6 +1921,66 @@ function deleteSnapshotsInRange(db, netuid, startIso, endIso) {
   }
 }
 
+function backfillChainBuysInRange(db, netuid, startIso, endIso, { overwrite = false } = {}) {
+  const rows = db.prepare(`
+    SELECT id, chain_buys_1_day_text, chain_buys_1_day_num, raw_json
+    FROM snapshots
+    WHERE netuid = ?
+      AND captured_at >= ?
+      AND captured_at <= ?
+    ORDER BY captured_at ASC, id ASC
+  `).all(netuid, startIso, endIso);
+
+  if (!rows.length) {
+    return { scanned: 0, updated: 0, skipped: 0 };
+  }
+
+  const updateStmt = db.prepare(`
+    UPDATE snapshots
+    SET chain_buys_1_day_text = ?, chain_buys_1_day_num = ?
+    WHERE id = ?
+  `);
+
+  let updated = 0;
+  let skipped = 0;
+
+  db.exec('BEGIN');
+  try {
+    for (const row of rows) {
+      const hasText = row.chain_buys_1_day_text !== null && row.chain_buys_1_day_text !== undefined;
+      const hasNum = row.chain_buys_1_day_num !== null && row.chain_buys_1_day_num !== undefined;
+      if (!overwrite && hasText && hasNum) {
+        skipped += 1;
+        continue;
+      }
+      if (!row.raw_json) {
+        skipped += 1;
+        continue;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(row.raw_json);
+      } catch {
+        skipped += 1;
+        continue;
+      }
+      const excessTao = Number(payload?.excess_tao);
+      if (!Number.isFinite(excessTao)) {
+        skipped += 1;
+        continue;
+      }
+      updateStmt.run(String(payload.excess_tao), excessTao / 1_000_000_000, row.id);
+      updated += 1;
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+
+  return { scanned: rows.length, updated, skipped };
+}
+
 function deleteTaoPriceHistoryInRange(db, startIso, endIso) {
   const rows = db.prepare(`
     SELECT id
@@ -2075,6 +2135,7 @@ module.exports = {
   deleteWalletStakePositionsInRange,
   deleteAlphaHolderSnapshotsInRange,
   deleteSnapshotsInRange,
+  backfillChainBuysInRange,
   deleteTaoPriceHistoryInRange,
   deleteTaoFlowHistoryInRange,
   deleteWalletSnapshotsInRange,

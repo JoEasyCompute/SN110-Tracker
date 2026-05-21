@@ -3283,12 +3283,15 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
   const adminControlsClass = experimental ? 'panel admin-controls admin-controls-secondary' : 'panel admin-controls';
   const adminQueueClass = experimental ? 'panel admin-queue admin-queue-secondary' : 'panel';
   const adminBackfillClass = experimental ? 'panel admin-backfill admin-backfill-secondary' : 'panel';
+  const adminChainBuysClass = experimental ? 'panel admin-chain-buys admin-chain-buys-secondary' : 'panel';
   const adminWalletClass = experimental ? 'panel admin-wallet admin-wallet-secondary' : 'panel';
   const adminWalletExportClass = experimental ? 'panel admin-wallet-export admin-wallet-export-secondary' : 'panel admin-wallet-export';
   const adminRunsClass = experimental ? 'panel admin-runs admin-runs-secondary' : 'panel';
   const today = new Date();
   const defaultExportEnd = formatDateInputValue(today);
   const defaultExportStart = formatDateInputValue(new Date(today.getTime() - (29 * 24 * 60 * 60 * 1000)));
+  const defaultBackfillEnd = defaultExportEnd;
+  const defaultBackfillStart = defaultExportStart;
   return `
       <details class="${adminPanelClass}">
         <summary>Admin panel</summary>
@@ -3342,6 +3345,27 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               </div>
               <progress class="admin-progress" id="backfill-progress" hidden></progress>
               <p class="empty" id="backfill-status" hidden></p>
+            </div>
+          </div>
+          <div class="${adminChainBuysClass}">
+            <h3>Chain Buys 1D backfill</h3>
+            <div class="admin-form">
+              <div class="admin-form-row">
+                <label>
+                  Start date
+                  <input type="date" id="chain-buys-backfill-start" value="${escapeHtml(defaultBackfillStart)}">
+                </label>
+                <label>
+                  End date
+                  <input type="date" id="chain-buys-backfill-end" value="${escapeHtml(defaultBackfillEnd)}">
+                </label>
+              </div>
+              <p class="admin-helper">Backfills Chain Buys 1D from the stored raw JSON payloads for snapshots in the selected date range. Existing values are preserved unless the row is missing the field.</p>
+              <div class="admin-actions">
+                <button class="button primary" type="button" id="chain-buys-backfill-btn">Backfill Chain Buys</button>
+              </div>
+              <progress class="admin-progress" id="chain-buys-backfill-progress" hidden></progress>
+              <p class="empty" id="chain-buys-backfill-status" hidden></p>
             </div>
           </div>
           <div class="${adminWalletClass}">
@@ -3802,6 +3826,11 @@ function renderDashboardClientScript({ netuid, config }) {
       const backfillButton = document.getElementById('backfill-btn');
       const backfillStatus = document.getElementById('backfill-status');
       const backfillProgress = document.getElementById('backfill-progress');
+      const chainBuysBackfillStartInput = document.getElementById('chain-buys-backfill-start');
+      const chainBuysBackfillEndInput = document.getElementById('chain-buys-backfill-end');
+      const chainBuysBackfillButton = document.getElementById('chain-buys-backfill-btn');
+      const chainBuysBackfillStatus = document.getElementById('chain-buys-backfill-status');
+      const chainBuysBackfillProgress = document.getElementById('chain-buys-backfill-progress');
       const walletBackfillDaysInput = document.getElementById('wallet-backfill-days');
       const walletBackfillButton = document.getElementById('wallet-backfill-btn');
       const walletBackfillStatus = document.getElementById('wallet-backfill-status');
@@ -5486,6 +5515,19 @@ function renderDashboardClientScript({ netuid, config }) {
         backfillStatus.dataset.status = kind;
       }
 
+      function updateChainBuysBackfillStatus(message, kind = 'info') {
+        if (!chainBuysBackfillStatus) return;
+        if (!message) {
+          chainBuysBackfillStatus.hidden = true;
+          chainBuysBackfillStatus.textContent = '';
+          chainBuysBackfillStatus.dataset.status = '';
+          return;
+        }
+        chainBuysBackfillStatus.hidden = false;
+        chainBuysBackfillStatus.textContent = message;
+        chainBuysBackfillStatus.dataset.status = kind;
+      }
+
       function setProgressVisible(progressElement, visible) {
         if (!progressElement) return;
         progressElement.hidden = !visible;
@@ -5545,6 +5587,13 @@ function renderDashboardClientScript({ netuid, config }) {
           days: Number.parseInt(String(backfillDaysInput?.value || ''), 10),
           frequency: String(backfillFrequencySelect?.value || 'by_hour'),
           overwrite: Boolean(backfillOverwriteInput?.checked),
+        };
+      }
+
+      function readChainBuysBackfillOptions() {
+        return {
+          start: String(chainBuysBackfillStartInput?.value || '').trim(),
+          end: String(chainBuysBackfillEndInput?.value || '').trim(),
         };
       }
 
@@ -5609,6 +5658,49 @@ function renderDashboardClientScript({ netuid, config }) {
         } finally {
           setProgressVisible(backfillProgress, false);
           backfillButton.disabled = false;
+        }
+      }
+
+      async function runChainBuysBackfill() {
+        if (!chainBuysBackfillButton) return;
+        const options = readChainBuysBackfillOptions();
+        if (!options.start || !options.end) {
+          updateChainBuysBackfillStatus('Start and end dates are required.', 'error');
+          return;
+        }
+        const startDate = new Date(options.start + 'T00:00:00.000Z');
+        const endDate = new Date(options.end + 'T23:59:59.999Z');
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+          updateChainBuysBackfillStatus('Start and end dates must be valid dates.', 'error');
+          return;
+        }
+        if (startDate.getTime() > endDate.getTime()) {
+          updateChainBuysBackfillStatus('Start date must be on or before end date.', 'error');
+          return;
+        }
+        chainBuysBackfillButton.disabled = true;
+        setProgressVisible(chainBuysBackfillProgress, true);
+        updateChainBuysBackfillStatus('Backfilling Chain Buys 1D from stored raw JSON…', 'info');
+        try {
+          const response = await fetch('/api/subnets/' + netuid + '/chain-buys-backfill', {
+            method: 'POST',
+            headers: adminFetchHeaders(),
+            body: JSON.stringify(options),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(adminPayloadErrorMessage(payload, 'Chain buys backfill failed'));
+          }
+          const updated = Number(payload.chainBuysBackfill?.updated ?? 0);
+          const skipped = Number(payload.chainBuysBackfill?.skipped ?? 0);
+          updateChainBuysBackfillStatus('Chain buys backfill complete: ' + updated + ' rows updated' + (skipped ? ', ' + skipped + ' skipped' : '') + '.', 'success');
+          window.setTimeout(() => window.location.reload(), 1200);
+        } catch (error) {
+          updateChainBuysBackfillStatus(error?.message || 'Chain buys backfill failed', 'error');
+          console.error(error);
+        } finally {
+          setProgressVisible(chainBuysBackfillProgress, false);
+          chainBuysBackfillButton.disabled = false;
         }
       }
 
@@ -7343,6 +7435,10 @@ function renderDashboardClientScript({ netuid, config }) {
 
       backfillButton?.addEventListener('click', () => {
         void runAdminBackfill();
+      });
+
+      chainBuysBackfillButton?.addEventListener('click', () => {
+        void runChainBuysBackfill();
       });
 
       walletBackfillButton?.addEventListener('click', () => {
@@ -11039,6 +11135,28 @@ function parseBackfillOptions(payload, config) {
   return { days, frequency, overwrite };
 }
 
+function parseChainBuysBackfillOptions(payload, config) {
+  let startIso = parseIsoDateQuery(payload?.start, 'start');
+  let endIso = parseIsoDateQuery(payload?.end, 'end');
+  const days = parseDays(new URLSearchParams([['days', String(payload?.days ?? config.taostatsBackfillDays ?? 30)]]));
+  if (!startIso || !endIso) {
+    const window = resolveHistoricalWindow({ days });
+    startIso = startIso || window.startIso;
+    endIso = endIso || window.endIso;
+  }
+  if (!startIso || !endIso) {
+    throw new Error('A valid start and end date are required.');
+  }
+  if (new Date(startIso).getTime() > new Date(endIso).getTime()) {
+    throw new Error('Start date must be on or before end date.');
+  }
+  return {
+    startIso,
+    endIso,
+    overwrite: typeof payload?.overwrite === 'boolean' ? payload.overwrite : false,
+  };
+}
+
 function parseWalletBackfillOptions(payload, config) {
   const rawDays = Number.parseInt(String(payload?.days ?? config.taostatsWalletActivityBackfillDays ?? 60), 10);
   const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(rawDays, 3650) : (config.taostatsWalletActivityBackfillDays ?? 60);
@@ -11053,7 +11171,7 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
       const url = new URL(req.url, 'http://localhost');
       const match = url.pathname.match(/^\/subnets\/(\d+)$/)
         || url.pathname.match(/^\/subnets\/(\d+)\/experimental$/)
-        || url.pathname.match(/^\/api\/subnets\/(\d+)\/(latest|history|ingest|backfill|wallet-backfill)$/);
+        || url.pathname.match(/^\/api\/subnets\/(\d+)\/(latest|history|ingest|backfill|chain-buys-backfill|wallet-backfill)$/);
       const netuid = match ? Number(match[1]) : config.netuid;
 
       if (req.method === 'GET' && url.pathname === '/') {
@@ -11388,7 +11506,9 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
         const live = backfill.skipped ? null : await ingestService.ingestOnce({ netuid });
         const error = summarizeBackfillOutcome(backfill, live);
         const warnings = summarizeBackfillWarnings(backfill, live);
-        const status = backfill.skipped || live?.skipped ? 409 : (backfill.ok && live?.ok ? 200 : 500);
+        const status = (backfill.skipped && !backfill.ok) || (live?.skipped && !live?.ok)
+          ? 409
+          : (backfill.ok && live?.ok ? 200 : 500);
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({
           netuid,
@@ -11396,6 +11516,35 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
           ...(live ? { live } : {}),
           ...(error ? { error } : {}),
           ...(warnings.length ? { warnings } : {}),
+        }, null, 2));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === `/api/subnets/${netuid}/chain-buys-backfill`) {
+        const authError = requireAdminApiKey(req, config);
+        if (authError) {
+          res.writeHead(authError.status, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: authError.error }, null, 2));
+          return;
+        }
+        const payload = await readJsonBody(req);
+        let options;
+        try {
+          options = parseChainBuysBackfillOptions(payload, config);
+        } catch (error) {
+          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }, null, 2));
+          return;
+        }
+        const chainBuysBackfill = await ingestService.backfillChainBuysHistory({ netuid, ...options });
+        const status = chainBuysBackfill.skipped && !chainBuysBackfill.ok
+          ? 409
+          : (chainBuysBackfill.ok ? 200 : 500);
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          netuid,
+          chainBuysBackfill,
+          ...(chainBuysBackfill.error ? { error: chainBuysBackfill.error } : {}),
         }, null, 2));
         return;
       }

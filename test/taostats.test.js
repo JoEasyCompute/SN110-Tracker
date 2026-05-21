@@ -167,7 +167,7 @@ test('sqlite persistence stores and retrieves snapshot history', () => {
     fear_and_greed_index: '46.2',
     fear_and_greed_sentiment: 'Neutral',
     root_sell: 'NO',
-  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110, capturedAt: '2026-05-01T00:00:00.000Z' });
   snapshot1.captured_at = '2026-04-29T00:00:00.000Z';
   insertSnapshot(db, snapshot1);
 
@@ -191,7 +191,7 @@ test('sqlite persistence stores and retrieves snapshot history', () => {
     net_flow_7_days: '31',
     net_flow_30_days: '41',
     root_sell: 'YES',
-  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110, capturedAt: '2026-05-01T00:00:00.000Z' });
   snapshot2.captured_at = '2026-04-30T00:00:00.000Z';
   insertSnapshot(db, snapshot2);
 
@@ -557,7 +557,7 @@ test('buildPageModel hydrates chain buys from raw subnet snapshot payloads', () 
     active_keys: 256,
     max_neurons: 256,
     root_sell: 'NO',
-  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110, capturedAt: '2026-05-01T00:00:00.000Z' });
   delete snapshot.chain_buys_1_day_text;
   delete snapshot.chain_buys_1_day_num;
   insertSnapshot(db, snapshot);
@@ -577,6 +577,65 @@ test('buildPageModel hydrates chain buys from raw subnet snapshot payloads', () 
   assert.equal(model.latest?.chain_buys_1_day_num, 7.5);
   assert.equal(model.history[0]?.chain_buys_1_day_num, 7.5);
   assert.equal(html.includes('Chain Buys 1D'), true);
+  db.close();
+});
+
+test('chain buys backfill fills missing columns from raw subnet snapshots without overwriting existing rows', async () => {
+  const db = openDatabase(':memory:');
+  const snapshot = normalizeSnapshot({
+    netuid: 110,
+    block_number: 9003,
+    timestamp: '2026-05-01T00:00:00Z',
+    price: '1.0',
+    market_cap: '100',
+    liquidity: '50',
+    total_tao: '1000',
+    alpha_in_pool: '100',
+    recycled_24_hours: '500000',
+    excess_tao: '7500000000',
+    neuron_registration_cost: '500000',
+    active_keys: 256,
+    max_neurons: 256,
+    root_sell: 'NO',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110, capturedAt: '2026-05-01T00:00:00.000Z' });
+  delete snapshot.chain_buys_1_day_text;
+  delete snapshot.chain_buys_1_day_num;
+  insertSnapshot(db, snapshot);
+
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsRateLimiter: null,
+      wallets: [],
+    },
+  });
+
+  const result = await service.backfillChainBuysHistory({
+    netuid: 110,
+    startIso: '2026-05-01T00:00:00.000Z',
+    endIso: '2026-05-01T23:59:59.999Z',
+    overwrite: false,
+  });
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [],
+    },
+    netuid: 110,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.updated, 1);
+  assert.equal(result.skipped, 0);
+  assert.equal(model.latest?.chain_buys_1_day_num, 7.5);
+  assert.equal(model.history[0]?.chain_buys_1_day_num, 7.5);
   db.close();
 });
 
@@ -2359,6 +2418,10 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="backfill-overwrite"'), true);
   assert.equal(html.includes('id="backfill-btn"'), true);
   assert.equal(html.includes('id="backfill-progress"'), true);
+  assert.equal(html.includes('id="chain-buys-backfill-start"'), true);
+  assert.equal(html.includes('id="chain-buys-backfill-end"'), true);
+  assert.equal(html.includes('id="chain-buys-backfill-btn"'), true);
+  assert.equal(html.includes('id="chain-buys-backfill-progress"'), true);
   assert.equal(html.includes('id="wallet-backfill-btn"'), true);
   assert.equal(html.includes('Refresh wallet activity'), true);
   assert.equal(html.includes('id="wallet-backfill-progress"'), true);
@@ -4311,6 +4374,49 @@ test('admin backfill endpoint runs backfill and live ingest', async () => {
   assert.deepEqual(liveArgs, { netuid: 110 });
   assert.equal(payload.backfill.ok, true);
   assert.equal(payload.live.ok, true);
+  await app.close();
+  db.close();
+});
+
+test('chain buys backfill endpoint runs the range update without requiring live ingest', async () => {
+  const db = openDatabase(':memory:');
+  let backfillArgs = null;
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      backfillHistoricalSnapshots: async () => ({ ok: true, inserted: 0, flowInserted: 0, priceInserted: 0 }),
+      backfillChainBuysHistory: async (args) => {
+        backfillArgs = args;
+        return { ok: true, source: 'chain-buys-backfill', scanned: 2, updated: 1, skipped: 1 };
+      },
+      ingestOnce: async () => ({ ok: true, source: 'api' }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+      taostatsBackfillDays: 30,
+    },
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/chain-buys-backfill`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
+    body: JSON.stringify({ start: '2026-05-01', end: '2026-05-02' }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(backfillArgs, {
+    netuid: 110,
+    startIso: '2026-05-01T00:00:00.000Z',
+    endIso: '2026-05-02T23:59:59.999Z',
+    overwrite: false,
+  });
+  assert.equal(payload.chainBuysBackfill.ok, true);
+  assert.equal(payload.chainBuysBackfill.updated, 1);
   await app.close();
   db.close();
 });
