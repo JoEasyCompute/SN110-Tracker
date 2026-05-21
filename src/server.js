@@ -3092,6 +3092,7 @@ function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = 
         ${trend ? `
         <span class="card-status-pill ${escapeHtml(trend.tone || 'neutral')}" title="${escapeHtml(trend.label || '24h change')}">
           <span class="card-status-value">${escapeHtml(trend.value || '—')}</span>
+          ${trend.pct ? `<span class="card-status-pct">${escapeHtml(trend.pct)}</span>` : ''}
         </span>
         ` : ''}
       </div>
@@ -8041,6 +8042,7 @@ function renderPage(model, { experimental = false } = {}) {
       .experimental-page .card--deep .card-status-pill {
         display: inline-flex;
         align-items: center;
+        gap: 6px;
         max-width: 100%;
         padding: 4px 8px;
         border-radius: 999px;
@@ -8056,6 +8058,12 @@ function renderPage(model, { experimental = false } = {}) {
         color: #ffffff;
         font-size: 12px;
         font-weight: 800;
+      }
+      .experimental-page .card--deep .card-status-pct {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
       }
       .experimental-page .card--deep .card-status-pill.positive {
         color: var(--positive-color);
@@ -8075,10 +8083,21 @@ function renderPage(model, { experimental = false } = {}) {
       .experimental-page .card--deep .card-status-pill.positive .card-status-value {
         color: var(--positive-color);
       }
+      .experimental-page .card--deep .card-status-pill.positive .card-status-pct {
+        color: var(--positive-color);
+        opacity: 0.85;
+      }
       .experimental-page .card--deep .card-status-pill.negative .card-status-value {
         color: var(--negative-color);
       }
+      .experimental-page .card--deep .card-status-pill.negative .card-status-pct {
+        color: var(--negative-color);
+        opacity: 0.85;
+      }
       .experimental-page .card--deep .card-status-pill.neutral .card-status-value {
+        color: var(--muted);
+      }
+      .experimental-page .card--deep .card-status-pill.neutral .card-status-pct {
         color: var(--muted);
       }
       .experimental-page .card--deep.positive .card-value {
