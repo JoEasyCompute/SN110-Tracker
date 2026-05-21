@@ -919,6 +919,65 @@ test('subnet table snapshot backfill stores the live catalog rows for every subn
   db.close();
 });
 
+test('historical per-subnet backfill stores the same historical window for every subnet in the live catalog', async () => {
+  const db = openDatabase(':memory:');
+  const makeSnapshot = (netuid, blockNumber, capturedAt, name) => normalizeSnapshot({
+    netuid,
+    block_number: blockNumber,
+    timestamp: capturedAt,
+    name,
+    symbol: name.slice(0, 3).toUpperCase(),
+    price: String(netuid / 1000),
+    market_cap: String(netuid * 100),
+    liquidity: String(netuid * 50),
+    total_tao: String(netuid * 1000),
+    total_alpha: String(netuid * 2000),
+    root_prop: '50',
+    emission: '10',
+    projected_emission: '11',
+    incentive_burn: '0.1',
+    recycled_24_hours: '1000',
+    excess_tao: '7500000',
+    neuron_registration_cost: '500000',
+    active_keys: 100,
+    max_neurons: 256,
+    net_flow_1_day: '20',
+    net_flow_7_days: '30',
+    net_flow_30_days: '40',
+    root_sell: 'NO',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid/api/subnet/history/v1', netuid, capturedAt });
+
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => ([
+      { netuid: 64, name: 'Chutes', symbol: 'CHU', timestamp: '2026-05-14T00:00:00Z' },
+      { netuid: 65, name: 'Mantis', symbol: 'MAN', timestamp: '2026-05-14T00:00:00Z' },
+    ]),
+    fetchHistoricalSnapshots: async ({ netuid }) => ([
+      makeSnapshot(netuid, 640000 + netuid, '2026-05-01T00:00:00Z', netuid === 64 ? 'Chutes' : 'Mantis'),
+      makeSnapshot(netuid, 650000 + netuid, '2026-05-02T00:00:00Z', netuid === 64 ? 'Chutes' : 'Mantis'),
+    ]),
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+    },
+    taostats,
+  });
+
+  const result = await service.backfillAllSubnetHistoricalSnapshots({ days: 7, frequency: 'by_day', overwrite: false });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.inserted, 4);
+  assert.equal(result.skipped, 0);
+  assert.equal(getRecentSnapshots(db, 64, 10).length, 2);
+  assert.equal(getRecentSnapshots(db, 65, 10).length, 2);
+  db.close();
+});
+
 test('wallet activity sync refreshes wallet snapshots and stake positions', async () => {
   const db = openDatabase(':memory:');
   const walletConfig = { name: 'Miner', ss58: '5WalletMiner123456789ABCDEFGH', network: 'finney', hotkeys: [] };
@@ -4575,6 +4634,46 @@ test('subnet table snapshot backfill endpoint captures the live catalog without 
   assert.deepEqual(backfillArgs, { overwrite: true });
   assert.equal(payload.subnetTableBackfill.ok, true);
   assert.equal(payload.subnetTableBackfill.inserted, 2);
+  await app.close();
+  db.close();
+});
+
+test('historical per-subnet backfill endpoint runs against the live catalog without requiring live ingest', async () => {
+  const db = openDatabase(':memory:');
+  let backfillArgs = null;
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      backfillHistoricalSnapshots: async () => ({ ok: true, inserted: 0, flowInserted: 0, priceInserted: 0 }),
+      backfillAllSubnetHistoricalSnapshots: async (args) => {
+        backfillArgs = args;
+        return { ok: true, source: 'all-subnet-historical-backfill', fetched: 4, inserted: 4, skipped: 0, deleted: 0, detail: { netuids: 2 } };
+      },
+      ingestOnce: async () => ({ ok: true, source: 'api' }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+      taostatsBackfillDays: 30,
+      taostatsBackfillFrequency: 'by_hour',
+      taostatsBackfillOverwrite: true,
+    },
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/catalog/history/backfill`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
+    body: JSON.stringify({ days: 14, frequency: 'by_day', overwrite: true }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(backfillArgs, { days: 14, frequency: 'by_day', overwrite: true });
+  assert.equal(payload.subnetHistoryBackfill.ok, true);
+  assert.equal(payload.subnetHistoryBackfill.detail.netuids, 2);
   await app.close();
   db.close();
 });

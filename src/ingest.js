@@ -749,6 +749,190 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     }
   }
 
+  async function backfillAllSubnetHistoricalSnapshots({
+    days = config.taostatsBackfillDays ?? 30,
+    frequency = config.taostatsBackfillFrequency ?? 'by_hour',
+    overwrite = config.taostatsBackfillOverwrite ?? true,
+    limit = 1024,
+  } = {}) {
+    if (active) {
+      return activeSkipResult();
+    }
+    if (isAlphaHolderBackfillActive()) {
+      return { skipped: true, reason: 'alpha-holder backfill is running' };
+    }
+
+    const startedAt = beginActiveJob('all-subnet-historical-backfill', {
+      label: 'All subnet historical backfill',
+      netuid: config.netuid,
+      days,
+      frequency,
+      overwrite: Boolean(overwrite),
+      limit,
+    });
+    const startedIso = startedAt.toISOString();
+    let ok = false;
+    let source = 'all-subnet-historical-backfill';
+    let errorMessage = null;
+    let message = 'Historical subnet backfill failed';
+    let snapshotId = null;
+    const detail = { days, frequency, overwrite: Boolean(overwrite), limit };
+    let fetched = 0;
+    let inserted = 0;
+    let skipped = 0;
+    let deleted = 0;
+    let retryAfterMs = null;
+    let deferred = false;
+    const results = [];
+
+    try {
+      if (!config.taostatsAuthHeader) {
+        throw new Error('Taostats API auth header is required for historical subnet snapshots');
+      }
+
+      const { rows: catalog } = await syncSubnetMetadataCatalog({ limit, concurrency: 1 });
+      const netuids = [...new Set((Array.isArray(catalog) ? catalog : [])
+        .map((row) => Number.parseInt(String(row?.netuid), 10))
+        .filter((value) => Number.isFinite(value) && value > 0))].sort((a, b) => a - b);
+
+      detail.netuids = netuids.length;
+
+      for (const subnetNetuid of netuids) {
+        const subnetResult = {
+          netuid: subnetNetuid,
+          fetched: 0,
+          inserted: 0,
+          skipped: 0,
+          deleted: 0,
+        };
+        try {
+          const snapshots = await fetchHistoricalSnapshots({
+            netuid: subnetNetuid,
+            taostatsBaseUrl: config.taostatsBaseUrl,
+            taostatsAuthHeader: config.taostatsAuthHeader,
+            rateLimiter: config.taostatsRateLimiter || null,
+            days,
+            frequency,
+          });
+
+          subnetResult.fetched = snapshots.length;
+          fetched += snapshots.length;
+
+          if (overwrite && snapshots.length > 0) {
+            const capturedAts = snapshots
+              .map((snapshot) => snapshot.captured_at)
+              .filter(Boolean)
+              .sort();
+            if (capturedAts.length > 0) {
+              const startIso = capturedAts[0];
+              const endIso = capturedAts[capturedAts.length - 1];
+              subnetResult.deleted = deleteSnapshotsInRange(db, subnetNetuid, startIso, endIso);
+              deleted += subnetResult.deleted;
+            }
+          }
+
+          for (const snapshot of snapshots) {
+            if (!overwrite && snapshot.block_number !== null && snapshot.block_number !== undefined && snapshotExists(db, subnetNetuid, snapshot.block_number)) {
+              subnetResult.skipped += 1;
+              skipped += 1;
+              continue;
+            }
+            snapshotId = insertSnapshot(db, snapshot);
+            subnetResult.inserted += 1;
+            inserted += 1;
+          }
+        } catch (error) {
+          const delayMs = retryDelayFromError(error);
+          if (delayMs !== null) {
+            retryAfterMs = Math.max(Number(retryAfterMs) || 0, delayMs);
+            deferred = true;
+          }
+          subnetResult.error = error instanceof Error ? error.message : String(error);
+          results.push(subnetResult);
+          if (delayMs !== null) {
+            break;
+          }
+          continue;
+        }
+        results.push(subnetResult);
+      }
+
+      detail.results = results;
+      detail.fetched = fetched;
+      detail.inserted = inserted;
+      detail.skipped = skipped;
+      detail.deleted = deleted;
+      if (retryAfterMs) {
+        detail.retryAfterMs = retryAfterMs;
+      }
+
+      if (retryAfterMs) {
+        ok = false;
+        message = 'Historical subnet backfill deferred';
+        return {
+          ok,
+          deferred: true,
+          retryAfterMs,
+          source,
+          fetched,
+          inserted,
+          skipped,
+          deleted,
+          snapshotId,
+          detail,
+          message,
+        };
+      }
+
+      ok = true;
+      message = `Backfilled ${inserted} historical subnet snapshots across ${netuids.length} subnets`;
+      return {
+        ok,
+        deferred: false,
+        retryAfterMs: null,
+        source,
+        fetched,
+        inserted,
+        skipped,
+        deleted,
+        snapshotId,
+        detail,
+        message,
+      };
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+      detail.error = errorMessage;
+      return {
+        ok: false,
+        source,
+        fetched,
+        inserted,
+        skipped,
+        deleted,
+        snapshotId: null,
+        detail,
+        error: errorMessage,
+        message,
+      };
+    } finally {
+      const finishedAt = new Date();
+      insertIngestRun(db, {
+        netuid: config.netuid,
+        started_at: startedIso,
+        finished_at: finishedAt.toISOString(),
+        duration_ms: finishedAt.getTime() - startedAt.getTime(),
+        source,
+        fallback_used: false,
+        ok,
+        snapshot_id: snapshotId,
+        message,
+        error: errorMessage,
+        detail_json: detail ? JSON.stringify(detail) : null,
+      });
+      finishActiveJob();
+    }
+  }
+
   async function syncAllAlphaHolderSnapshots({
     capturedAt = new Date().toISOString(),
     skipIfAlreadyCapturedToday = true,
@@ -2606,6 +2790,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     backfillHistoricalSnapshots,
     backfillChainBuysHistory,
     backfillSubnetCatalogSnapshots,
+    backfillAllSubnetHistoricalSnapshots,
     syncAlphaHolderSnapshot,
     syncAllAlphaHolderSnapshots,
     backfillAlphaHolderSnapshots,
