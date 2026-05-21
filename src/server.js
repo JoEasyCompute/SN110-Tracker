@@ -2189,6 +2189,16 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
         : null;
       const actualAlphaText = actualAlpha !== null ? formatAlpha(actualAlpha, 1) : '—';
       const alphaTaoText = alphaTao === null ? '—' : tao(alphaTao, 1);
+      const alphaChangeTao = latest ? numericMetricValue(latest.balance_staked_alpha_as_tao_change_24hr_num) : null;
+      const alphaChangeRaw = (alphaChangeTao !== null && tokenPrice && tokenPrice > 0)
+        ? (alphaChangeTao / tokenPrice)
+        : null;
+      const alphaChangePct = (alphaChangeRaw !== null && actualAlpha !== null && (actualAlpha - alphaChangeRaw) !== 0)
+        ? (alphaChangeRaw / (actualAlpha - alphaChangeRaw)) * 100
+        : null;
+      const alphaChangeTone = alphaChangeRaw === null ? 'neutral' : (alphaChangeRaw > 0 ? 'positive' : alphaChangeRaw < 0 ? 'negative' : 'neutral');
+      const alphaChangeRawText = alphaChangeRaw === null ? '—' : formatAlpha(Math.abs(alphaChangeRaw), 1);
+      const alphaChangePctText = alphaChangePct === null || !Number.isFinite(alphaChangePct) ? null : signedPercent(alphaChangePct, 2);
 
       return `
         <button type="button" class="card card-button card--entity wallet-hologram-card layout-card ${tone}" ${metricAttr} data-layout-card-id="wallet-${escapeHtml(wallet.ss58)}" data-layout-section-id="wallets" style="--wallet-theme-color: ${walletColor};">
@@ -2245,6 +2255,12 @@ function renderWalletSection(walletEntries, latestSubnet = null, walletActivityS
               <span class="pos-label">Alpha</span>
               <span class="pos-val wallet-alpha-main">${actualAlphaText}</span>
               <span class="wallet-alpha-sub">${alphaTaoText}</span>
+              ${alphaChangeRaw !== null ? `
+              <span class="wallet-alpha-change ${alphaChangeTone}">
+                <span class="wallet-alpha-change-value">${alphaChangeRaw > 0 ? '▲' : alphaChangeRaw < 0 ? '▼' : '•'} ${escapeHtml(alphaChangeRawText)}</span>
+                ${alphaChangePctText ? `<span class="wallet-alpha-change-pct">${escapeHtml(alphaChangePctText)}</span>` : ''}
+              </span>
+              ` : ''}
             </div>
           </div>
 
@@ -8342,6 +8358,39 @@ function renderPage(model, { experimental = false } = {}) {
         font-size: 10px;
         line-height: 1.2;
         color: var(--muted);
+      }
+      .experimental-page .wallet-hologram-card .wallet-alpha-change {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        margin-top: 3px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.1;
+        white-space: nowrap;
+      }
+      .experimental-page .wallet-hologram-card .wallet-alpha-change-value {
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .experimental-page .wallet-hologram-card .wallet-alpha-change-pct {
+        font-size: 10px;
+        font-weight: 700;
+        opacity: 0.85;
+      }
+      .experimental-page .wallet-hologram-card .wallet-alpha-change.positive {
+        color: var(--positive-color);
+        background: rgba(29, 185, 84, 0.1);
+      }
+      .experimental-page .wallet-hologram-card .wallet-alpha-change.negative {
+        color: var(--negative-color);
+        background: rgba(255, 107, 107, 0.1);
+      }
+      .experimental-page .wallet-hologram-card .wallet-alpha-change.neutral {
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.05);
       }
 
       /* Ratio Segment Bar */

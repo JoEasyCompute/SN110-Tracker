@@ -3390,6 +3390,8 @@ test('experimental render uses an overview-first layout with collapsed details',
   assert.equal(html.includes('wallet-24h-change-pct'), true);
   assert.equal(html.includes('wallet-alpha-main'), true);
   assert.equal(html.includes('wallet-alpha-sub'), true);
+  assert.equal(html.includes('wallet-alpha-change'), true);
+  assert.equal(html.includes('wallet-alpha-change-pct'), true);
   assert.ok(html.indexOf('data-layout-section="wallets"') < html.indexOf('data-layout-section="key-metrics"'));
   assert.equal(html.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(html.includes('Latest snapshot captured'), false);
