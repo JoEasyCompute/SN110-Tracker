@@ -1207,9 +1207,10 @@ function buildSignalSummary(latest, comparisons, latestMetricDefs = getLatestMet
   };
 }
 
-function renderMetricCards(latest, defs, { defaultSubtext = true, variant = 'compact', sectionId = null } = {}) {
+function renderMetricCards(latest, defs, { defaultSubtext = true, variant = 'compact', sectionId = null, experimental = false, history = [] } = {}) {
   return defs.map((def) => {
     const model = buildMetricCardModel(latest, def, { defaultSubtext });
+    const trend = experimental ? buildMetricTrend(latest, def, history) : null;
 
     return metricCard({
       label: def.label,
@@ -1221,19 +1222,22 @@ function renderMetricCards(latest, defs, { defaultSubtext = true, variant = 'com
       variant,
       cardId: sectionId ? `${sectionId}-${def.key}` : def.key,
       sectionId,
+      trend,
     });
   }).join('');
 }
 
-function renderLatestSnapshotCards(latest, defs, { sectionId = null } = {}) {
-  return renderMetricCards(latest, defs, { defaultSubtext: true, variant: 'deep', sectionId });
+function renderLatestSnapshotCards(latest, defs, { sectionId = null, experimental = false, history = [] } = {}) {
+  return renderMetricCards(latest, defs, { defaultSubtext: true, variant: 'deep', sectionId, experimental, history });
 }
 
-function renderSubnetDataCards(latest, subnetLabel = null, { experimental = false } = {}) {
+function renderSubnetDataCards(latest, subnetLabel = null, { experimental = false, history = [] } = {}) {
   return renderMetricCards(latest, getSubnetDataMetricDefs(subnetLabel), {
     defaultSubtext: false,
     variant: experimental ? 'deep' : 'compact',
     sectionId: 'subnet-stats',
+    experimental,
+    history,
   });
 }
 
@@ -3004,7 +3008,47 @@ function metricUnitHint(metricData = null) {
   return '';
 }
 
-function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = false, metricData = null, variant = 'compact', cardId = null, sectionId = null }) {
+function formatMetricTrendDelta(delta, valueFormat = 'number') {
+  const format = String(valueFormat || 'number').trim().toLowerCase();
+  if (format === 'tao' || format === 'signedtao') return signedTao(delta, 2);
+  if (format === 'percent' || format === 'percentratio' || format === 'signedpercent') return signedPercent(delta, 2);
+  if (format === 'integer') return signedCompact(delta, 0);
+  return signedCompact(delta, 2);
+}
+
+function shouldShowMetricTrend(def) {
+  if (!def || !def.key) return false;
+  if (['source', 'root_sell_text'].includes(def.key)) return false;
+  if (String(def.key).startsWith('price_change_')) return false;
+  return ['tao', 'signedTao', 'percent', 'percentRatio', 'signedPercent', 'integer', 'number', 'compact'].includes(String(def.valueFormat || '').trim());
+}
+
+function buildMetricTrend(latest, def, history = []) {
+  if (!latest || !def || !Array.isArray(history) || !history.length || !shouldShowMetricTrend(def)) return null;
+  const latestTime = new Date(latest.captured_at).getTime();
+  if (!Number.isFinite(latestTime)) return null;
+  const historyField = def.historyField || def.valueField;
+  if (!historyField) return null;
+  const prior = nearestBefore(history, latestTime - 24 * 60 * 60 * 1000, historyField);
+  if (!prior) return null;
+  const scale = def.valueScale || currencyScaleForField(def.valueField) || currencyScaleForField(historyField) || 1;
+  const latestNumeric = applyScale(latest[def.valueField], scale);
+  const priorNumeric = applyScale(prior[historyField], scale);
+  if (!Number.isFinite(latestNumeric) || !Number.isFinite(priorNumeric)) return null;
+  const delta = latestNumeric - priorNumeric;
+  const pct = priorNumeric !== 0 ? (delta / priorNumeric) * 100 : null;
+  const tone = def.key === 'rank'
+    ? (delta < 0 ? 'positive' : delta > 0 ? 'negative' : 'neutral')
+    : (delta > 0 ? 'positive' : delta < 0 ? 'negative' : 'neutral');
+  return {
+    label: '24h change',
+    value: formatMetricTrendDelta(delta, def.valueFormat),
+    pct: pct === null || !Number.isFinite(pct) ? null : signedPercent(pct, 2),
+    tone,
+  };
+}
+
+function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = false, metricData = null, variant = 'compact', cardId = null, sectionId = null, trend = null }) {
   const description = metricData?.description || '';
   const unitHint = metricUnitHint(metricData);
   const badgeText = String(metricData?.badge || '').trim();
@@ -3030,6 +3074,13 @@ function metricCard({ label, value, subtext = '', tone = 'neutral', clickable = 
       <div class="card-label">${escapeHtml(label)}</div>
       ${badgeText ? `<div class="card-badge">${escapeHtml(badgeText)}</div>` : ''}
       <div class="card-value">${escapeHtml(value)}</div>
+      ${trend ? `
+      <div class="card-trend ${escapeHtml(trend.tone || 'neutral')}">
+        <span class="card-trend-label">${escapeHtml(trend.label || '24h change')}</span>
+        <span class="card-trend-value">${escapeHtml(trend.value || '—')}</span>
+        ${trend.pct ? `<span class="card-trend-pct">${escapeHtml(trend.pct)}</span>` : ''}
+      </div>
+      ` : ''}
       ${subtext ? `<div class="card-subtext">${escapeHtml(subtext)}</div>` : ''}
     </${tag}>
   `;
@@ -7414,6 +7465,7 @@ function renderPage(model, { experimental = false } = {}) {
     ingestRun,
     totalSnapshots,
     totalWalletSnapshots,
+    history,
     comparisons,
     config,
     netuid,
@@ -7451,7 +7503,7 @@ function renderPage(model, { experimental = false } = {}) {
     ? `<a class="subnet-title-link" href="${escapeHtml(taostatsSubnetUrl)}" target="_blank" rel="noopener noreferrer" title="Open ${escapeHtml(subnetHeaderLabel)} on Taostats">${subnetHeaderTitle}</a>`
     : subnetHeaderTitle;
 
-  const cards = latest ? renderLatestSnapshotCards(latest, latestMetricDefs, { sectionId: 'key-metrics' }) : '';
+  const cards = latest ? renderLatestSnapshotCards(latest, latestMetricDefs, { sectionId: 'key-metrics', experimental, history }) : '';
   const pollIntervalButtons = POLL_INTERVAL_OPTIONS.map((minutes) => {
     const active = Number(config.pollIntervalMinutes) === minutes;
     return `<button class="button poll-button${active ? ' active' : ''}" type="button" data-poll-interval="${minutes}" aria-pressed="${active ? 'true' : 'false'}">${minutes / 60}h</button>`;
@@ -7547,7 +7599,7 @@ function renderPage(model, { experimental = false } = {}) {
   const subnetStatsSectionHtml = `
       <section class="section">
         <h2>Subnet stats</h2>
-        <div class="grid stats" data-layout-section="subnet-stats">${latest ? renderSubnetDataCards(latest, subnetLabel, { experimental }) : ''}</div>
+        <div class="grid stats" data-layout-section="subnet-stats">${latest ? renderSubnetDataCards(latest, subnetLabel, { experimental, history }) : ''}</div>
       </section>
     `;
   const comparisonsSectionHtml = `
@@ -7963,6 +8015,48 @@ function renderPage(model, { experimental = false } = {}) {
         font-weight: 800 !important;
         letter-spacing: -0.02em !important;
         color: #ffffff !important;
+      }
+      .experimental-page .card--deep .card-trend {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 8px;
+        align-items: baseline;
+        margin-top: 8px;
+        padding: 8px 10px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .experimental-page .card--deep .card-trend-label {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .experimental-page .card--deep .card-trend-value {
+        justify-self: start;
+        font-size: 12px;
+        font-weight: 800;
+        color: #ffffff;
+      }
+      .experimental-page .card--deep .card-trend-pct {
+        justify-self: end;
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--muted);
+      }
+      .experimental-page .card--deep.positive .card-trend-value,
+      .experimental-page .card--deep.positive .card-trend-pct {
+        color: var(--positive-color) !important;
+      }
+      .experimental-page .card--deep.negative .card-trend-value,
+      .experimental-page .card--deep.negative .card-trend-pct {
+        color: var(--negative-color) !important;
+      }
+      .experimental-page .card--deep.accent .card-trend-value,
+      .experimental-page .card--deep.accent .card-trend-pct {
+        color: var(--accent-color) !important;
       }
       .experimental-page .card--deep.positive .card-value {
         color: var(--positive-color) !important;
