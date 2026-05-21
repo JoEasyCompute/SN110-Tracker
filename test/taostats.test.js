@@ -540,6 +540,46 @@ test('buildPageModel includes alpha-holder trend data for the leaderboard rows',
   db.close();
 });
 
+test('buildPageModel hydrates chain buys from raw subnet snapshot payloads', () => {
+  const db = openDatabase(':memory:');
+  const snapshot = normalizeSnapshot({
+    netuid: 110,
+    block_number: 9002,
+    timestamp: '2026-05-01T00:00:00Z',
+    price: '1.0',
+    market_cap: '100',
+    liquidity: '50',
+    total_tao: '1000',
+    alpha_in_pool: '100',
+    recycled_24_hours: '500000',
+    excess_tao: '7500000000',
+    neuron_registration_cost: '500000',
+    active_keys: 256,
+    max_neurons: 256,
+    root_sell: 'NO',
+  }, { source: 'scrape', sourceUrl: 'https://example.invalid', netuid: 110 });
+  delete snapshot.chain_buys_1_day_text;
+  delete snapshot.chain_buys_1_day_num;
+  insertSnapshot(db, snapshot);
+
+  const model = buildPageModel({
+    db,
+    config: {
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: '',
+      pollIntervalMinutes: 60,
+      wallets: [],
+    },
+    netuid: 110,
+  });
+  const html = renderPage(model);
+
+  assert.equal(model.latest?.chain_buys_1_day_num, 7.5);
+  assert.equal(model.history[0]?.chain_buys_1_day_num, 7.5);
+  assert.equal(html.includes('Chain Buys 1D'), true);
+  db.close();
+});
+
 test('renderPage uses cached subnet metadata when the latest subnet snapshot is missing', () => {
   const db = openDatabase(':memory:');
   upsertSubnetMetadata(db, {
@@ -3287,6 +3327,7 @@ test('experimental render uses an overview-first layout with collapsed details',
       alpha_holders_num: 12,
       incentive_burn_num: 0.1,
       recycled_24_hours_num: 300,
+      chain_buys_1_day_num: 6,
       registration_cost_num: 0.5,
       active_keys_num: 128,
       max_neurons_num: 256,
@@ -3337,6 +3378,7 @@ test('experimental render uses an overview-first layout with collapsed details',
         alpha_holders_num: 10,
         incentive_burn_num: 0.08,
         recycled_24_hours_num: 250,
+        chain_buys_1_day_num: 5,
         registration_cost_num: 0.4,
         active_keys_num: 120,
         max_neurons_num: 256,
@@ -3392,6 +3434,7 @@ test('experimental render uses an overview-first layout with collapsed details',
   assert.equal(html.includes('wallet-alpha-sub'), true);
   assert.equal(html.includes('wallet-alpha-change'), true);
   assert.equal(html.includes('wallet-alpha-change-pct'), true);
+  assert.equal(html.includes('Chain Buys 1D'), true);
   assert.ok(html.indexOf('data-layout-section="wallets"') < html.indexOf('data-layout-section="key-metrics"'));
   assert.equal(html.includes('prefers-reduced-motion: reduce'), true);
   assert.equal(html.includes('Latest snapshot captured'), false);

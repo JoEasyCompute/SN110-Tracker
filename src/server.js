@@ -541,6 +541,23 @@ function numericMetricValue(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function hydrateChainBuysFromRaw(row) {
+  if (!row) return row;
+  const hasNum = row.chain_buys_1_day_num !== null && row.chain_buys_1_day_num !== undefined;
+  const hasText = row.chain_buys_1_day_text !== null && row.chain_buys_1_day_text !== undefined;
+  if (hasNum && hasText) return row;
+  if (!row.raw_json) return row;
+  const payload = parseJsonPayload(row.raw_json) || {};
+  const excessTaoRaw = payload.excess_tao;
+  const excessTaoNum = Number(excessTaoRaw);
+  if (!Number.isFinite(excessTaoNum)) return row;
+  return {
+    ...row,
+    chain_buys_1_day_text: hasText ? row.chain_buys_1_day_text : String(excessTaoRaw),
+    chain_buys_1_day_num: hasNum ? row.chain_buys_1_day_num : excessTaoNum / TAO_PER_RAO,
+  };
+}
+
 function resolveSentimentValue(row) {
   if (!row) return null;
   const candidates = [
@@ -1011,6 +1028,7 @@ function getSubnetDataMetricDefs(subnetLabel = null) {
     { key: 'alpha_holders_num', label: 'Alpha Holders', description: `This is the number of holder rows in the latest subnet snapshot, derived from the stored holder snapshots. Click it to see the historical trend, and use the new all-subnet ranking view below to compare ${labelText} with the rest.`, valueField: 'alpha_holders_num', valueFormat: 'integer', historyField: 'alpha_holders_num', chartLabel: 'Alpha Holders', chartColor: '#38bdf8', clickable: true, historySource: 'alpha-holder' },
     { key: 'incentive_burn_num', label: 'Burn Rate', description: 'This shows how much reward is burned instead of being paid out. Higher values mean more gets removed from circulation.', valueField: 'incentive_burn_num', valueFormat: 'percent', historyField: 'incentive_burn_num', chartLabel: 'Burn Rate', chartColor: '#fb7185', clickable: true },
     { key: 'recycled_24_hours_num', label: 'Recycled TAO', description: 'This is the amount of TAO that got recycled in the last 24 hours. In plain English, it’s TAO that came back into use instead of staying spent.', valueField: 'recycled_24_hours_num', valueFormat: 'tao', historyField: 'recycled_24_hours_num', chartLabel: 'Recycled TAO', chartColor: '#38bdf8', clickable: true },
+    { key: 'chain_buys_1_day_num', label: 'Chain Buys 1D', description: 'This is the amount of excess TAO the chain used to buy and recycle alpha tokens over the last day.', valueField: 'chain_buys_1_day_num', valueFormat: 'tao', historyField: 'chain_buys_1_day_num', chartLabel: 'Chain Buys 1D', chartColor: '#f59e0b', clickable: true },
     { key: 'registration_cost_num', label: 'Registration Fee', description: 'This is the fee to register a new neuron. Think of it as the cost to get a seat at the table.', valueField: 'registration_cost_num', valueFormat: 'tao', historyField: 'registration_cost_num', chartLabel: 'Registration Fee', chartColor: '#c084fc', clickable: true },
     {
       key: 'uids',
@@ -2898,7 +2916,7 @@ function buildAlphaHolderRankHistory(rows, netuid) {
 }
 
 function buildPageModel({ db, config, netuid }) {
-  const latest = getLatestSnapshot(db, netuid);
+  const latest = hydrateChainBuysFromRaw(getLatestSnapshot(db, netuid));
   const recent = getRecentSnapshots(db, netuid, 12);
   const ingestRun = getLatestIngestRun(db, netuid);
   const totalSnapshots = countSnapshots(db, netuid);
@@ -2907,8 +2925,8 @@ function buildPageModel({ db, config, netuid }) {
   const historyRaw = latest ? getHistory(db, netuid, sinceIso) : [];
   const taoPriceHistory = latest ? getTaoPriceHistory(db, sinceIso) : [];
   const latestTaoPrice = getLatestTaoPrice(db);
-  const history = attachTaoPrice(historyRaw, taoPriceHistory);
-  const recentWithPrice = attachTaoPrice(recent.slice().reverse(), taoPriceHistory).reverse();
+  const history = attachTaoPrice(historyRaw.map(hydrateChainBuysFromRaw), taoPriceHistory);
+  const recentWithPrice = attachTaoPrice(recent.map(hydrateChainBuysFromRaw).slice().reverse(), taoPriceHistory).reverse();
   const alphaHolderHistoryCounts = latest ? getAlphaHolderSnapshotCounts(db, netuid, sinceIso) : [];
   const latestAlphaHolderCount = latest ? getLatestAlphaHolderCount(db, netuid) : null;
   const historyWithAlphaHolders = attachAlphaHolderCounts(history, alphaHolderHistoryCounts);
