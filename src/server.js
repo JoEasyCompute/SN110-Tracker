@@ -3359,6 +3359,10 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
                   End date
                   <input type="date" id="chain-buys-backfill-end" value="${escapeHtml(defaultBackfillEnd)}">
                 </label>
+                <label class="admin-checkbox">
+                  <input type="checkbox" id="chain-buys-backfill-overwrite">
+                  Overwrite existing chain buys values
+                </label>
               </div>
               <p class="admin-helper">Backfills Chain Buys 1D from the stored raw JSON payloads for snapshots in the selected date range. Existing values are preserved unless the row is missing the field.</p>
               <div class="admin-actions">
@@ -3828,6 +3832,7 @@ function renderDashboardClientScript({ netuid, config }) {
       const backfillProgress = document.getElementById('backfill-progress');
       const chainBuysBackfillStartInput = document.getElementById('chain-buys-backfill-start');
       const chainBuysBackfillEndInput = document.getElementById('chain-buys-backfill-end');
+      const chainBuysBackfillOverwriteInput = document.getElementById('chain-buys-backfill-overwrite');
       const chainBuysBackfillButton = document.getElementById('chain-buys-backfill-btn');
       const chainBuysBackfillStatus = document.getElementById('chain-buys-backfill-status');
       const chainBuysBackfillProgress = document.getElementById('chain-buys-backfill-progress');
@@ -5594,6 +5599,7 @@ function renderDashboardClientScript({ netuid, config }) {
         return {
           start: String(chainBuysBackfillStartInput?.value || '').trim(),
           end: String(chainBuysBackfillEndInput?.value || '').trim(),
+          overwrite: Boolean(chainBuysBackfillOverwriteInput?.checked),
         };
       }
 
@@ -5693,7 +5699,8 @@ function renderDashboardClientScript({ netuid, config }) {
           }
           const updated = Number(payload.chainBuysBackfill?.updated ?? 0);
           const skipped = Number(payload.chainBuysBackfill?.skipped ?? 0);
-          updateChainBuysBackfillStatus('Chain buys backfill complete: ' + updated + ' rows updated' + (skipped ? ', ' + skipped + ' skipped' : '') + '.', 'success');
+          const overwriteLabel = options.overwrite ? ' with overwrite' : '';
+          updateChainBuysBackfillStatus('Chain buys backfill complete' + overwriteLabel + ': ' + updated + ' rows updated' + (skipped ? ', ' + skipped + ' skipped' : '') + '.', 'success');
           window.setTimeout(() => window.location.reload(), 1200);
         } catch (error) {
           updateChainBuysBackfillStatus(error?.message || 'Chain buys backfill failed', 'error');

@@ -2420,6 +2420,7 @@ test('renderPage includes clickable latest metrics and modal markup', () => {
   assert.equal(html.includes('id="backfill-progress"'), true);
   assert.equal(html.includes('id="chain-buys-backfill-start"'), true);
   assert.equal(html.includes('id="chain-buys-backfill-end"'), true);
+  assert.equal(html.includes('id="chain-buys-backfill-overwrite"'), true);
   assert.equal(html.includes('id="chain-buys-backfill-btn"'), true);
   assert.equal(html.includes('id="chain-buys-backfill-progress"'), true);
   assert.equal(html.includes('id="wallet-backfill-btn"'), true);
@@ -4417,6 +4418,47 @@ test('chain buys backfill endpoint runs the range update without requiring live 
   });
   assert.equal(payload.chainBuysBackfill.ok, true);
   assert.equal(payload.chainBuysBackfill.updated, 1);
+  await app.close();
+  db.close();
+});
+
+test('chain buys backfill endpoint passes overwrite through', async () => {
+  const db = openDatabase(':memory:');
+  let backfillArgs = null;
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      backfillHistoricalSnapshots: async () => ({ ok: true, inserted: 0, flowInserted: 0, priceInserted: 0 }),
+      backfillChainBuysHistory: async (args) => {
+        backfillArgs = args;
+        return { ok: true, source: 'chain-buys-backfill', scanned: 2, updated: 2, skipped: 0 };
+      },
+      ingestOnce: async () => ({ ok: true, source: 'api' }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+    },
+  });
+
+  const server = await app.start(0);
+  const { port } = server.address();
+  const response = await fetch(`http://127.0.0.1:${port}/api/subnets/110/chain-buys-backfill`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-admin-api-key': 'admin-secret' },
+    body: JSON.stringify({ start: '2026-05-01', end: '2026-05-02', overwrite: true }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(backfillArgs, {
+    netuid: 110,
+    startIso: '2026-05-01T00:00:00.000Z',
+    endIso: '2026-05-02T23:59:59.999Z',
+    overwrite: true,
+  });
+  assert.equal(payload.chainBuysBackfill.ok, true);
   await app.close();
   db.close();
 });
