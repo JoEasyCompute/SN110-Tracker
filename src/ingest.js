@@ -666,6 +666,44 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     let deleted = 0;
     let processed = 0;
 
+    function isPositiveNumber(value) {
+      return Number.isFinite(Number(value)) && Number(value) > 0;
+    }
+
+    async function enrichCatalogRow(row, netuid) {
+      const payload = { ...(row || {}) };
+      const needsPriceRepair = !isPositiveNumber(payload.price);
+      const needsMarketCapRepair = !isPositiveNumber(payload.market_cap);
+      if (!needsPriceRepair && !needsMarketCapRepair) {
+        return payload;
+      }
+
+      try {
+        const latest = await fetchLatestSnapshot({
+          netuid,
+          taostatsBaseUrl: config.taostatsBaseUrl,
+          taostatsPublicBaseUrl: config.taostatsPublicBaseUrl,
+          taostatsAuthHeader: config.taostatsAuthHeader,
+          rateLimiter: config.taostatsRateLimiter || null,
+        });
+        const latestSnapshot = latest?.snapshot || null;
+        if (!latestSnapshot) {
+          return payload;
+        }
+
+        if (needsPriceRepair && isPositiveNumber(latestSnapshot.price_num)) {
+          payload.price = latestSnapshot.price_text ?? latestSnapshot.price_num;
+        }
+        if (needsMarketCapRepair && isPositiveNumber(latestSnapshot.market_cap_num)) {
+          payload.market_cap = latestSnapshot.market_cap_text ?? latestSnapshot.market_cap_num;
+        }
+      } catch {
+        // Keep the catalog snapshot alive even if the enrichment lookup fails for a subnet.
+      }
+
+      return payload;
+    }
+
     try {
       if (!config.taostatsAuthHeader) {
         throw new Error('Taostats API auth header is required for subnet table snapshots');
@@ -712,7 +750,8 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           continue;
         }
 
-        const snapshot = normalizeSnapshot(row, {
+        const enrichedRow = await enrichCatalogRow(row, subnetNetuid);
+        const snapshot = normalizeSnapshot(enrichedRow, {
           source,
           sourceUrl,
           netuid: subnetNetuid,

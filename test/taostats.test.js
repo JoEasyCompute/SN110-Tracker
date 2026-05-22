@@ -841,6 +841,84 @@ test('ingestOnce refreshes subnet metadata without tripping the catalog refresh 
   db.close();
 });
 
+test('subnet catalog backfill repairs zero price and market cap values from the live subnet snapshot', async () => {
+  const db = openDatabase(':memory:');
+  const latestCalls = [];
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => ([
+      {
+        netuid: 110,
+        block_number: 110001,
+        timestamp: '2026-05-14T00:00:00Z',
+        name: 'Green Compute',
+        symbol: 'GC',
+        price: '0',
+        market_cap: '0',
+        liquidity: '100',
+        total_tao: '200',
+        total_alpha: '300',
+        alpha_in_pool: '300',
+        alpha_staked: '200',
+      },
+    ]),
+    fetchLatestSnapshot: async ({ netuid }) => {
+      latestCalls.push(netuid);
+      return {
+        snapshot: normalizeSnapshot({
+          netuid,
+          block_number: 110001,
+          timestamp: '2026-05-14T00:00:00Z',
+          name: 'Green Compute',
+          symbol: 'GC',
+          price: '0.0085',
+          market_cap: '123456789',
+          liquidity: '100',
+          total_tao: '200',
+          total_alpha: '300',
+          alpha_in_pool: '300',
+          alpha_staked: '200',
+          emission: '1',
+          projected_emission: '1',
+          incentive_burn: '0',
+          recycled_24_hours: '0',
+          recycled_lifetime: '0',
+          recycled_since_registration: '0',
+          neuron_registration_cost: '0',
+          active_keys: 1,
+          max_neurons: 1,
+          net_flow_1_day: '1',
+          net_flow_7_days: '1',
+          net_flow_30_days: '1',
+          root_sell: 'NO',
+        }, { source: 'api', sourceUrl: 'https://example.invalid/api/subnet/latest/v1', netuid }),
+        source: 'api',
+        fallbackUsed: false,
+        detail: { source: 'api' },
+      };
+    },
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsPublicBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+    },
+    taostats,
+  });
+
+  const result = await service.backfillSubnetCatalogSnapshots({ overwrite: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(latestCalls, [110]);
+  const latest = getLatestSnapshot(db, 110);
+  assert.equal(latest.price_num, 0.0085);
+  assert.equal(latest.market_cap_num, 123456789);
+  assert.equal(latest.source, 'subnet-catalog-snapshot');
+  db.close();
+});
+
 test('subnet table snapshot backfill stores the live catalog rows for every subnet', async () => {
   const db = openDatabase(':memory:');
   const taostats = {
