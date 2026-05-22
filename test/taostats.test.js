@@ -2959,7 +2959,7 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
       nextSubnetCatalogSnapshotAtIso: '2026-05-16T01:10:00.000Z',
       nextWalletActivitySyncAtIso: '2026-05-16T02:00:00.000Z',
       nextAlphaHolderSnapshotAtIso: '2026-05-17T00:00:00.000Z',
-      taostatsSubnetCatalogSnapshotIntervalMinutes: 10,
+      taostatsSubnetCatalogSnapshotIntervalMinutes: 30,
       ingestActive: true,
       activeIngestJob: {
         kind: 'subnet-ingest',
@@ -5539,7 +5539,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     'TAOSTATS_BACKFILL_FREQUENCY=by_day',
     'TAOSTATS_BACKFILL_ON_STARTUP=true',
     'TAOSTATS_BACKFILL_OVERWRITE=true',
-    'TAOSTATS_SUBNET_CATALOG_SNAPSHOT_INTERVAL_MINUTES=10',
+    'TAOSTATS_SUBNET_CATALOG_SNAPSHOT_INTERVAL_MINUTES=30',
     'TAOSTATS_WALLET_1_NAME=Treasury',
     'TAOSTATS_WALLET_1_COLDKEY=5WalletAlpha123456789ABCDEFGH',
     'TAOSTATS_WALLET_1_SS58=5WalletAlpha123456789ABCDEFGH',
@@ -5573,7 +5573,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     assert.equal(config.taostatsBackfillFrequency, 'by_day');
     assert.equal(config.taostatsBackfillOnStartup, true);
     assert.equal(config.taostatsBackfillOverwrite, true);
-    assert.equal(config.taostatsSubnetCatalogSnapshotIntervalMinutes, 10);
+    assert.equal(config.taostatsSubnetCatalogSnapshotIntervalMinutes, 30);
     assert.equal(config.wallets.length, 2);
     assert.equal(config.wallets[0].name, 'Treasury');
     assert.equal(config.wallets[0].coldkey, '5WalletAlpha123456789ABCDEFGH');

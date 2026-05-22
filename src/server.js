@@ -2976,7 +2976,7 @@ function buildPageModel({ db, config, netuid }) {
       label: 'Subnet table snapshot',
       title: 'Live subnet table snapshot',
       description: 'Captures the full Taostats subnet table for every discovered subnet so cross-subnet comparisons stay fresh.',
-      cadenceText: formatPollInterval(config.taostatsSubnetCatalogSnapshotIntervalMinutes || 10),
+      cadenceText: formatPollInterval(config.taostatsSubnetCatalogSnapshotIntervalMinutes || 30),
       nextRunIso: config.nextSubnetCatalogSnapshotAtIso ?? null,
       enabled: Boolean(config.taostatsAuthHeader),
       paused: alphaHolderBackfillActive,

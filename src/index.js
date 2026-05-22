@@ -195,13 +195,13 @@ async function main() {
     };
   };
 
-  const scheduleSubnetCatalogSnapshot = (minutes = config.taostatsSubnetCatalogSnapshotIntervalMinutes || 10) => {
+  const scheduleSubnetCatalogSnapshot = (minutes = config.taostatsSubnetCatalogSnapshotIntervalMinutes || 30) => {
     if (!config.taostatsAuthHeader) {
       return null;
     }
     const normalizedMinutes = Number.isFinite(Number(minutes)) && Number(minutes) > 0
       ? Number(minutes)
-      : 10;
+      : 30;
     config.taostatsSubnetCatalogSnapshotIntervalMinutes = normalizedMinutes;
     if (subnetCatalogTimer) {
       subnetCatalogTimer.stop();
