@@ -5594,12 +5594,78 @@ function renderDashboardClientScript({ netuid, config }) {
         return seconds + 's';
       }
 
-      function beginTimedAdminStatus(updateStatus, prefix) {
+      function formatActiveJobProgress(job) {
+        if (!job || typeof job !== 'object') return '';
+        const processed = Number(job.processed ?? job.completed ?? 0);
+        const total = Number(job.total ?? job.netuids ?? 0);
+        const etaMs = Number(job.etaMs ?? NaN);
+        const currentNetuid = Number(job.currentNetuid ?? job.netuid ?? NaN);
+        const parts = [];
+        if (Number.isFinite(processed) && Number.isFinite(total) && total > 0) {
+          parts.push(processed + '/' + total + ' subnets');
+        } else if (Number.isFinite(processed) && processed > 0) {
+          parts.push(processed + ' subnets');
+        }
+        if (Number.isFinite(currentNetuid) && currentNetuid > 0) {
+          parts.push('SN' + currentNetuid);
+        }
+        if (Number.isFinite(etaMs) && etaMs > 0) {
+          parts.push('eta ' + formatDurationShort(etaMs));
+        }
+        return parts.join(' • ');
+      }
+
+      function updateProgressValue(progressElement, processed, total) {
+        if (!progressElement) return;
+        const safeProcessed = Number(processed);
+        const safeTotal = Number(total);
+        if (!Number.isFinite(safeProcessed) || !Number.isFinite(safeTotal) || safeTotal <= 0) {
+          progressElement.removeAttribute('value');
+          progressElement.removeAttribute('max');
+          progressElement.max = 100;
+          return;
+        }
+        progressElement.max = safeTotal;
+        progressElement.value = Math.min(safeTotal, Math.max(0, safeProcessed));
+      }
+
+      function beginTimedAdminStatus(updateStatus, prefix, { progressElement = null, pollUrl = null } = {}) {
         const startedAt = Date.now();
         let intervalId = null;
-        const render = () => updateStatus(prefix + ' (elapsed ' + formatDurationShort(Date.now() - startedAt) + ')…', 'info');
+        let inFlight = false;
+        let lastProgressText = '';
+        const render = () => {
+          const elapsedText = formatDurationShort(Date.now() - startedAt);
+          const suffix = lastProgressText ? ' (' + lastProgressText + ', elapsed ' + elapsedText + ')…' : ' (elapsed ' + elapsedText + ')…';
+          updateStatus(prefix + suffix, 'info');
+        };
+        const syncProgress = (job) => {
+          lastProgressText = formatActiveJobProgress(job);
+          updateProgressValue(progressElement, job?.processed ?? job?.completed ?? 0, job?.total ?? job?.netuids ?? 0);
+        };
+        const poll = async () => {
+          if (!pollUrl || inFlight) return;
+          inFlight = true;
+          try {
+            const response = await fetch(pollUrl, { headers: adminFetchHeaders('') });
+            if (!response.ok) return;
+            const payload = await response.json().catch(() => ({}));
+            const job = payload?.activeJob || null;
+            if (!job) return;
+            syncProgress(job);
+            render();
+          } catch (error) {
+            console.error(error);
+          } finally {
+            inFlight = false;
+          }
+        };
         render();
-        intervalId = window.setInterval(render, 1000);
+        if (pollUrl) poll();
+        intervalId = window.setInterval(() => {
+          render();
+          if (pollUrl) poll();
+        }, 1000);
         return {
           startedAt,
           stop() {
@@ -5815,7 +5881,11 @@ function renderDashboardClientScript({ netuid, config }) {
         }
         subnetHistoryBackfillButton.disabled = true;
         setProgressVisible(subnetHistoryBackfillProgress, true);
-        const timing = beginTimedAdminStatus(updateSubnetHistoryBackfillStatus, 'Backfilling historical snapshots for every subnet in the live catalog');
+        const timing = beginTimedAdminStatus(
+          updateSubnetHistoryBackfillStatus,
+          'Backfilling historical snapshots for every subnet in the live catalog',
+          { progressElement: subnetHistoryBackfillProgress, pollUrl: '/api/admin/active-job' },
+        );
         try {
           const response = await fetch('/api/subnets/catalog/history/backfill', {
             method: 'POST',
@@ -5848,7 +5918,11 @@ function renderDashboardClientScript({ netuid, config }) {
         const options = readSubnetCatalogBackfillOptions();
         subnetCatalogBackfillButton.disabled = true;
         setProgressVisible(subnetCatalogBackfillProgress, true);
-        const timing = beginTimedAdminStatus(updateSubnetCatalogBackfillStatus, 'Capturing the live Taostats subnet table for all subnets');
+        const timing = beginTimedAdminStatus(
+          updateSubnetCatalogBackfillStatus,
+          'Capturing the live Taostats subnet table for all subnets',
+          { progressElement: subnetCatalogBackfillProgress, pollUrl: '/api/admin/active-job' },
+        );
         try {
           const response = await fetch('/api/subnets/catalog/backfill', {
             method: 'POST',
@@ -11493,6 +11567,21 @@ function createDashboardServer({ db, ingestService, config, onPollIntervalChange
             : null,
           taoPrice: latestTaoPrice,
           ingestRun,
+        }, null, 2));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/admin/active-job') {
+        if (!verifyAdminSession(req, config)) {
+          res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'Admin session required.' }, null, 2));
+          return;
+        }
+        const activeJob = typeof ingestService.getActiveJob === 'function' ? ingestService.getActiveJob() : null;
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          active: typeof ingestService.isActive === 'function' ? ingestService.isActive() : Boolean(activeJob),
+          activeJob,
         }, null, 2));
         return;
       }

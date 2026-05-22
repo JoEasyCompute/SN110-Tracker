@@ -109,6 +109,15 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     return startedAt;
   }
 
+  function updateActiveJobDetail(detail = {}) {
+    if (!activeJob) return null;
+    activeJob = {
+      ...activeJob,
+      ...detail,
+    };
+    return getActiveJob();
+  }
+
   function finishActiveJob() {
     active = false;
     activeJob = null;
@@ -655,6 +664,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     let inserted = 0;
     let skipped = 0;
     let deleted = 0;
+    let processed = 0;
 
     try {
       if (!config.taostatsAuthHeader) {
@@ -668,11 +678,37 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       fetched = Array.isArray(catalog) ? catalog.length : 0;
       detail.fetched = fetched;
       detail.capturedAt = capturedAt;
+      updateActiveJobDetail({
+        total: fetched,
+        processed: 0,
+        remaining: fetched,
+        progressPct: fetched > 0 ? 0 : null,
+        etaMs: null,
+        etaIso: null,
+        currentNetuid: null,
+        currentLabel: null,
+      });
 
       for (const row of Array.isArray(catalog) ? catalog : []) {
         const subnetNetuid = Number.parseInt(String(row?.netuid), 10);
+        const currentLabel = row?.subnet_name || row?.name || row?.label || (Number.isFinite(subnetNetuid) ? `SN${subnetNetuid}` : null);
+        updateActiveJobDetail({
+          currentNetuid: Number.isFinite(subnetNetuid) ? subnetNetuid : null,
+          currentLabel: currentLabel ? String(currentLabel) : null,
+        });
         if (!Number.isFinite(subnetNetuid) || subnetNetuid <= 0) {
           skipped += 1;
+          processed += 1;
+          const remaining = Math.max(0, fetched - processed);
+          const elapsedMs = Date.now() - startedAt.getTime();
+          const etaMs = processed > 0 && remaining > 0 ? Math.max(0, Math.round((elapsedMs / processed) * remaining)) : null;
+          updateActiveJobDetail({
+            processed,
+            remaining,
+            progressPct: fetched > 0 ? Math.min(100, Math.round((processed / fetched) * 100)) : null,
+            etaMs,
+            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          });
           continue;
         }
 
@@ -698,6 +734,17 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
 
         snapshotId = insertSnapshot(db, snapshot);
         inserted += 1;
+        processed += 1;
+        const remaining = Math.max(0, fetched - processed);
+        const elapsedMs = Date.now() - startedAt.getTime();
+        const etaMs = processed > 0 && remaining > 0 ? Math.max(0, Math.round((elapsedMs / processed) * remaining)) : null;
+        updateActiveJobDetail({
+          processed,
+          remaining,
+          progressPct: fetched > 0 ? Math.min(100, Math.round((processed / fetched) * 100)) : null,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+        });
       }
 
       ok = true;
@@ -789,6 +836,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
     let retryAfterMs = null;
     let deferred = false;
     const results = [];
+    let processed = 0;
 
     try {
       if (!config.taostatsAuthHeader) {
@@ -801,6 +849,16 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         .filter((value) => Number.isFinite(value) && value > 0))].sort((a, b) => a - b);
 
       detail.netuids = netuids.length;
+      updateActiveJobDetail({
+        total: netuids.length,
+        processed: 0,
+        remaining: netuids.length,
+        progressPct: netuids.length > 0 ? 0 : null,
+        etaMs: null,
+        etaIso: null,
+        currentNetuid: null,
+        currentLabel: null,
+      });
 
       for (const subnetNetuid of netuids) {
         const subnetResult = {
@@ -810,6 +868,10 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           skipped: 0,
           deleted: 0,
         };
+        updateActiveJobDetail({
+          currentNetuid: subnetNetuid,
+          currentLabel: `SN${subnetNetuid}`,
+        });
         try {
           const snapshots = await fetchHistoricalSnapshots({
             netuid: subnetNetuid,
@@ -854,12 +916,36 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           }
           subnetResult.error = error instanceof Error ? error.message : String(error);
           results.push(subnetResult);
+          processed += 1;
+          const remaining = Math.max(0, netuids.length - processed);
+          const elapsedMs = Date.now() - startedAt.getTime();
+          const etaMs = processed > 0 && remaining > 0 ? Math.max(0, Math.round((elapsedMs / processed) * remaining)) : null;
+          updateActiveJobDetail({
+            processed,
+            remaining,
+            progressPct: netuids.length > 0 ? Math.min(100, Math.round((processed / netuids.length) * 100)) : null,
+            etaMs,
+            etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+            lastError: subnetResult.error || null,
+          });
           if (delayMs !== null) {
             break;
           }
           continue;
         }
         results.push(subnetResult);
+        processed += 1;
+        const remaining = Math.max(0, netuids.length - processed);
+        const elapsedMs = Date.now() - startedAt.getTime();
+        const etaMs = processed > 0 && remaining > 0 ? Math.max(0, Math.round((elapsedMs / processed) * remaining)) : null;
+        updateActiveJobDetail({
+          processed,
+          remaining,
+          progressPct: netuids.length > 0 ? Math.min(100, Math.round((processed / netuids.length) * 100)) : null,
+          etaMs,
+          etaIso: etaMs > 0 ? new Date(Date.now() + etaMs).toISOString() : null,
+          lastError: null,
+        });
       }
 
       detail.results = results;

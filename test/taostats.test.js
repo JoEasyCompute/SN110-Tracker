@@ -1364,6 +1364,84 @@ test('ingest service exposes active job details while a run is in progress', asy
   db.close();
 });
 
+test('all-subnet historical backfill exposes live processed counts and eta details', async () => {
+  const db = openDatabase(':memory:');
+  let resolveSecond = null;
+  const secondPromise = new Promise((resolve) => {
+    resolveSecond = resolve;
+  });
+  let fetchCount = 0;
+  const taostats = {
+    fetchSubnetLatestCatalog: async () => [{ netuid: 64 }, { netuid: 65 }],
+    fetchHistoricalSnapshots: async ({ netuid }) => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        return [
+          normalizeSnapshot({
+            netuid,
+            block_number: 1,
+            timestamp: '2026-05-01T00:00:00Z',
+            name: `Subnet ${netuid}`,
+            symbol: `SN${netuid}`,
+            price: '1',
+            market_cap: '1',
+            liquidity: '1',
+            emission: '1',
+            projected_emission: '1',
+            incentive_burn: '0',
+            recycled_24_hours: '0',
+            neuron_registration_cost: '0',
+            active_keys: 0,
+            max_neurons: 0,
+            net_flow_1_day: '0',
+            net_flow_7_days: '0',
+            net_flow_30_days: '0',
+          }, {
+            source: 'api',
+            sourceUrl: 'https://example.invalid',
+            capturedAt: '2026-05-01T00:00:00.000Z',
+          }),
+        ];
+      }
+      return secondPromise;
+    },
+  };
+  const service = createIngestService({
+    db,
+    config: {
+      netuid: 110,
+      taostatsBaseUrl: 'https://example.invalid',
+      taostatsAuthHeader: 'secret',
+      taostatsRateLimiter: null,
+      wallets: [],
+    },
+    taostats,
+  });
+
+  const running = service.backfillAllSubnetHistoricalSnapshots({ days: 7, frequency: 'by_day', overwrite: true });
+  let activeJob = null;
+  for (let i = 0; i < 100; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    activeJob = service.getActiveJob();
+    if (activeJob?.processed === 1 && activeJob?.total === 2 && activeJob?.currentNetuid === 65) break;
+  }
+
+  assert.ok(activeJob);
+  assert.equal(activeJob.total, 2);
+  assert.equal(activeJob.processed, 1);
+  assert.equal(activeJob.remaining, 1);
+  assert.equal(activeJob.currentNetuid, 65);
+  assert.equal(Number.isFinite(activeJob.etaMs), true);
+  assert.equal(Number.isFinite(activeJob.progressPct), true);
+
+  resolveSecond([]);
+  const result = await running;
+  assert.equal(result.ok, true);
+  assert.equal(service.getActiveJob(), null);
+  db.close();
+});
+
 test('sqlite persistence stores and retrieves wallet transactions', () => {
   const db = openDatabase(':memory:');
   const walletConfig = { name: 'Alpha Treasury', ss58: '5WalletAlpha123456789ABCDEFGH', network: 'finney', hotkeys: [] };
@@ -3871,6 +3949,66 @@ test('dashboard admin panel requires an authenticated admin session', async () =
       headers: { cookie },
     });
     assert.equal(authenticatedPost.status, 200);
+  } finally {
+    await app.close();
+    db.close();
+  }
+});
+
+test('admin active job endpoint exposes live subnet progress details', async () => {
+  const db = openDatabase(':memory:');
+  const app = createDashboardServer({
+    db,
+    ingestService: {
+      getActiveJob: () => ({
+        kind: 'all-subnet-historical-backfill',
+        label: 'All subnet historical backfill',
+        startedAtIso: '2026-05-22T12:00:00.000Z',
+        processed: 37,
+        total: 84,
+        remaining: 47,
+        currentNetuid: 110,
+        currentLabel: 'SN110',
+        etaMs: 120000,
+        etaIso: '2026-05-22T12:02:00.000Z',
+      }),
+      isActive: () => true,
+      backfillHistoricalSnapshots: async () => ({ ok: true, inserted: 0, flowInserted: 0, priceInserted: 0 }),
+      backfillSubnetCatalogSnapshots: async () => ({ ok: true, fetched: 0, inserted: 0, skipped: 0, deleted: 0 }),
+      ingestOnce: async () => ({ ok: true, source: 'api' }),
+    },
+    config: {
+      netuid: 110,
+      taostatsAuthHeader: '',
+      taostatsAdminApiKey: 'admin-secret',
+      pollIntervalMinutes: 60,
+      nextPollAtIso: null,
+      wallets: [],
+    },
+  });
+  const server = await app.start(0);
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const login = await fetch(`${baseUrl}/admin/login`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ adminKey: 'admin-secret' }),
+    });
+    assert.equal(login.status, 303);
+    const cookie = login.headers.get('set-cookie');
+    const response = await fetch(`${baseUrl}/api/admin/active-job`, {
+      headers: { cookie },
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.active, true);
+    assert.equal(payload.activeJob.kind, 'all-subnet-historical-backfill');
+    assert.equal(payload.activeJob.processed, 37);
+    assert.equal(payload.activeJob.total, 84);
+    assert.equal(payload.activeJob.remaining, 47);
+    assert.equal(payload.activeJob.currentNetuid, 110);
+    assert.equal(payload.activeJob.etaMs, 120000);
   } finally {
     await app.close();
     db.close();
