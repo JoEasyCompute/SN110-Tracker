@@ -5584,6 +5584,36 @@ function renderDashboardClientScript({ netuid, config }) {
         }
       }
 
+      function formatDurationShort(ms) {
+        const value = Math.max(0, Math.round(Number(ms) || 0));
+        const seconds = Math.floor(value / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+        if (hours > 0) return hours + 'h ' + (minutes % 60) + 'm';
+        if (minutes > 0) return minutes + 'm ' + (seconds % 60) + 's';
+        return seconds + 's';
+      }
+
+      function beginTimedAdminStatus(updateStatus, prefix) {
+        const startedAt = Date.now();
+        let intervalId = null;
+        const render = () => updateStatus(prefix + ' (elapsed ' + formatDurationShort(Date.now() - startedAt) + ')…', 'info');
+        render();
+        intervalId = window.setInterval(render, 1000);
+        return {
+          startedAt,
+          stop() {
+            if (intervalId !== null) {
+              window.clearInterval(intervalId);
+              intervalId = null;
+            }
+          },
+          elapsedMs() {
+            return Math.max(0, Date.now() - startedAt);
+          },
+        };
+      }
+
       function updateBackfillStatus(message, kind = 'info') {
         if (!backfillStatus) return;
         if (!message) {
@@ -5785,7 +5815,7 @@ function renderDashboardClientScript({ netuid, config }) {
         }
         subnetHistoryBackfillButton.disabled = true;
         setProgressVisible(subnetHistoryBackfillProgress, true);
-        updateSubnetHistoryBackfillStatus('Backfilling historical snapshots for every subnet in the live catalog…', 'info');
+        const timing = beginTimedAdminStatus(updateSubnetHistoryBackfillStatus, 'Backfilling historical snapshots for every subnet in the live catalog');
         try {
           const response = await fetch('/api/subnets/catalog/history/backfill', {
             method: 'POST',
@@ -5799,13 +5829,15 @@ function renderDashboardClientScript({ netuid, config }) {
           const inserted = Number(payload.subnetHistoryBackfill?.inserted ?? 0);
           const subnetCount = Number(payload.subnetHistoryBackfill?.detail?.netuids ?? 0);
           const skipped = Number(payload.subnetHistoryBackfill?.skipped ?? 0);
+          const durationMs = Number(payload.subnetHistoryBackfill?.durationMs ?? payload.subnetHistoryBackfill?.detail?.durationMs ?? timing.elapsedMs());
           const overwriteLabel = options.overwrite ? ' with overwrite' : '';
-          updateSubnetHistoryBackfillStatus('Historical subnet backfill complete' + overwriteLabel + ': ' + inserted + ' rows imported across ' + subnetCount + ' subnets' + (skipped ? ', ' + skipped + ' skipped' : '') + '.', 'success');
+          updateSubnetHistoryBackfillStatus('Historical subnet backfill complete' + overwriteLabel + ': ' + inserted + ' rows imported across ' + subnetCount + ' subnets' + (skipped ? ', ' + skipped + ' skipped' : '') + ' in ' + formatDurationShort(durationMs) + '.', 'success');
           window.setTimeout(() => window.location.reload(), 1200);
         } catch (error) {
           updateSubnetHistoryBackfillStatus(error?.message || 'Historical subnet backfill failed', 'error');
           console.error(error);
         } finally {
+          timing.stop();
           setProgressVisible(subnetHistoryBackfillProgress, false);
           subnetHistoryBackfillButton.disabled = false;
         }
@@ -5816,7 +5848,7 @@ function renderDashboardClientScript({ netuid, config }) {
         const options = readSubnetCatalogBackfillOptions();
         subnetCatalogBackfillButton.disabled = true;
         setProgressVisible(subnetCatalogBackfillProgress, true);
-        updateSubnetCatalogBackfillStatus('Capturing the live Taostats subnet table for all subnets…', 'info');
+        const timing = beginTimedAdminStatus(updateSubnetCatalogBackfillStatus, 'Capturing the live Taostats subnet table for all subnets');
         try {
           const response = await fetch('/api/subnets/catalog/backfill', {
             method: 'POST',
@@ -5829,13 +5861,15 @@ function renderDashboardClientScript({ netuid, config }) {
           }
           const inserted = Number(payload.subnetTableBackfill?.inserted ?? 0);
           const skipped = Number(payload.subnetTableBackfill?.skipped ?? 0);
+          const durationMs = Number(payload.subnetTableBackfill?.durationMs ?? payload.subnetTableBackfill?.detail?.durationMs ?? timing.elapsedMs());
           const overwriteLabel = options.overwrite ? ' with overwrite' : '';
-          updateSubnetCatalogBackfillStatus('Subnet table snapshot complete' + overwriteLabel + ': ' + inserted + ' subnet rows stored' + (skipped ? ', ' + skipped + ' skipped' : '') + '.', 'success');
+          updateSubnetCatalogBackfillStatus('Subnet table snapshot complete' + overwriteLabel + ': ' + inserted + ' subnet rows stored' + (skipped ? ', ' + skipped + ' skipped' : '') + ' in ' + formatDurationShort(durationMs) + '.', 'success');
           window.setTimeout(() => window.location.reload(), 1200);
         } catch (error) {
           updateSubnetCatalogBackfillStatus(error?.message || 'Subnet table snapshot failed', 'error');
           console.error(error);
         } finally {
+          timing.stop();
           setProgressVisible(subnetCatalogBackfillProgress, false);
           subnetCatalogBackfillButton.disabled = false;
         }

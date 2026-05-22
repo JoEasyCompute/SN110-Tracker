@@ -4705,7 +4705,7 @@ test('subnet table snapshot backfill endpoint captures the live catalog without 
       backfillHistoricalSnapshots: async () => ({ ok: true, inserted: 0, flowInserted: 0, priceInserted: 0 }),
       backfillSubnetCatalogSnapshots: async (args) => {
         backfillArgs = args;
-        return { ok: true, source: 'subnet-catalog-snapshot', fetched: 2, inserted: 2, skipped: 0, deleted: 0 };
+        return { ok: true, source: 'subnet-catalog-snapshot', fetched: 2, inserted: 2, skipped: 0, deleted: 0, durationMs: 1500 };
       },
       ingestOnce: async () => ({ ok: true, source: 'api' }),
     },
@@ -4729,6 +4729,7 @@ test('subnet table snapshot backfill endpoint captures the live catalog without 
   assert.deepEqual(backfillArgs, { overwrite: true });
   assert.equal(payload.subnetTableBackfill.ok, true);
   assert.equal(payload.subnetTableBackfill.inserted, 2);
+  assert.equal(payload.subnetTableBackfill.durationMs, 1500);
   await app.close();
   db.close();
 });
@@ -4742,7 +4743,7 @@ test('historical per-subnet backfill endpoint runs against the live catalog with
       backfillHistoricalSnapshots: async () => ({ ok: true, inserted: 0, flowInserted: 0, priceInserted: 0 }),
       backfillAllSubnetHistoricalSnapshots: async (args) => {
         backfillArgs = args;
-        return { ok: true, source: 'all-subnet-historical-backfill', fetched: 4, inserted: 4, skipped: 0, deleted: 0, detail: { netuids: 2 } };
+        return { ok: true, source: 'all-subnet-historical-backfill', fetched: 4, inserted: 4, skipped: 0, deleted: 0, durationMs: 2400, detail: { netuids: 2 } };
       },
       ingestOnce: async () => ({ ok: true, source: 'api' }),
     },
@@ -4769,6 +4770,7 @@ test('historical per-subnet backfill endpoint runs against the live catalog with
   assert.deepEqual(backfillArgs, { days: 14, frequency: 'by_day', overwrite: true });
   assert.equal(payload.subnetHistoryBackfill.ok, true);
   assert.equal(payload.subnetHistoryBackfill.detail.netuids, 2);
+  assert.equal(payload.subnetHistoryBackfill.durationMs, 2400);
   await app.close();
   db.close();
 });

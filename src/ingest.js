@@ -644,6 +644,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       limit,
     });
     const startedIso = startedAt.toISOString();
+    const durationMs = () => Math.max(0, Date.now() - startedAt.getTime());
     let ok = false;
     let source = 'subnet-catalog-snapshot';
     let errorMessage = null;
@@ -704,6 +705,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       detail.inserted = inserted;
       detail.skipped = skipped;
       detail.deleted = deleted;
+      detail.durationMs = durationMs();
       return {
         ok,
         source,
@@ -711,6 +713,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         inserted,
         skipped,
         deleted,
+        durationMs: durationMs(),
         snapshotId,
         detail,
         message,
@@ -725,6 +728,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         inserted,
         skipped,
         deleted,
+        durationMs: durationMs(),
         snapshotId: null,
         detail,
         error: errorMessage,
@@ -771,6 +775,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
       limit,
     });
     const startedIso = startedAt.toISOString();
+    const durationMs = () => Math.max(0, Date.now() - startedAt.getTime());
     let ok = false;
     let source = 'all-subnet-historical-backfill';
     let errorMessage = null;
@@ -878,6 +883,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
           inserted,
           skipped,
           deleted,
+          durationMs: durationMs(),
           snapshotId,
           detail,
           message,
@@ -895,6 +901,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         inserted,
         skipped,
         deleted,
+        durationMs: durationMs(),
         snapshotId,
         detail,
         message,
@@ -909,6 +916,7 @@ function createIngestService({ db, config, taostats = defaultTaostats } = {}) {
         inserted,
         skipped,
         deleted,
+        durationMs: durationMs(),
         snapshotId: null,
         detail,
         error: errorMessage,
