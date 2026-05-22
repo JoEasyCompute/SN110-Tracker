@@ -20,6 +20,7 @@ const {
   getLatestIngestRunBySource,
   getLatestIngestRunBySources,
   getSubnetMetadata,
+  getSubnetSnapshotCoverageRows,
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
   getAlphaHolderLatestRanking,
@@ -2931,6 +2932,7 @@ function buildPageModel({ db, config, netuid }) {
   const latestAlphaHolderCount = latest ? getLatestAlphaHolderCount(db, netuid) : null;
   const historyWithAlphaHolders = attachAlphaHolderCounts(history, alphaHolderHistoryCounts);
   const subnetMetadata = getSubnetMetadata(db, netuid);
+  const subnetCoverageRows = getSubnetSnapshotCoverageRows(db, 1000);
   const latestWithPrice = latest
     ? {
         ...latest,
@@ -3022,6 +3024,7 @@ function buildPageModel({ db, config, netuid }) {
     alphaHolderCurrentRankRow,
     alphaHolderRankHistory,
     alphaHolderRankHistoryStartAt: alphaHolderRankHistory[0]?.captured_at ?? null,
+    subnetCoverageRows,
     scheduleStatus,
     scheduleQueue,
     alphaHolderBackfillActive,
@@ -3260,7 +3263,7 @@ function renderHistoryTable(rows) {
   `;
 }
 
-function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null, scheduleStatus = [], scheduleQueue = [], alphaHolderBackfillActive = false, alphaHolderBackfillStartedAtIso = null, experimental = false }) {
+function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, pollIntervalButtons, walletActivityStatus = null, scheduleStatus = [], scheduleQueue = [], alphaHolderBackfillActive = false, alphaHolderBackfillStartedAtIso = null, subnetCoverageRows = [], experimental = false }) {
   if (!config.adminAuthenticated) {
     return '';
   }
@@ -3284,6 +3287,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
   const adminQueueClass = experimental ? 'panel admin-queue admin-queue-secondary' : 'panel';
   const adminBackfillClass = experimental ? 'panel admin-backfill admin-backfill-secondary' : 'panel';
   const adminCatalogClass = experimental ? 'panel admin-catalog admin-catalog-secondary' : 'panel';
+  const adminCoverageClass = experimental ? 'panel admin-coverage admin-coverage-secondary' : 'panel';
   const adminChainBuysClass = experimental ? 'panel admin-chain-buys admin-chain-buys-secondary' : 'panel';
   const adminWalletClass = experimental ? 'panel admin-wallet admin-wallet-secondary' : 'panel';
   const adminWalletExportClass = experimental ? 'panel admin-wallet-export admin-wallet-export-secondary' : 'panel admin-wallet-export';
@@ -3293,6 +3297,7 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
   const defaultExportStart = formatDateInputValue(new Date(today.getTime() - (29 * 24 * 60 * 60 * 1000)));
   const defaultBackfillEnd = defaultExportEnd;
   const defaultBackfillStart = defaultExportStart;
+  const coverageRows = Array.isArray(subnetCoverageRows) ? subnetCoverageRows : [];
   return `
       <details class="${adminPanelClass}">
         <summary>Admin panel</summary>
@@ -3336,6 +3341,44 @@ function renderAdminPanel({ netuid, config, recent, latestRunCard, ingestRun, po
               <progress class="admin-progress" id="subnet-catalog-backfill-progress" hidden></progress>
               <p class="empty" id="subnet-catalog-backfill-status" hidden></p>
             </div>
+          </div>
+          <div class="${adminCoverageClass}">
+            <h3>Historical coverage</h3>
+            <p class="admin-helper">This shows the first and latest historical snapshot currently stored for each subnet, plus how many days and rows are available locally.</p>
+            ${coverageRows.length ? `
+              <div class="table-wrap admin-coverage-table-wrap">
+                <table class="admin-coverage-table">
+                  <thead>
+                    <tr>
+                      <th>Subnet</th>
+                      <th>Snapshots</th>
+                      <th>Days</th>
+                      <th>Earliest</th>
+                      <th>Latest</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${coverageRows.map((row) => {
+                      const subnetLabel = formatSubnetLabel(row.subnet_name ?? null, row.netuid);
+                      const earliest = row.earliest_captured_at ? formatRelativeIso(row.earliest_captured_at) : '—';
+                      const latest = row.latest_captured_at ? formatRelativeIso(row.latest_captured_at) : '—';
+                      const earliestTitle = row.earliest_captured_at ? formatIso(row.earliest_captured_at) : '';
+                      const latestTitle = row.latest_captured_at ? formatIso(row.latest_captured_at) : '';
+                      const isCurrent = Number(row.netuid) === Number(netuid);
+                      return `
+                        <tr${isCurrent ? ' class="current-subnet-row"' : ''}>
+                          <td><strong>${escapeHtml(subnetLabel)}</strong><div class="muted">SN${escapeHtml(String(row.netuid))}${row.subnet_symbol ? ` · ${escapeHtml(String(row.subnet_symbol))}` : ''}</div></td>
+                          <td>${escapeHtml(integer(row.snapshot_count))}</td>
+                          <td>${escapeHtml(integer(row.day_count))}</td>
+                          <td title="${escapeHtml(earliestTitle)}">${escapeHtml(earliest)}</td>
+                          <td title="${escapeHtml(latestTitle)}">${escapeHtml(latest)}</td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            ` : `<p class="empty">No subnet history has been stored yet. Use the backfill controls above to seed coverage.</p>`}
           </div>
           <div class="${adminBackfillClass}">
             <h3>Backfill</h3>
@@ -7776,6 +7819,7 @@ function renderPage(model, { experimental = false } = {}) {
     scheduleQueue,
     alphaHolderBackfillActive,
     alphaHolderBackfillStartedAtIso,
+    subnetCoverageRows,
     subnetLabel,
   } = model;
   const latestMetricDefs = getLatestMetricDefs();
@@ -9426,8 +9470,10 @@ function renderPage(model, { experimental = false } = {}) {
       table { width: 100%; border-collapse: collapse; min-width: 900px; background: rgba(16, 23, 34, 0.88); }
       table.alpha-holder-table { min-width: 760px; }
       table.alpha-holder-ranking-table { min-width: 860px; }
+      table.admin-coverage-table { min-width: 720px; }
       th, td { padding: 12px 14px; border-bottom: 1px solid var(--border); text-align: left; }
       th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+      tr.current-subnet-row td { background: rgba(0, 219, 188, 0.08); }
       .empty { color: var(--muted); padding: 16px; }
       .empty[data-status=\"warning\"] { color: #f59e0b; }
       .empty[data-status=\"error\"] { color: #f87171; }
@@ -10999,6 +11045,7 @@ function renderPage(model, { experimental = false } = {}) {
         scheduleQueue,
         alphaHolderBackfillActive,
         alphaHolderBackfillStartedAtIso,
+        subnetCoverageRows,
         experimental,
       })}
 

@@ -1330,6 +1330,35 @@ function getSubnetMetadata(db, netuid) {
   return stmt.get(netuid) || null;
 }
 
+function getSubnetSnapshotCoverageRows(db, limit = 1000) {
+  const rows = db.prepare(`
+    SELECT
+      s.netuid,
+      COALESCE(MAX(sm.name), MAX(s.name)) AS subnet_name,
+      COALESCE(MAX(sm.symbol), MAX(s.symbol)) AS subnet_symbol,
+      COUNT(*) AS snapshot_count,
+      COUNT(DISTINCT substr(s.captured_at, 1, 10)) AS day_count,
+      MIN(s.captured_at) AS earliest_captured_at,
+      MAX(s.captured_at) AS latest_captured_at
+    FROM snapshots s
+    LEFT JOIN subnet_metadata sm
+      ON sm.netuid = s.netuid
+    GROUP BY s.netuid
+    ORDER BY MAX(s.captured_at) DESC, COUNT(*) DESC, s.netuid ASC
+    LIMIT ?
+  `).all(limit);
+
+  return rows.map((row) => ({
+    netuid: Number(row.netuid),
+    subnet_name: row.subnet_name ?? null,
+    subnet_symbol: row.subnet_symbol ?? null,
+    snapshot_count: Number(row.snapshot_count ?? 0),
+    day_count: Number(row.day_count ?? 0),
+    earliest_captured_at: row.earliest_captured_at ?? null,
+    latest_captured_at: row.latest_captured_at ?? null,
+  }));
+}
+
 function getLatestAlphaHolderSnapshots(db, netuid, limit = 25) {
   const stmt = db.prepare(`
     SELECT *
@@ -2108,6 +2137,7 @@ module.exports = {
   getLatestWalletStakePositions,
   getSubnetMetadata,
   getSubnetMetadataMap,
+  getSubnetSnapshotCoverageRows,
   getLatestAlphaHolderSnapshots,
   getLatestAlphaHolderCount,
   getLatestAlphaHolderCountsBySubnet,

@@ -53,6 +53,7 @@ const {
   getAlphaHolderSnapshotHistory,
   getAlphaHolderSnapshotCounts,
   getSubnetMetadata,
+  getSubnetSnapshotCoverageRows,
   countAlphaHolderSnapshots,
   getWalletHistory,
   getWalletTransactions,
@@ -975,6 +976,89 @@ test('historical per-subnet backfill stores the same historical window for every
   assert.equal(result.skipped, 0);
   assert.equal(getRecentSnapshots(db, 64, 10).length, 2);
   assert.equal(getRecentSnapshots(db, 65, 10).length, 2);
+  db.close();
+});
+
+test('subnet snapshot coverage rows expose earliest and latest dates for tracked subnets', () => {
+  const db = openDatabase(':memory:');
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 64,
+    block_number: 640001,
+    timestamp: '2026-05-01T00:00:00Z',
+    name: 'Chutes',
+    symbol: 'CHU',
+    price: '1.0',
+    market_cap: '100',
+    liquidity: '50',
+    emission: '10',
+    projected_emission: '11',
+    incentive_burn: '0.1',
+    recycled_24_hours: '1000',
+    excess_tao: '7500000',
+    neuron_registration_cost: '500000',
+    active_keys: 100,
+    max_neurons: 256,
+    net_flow_1_day: '20',
+    net_flow_7_days: '30',
+    net_flow_30_days: '40',
+    root_sell: 'NO',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid/api/subnet/history/v1', netuid: 64, capturedAt: '2026-05-01T00:00:00Z' }));
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 64,
+    block_number: 640002,
+    timestamp: '2026-05-02T00:00:00Z',
+    name: 'Chutes',
+    symbol: 'CHU',
+    price: '1.1',
+    market_cap: '110',
+    liquidity: '55',
+    emission: '11',
+    projected_emission: '12',
+    incentive_burn: '0.1',
+    recycled_24_hours: '1000',
+    excess_tao: '7500000',
+    neuron_registration_cost: '500000',
+    active_keys: 101,
+    max_neurons: 256,
+    net_flow_1_day: '21',
+    net_flow_7_days: '31',
+    net_flow_30_days: '41',
+    root_sell: 'NO',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid/api/subnet/history/v1', netuid: 64, capturedAt: '2026-05-02T00:00:00Z' }));
+  insertSnapshot(db, normalizeSnapshot({
+    netuid: 65,
+    block_number: 650001,
+    timestamp: '2026-05-03T00:00:00Z',
+    name: 'Mantis',
+    symbol: 'MAN',
+    price: '2.0',
+    market_cap: '200',
+    liquidity: '75',
+    emission: '15',
+    projected_emission: '16',
+    incentive_burn: '0.2',
+    recycled_24_hours: '2000',
+    excess_tao: '7500000',
+    neuron_registration_cost: '600000',
+    active_keys: 200,
+    max_neurons: 512,
+    net_flow_1_day: '25',
+    net_flow_7_days: '35',
+    net_flow_30_days: '45',
+    root_sell: 'NO',
+  }, { source: 'api-history', sourceUrl: 'https://example.invalid/api/subnet/history/v1', netuid: 65, capturedAt: '2026-05-03T00:00:00Z' }));
+
+  const rows = getSubnetSnapshotCoverageRows(db);
+
+  assert.equal(rows.length, 2);
+  const row64 = rows.find((row) => row.netuid === 64);
+  const row65 = rows.find((row) => row.netuid === 65);
+  assert.equal(row64?.earliest_captured_at, '2026-05-01T00:00:00Z');
+  assert.equal(row64?.latest_captured_at, '2026-05-02T00:00:00Z');
+  assert.equal(row64?.snapshot_count, 2);
+  assert.equal(row64?.day_count, 2);
+  assert.equal(row65?.latest_captured_at, '2026-05-03T00:00:00Z');
+  assert.equal(row65?.earliest_captured_at, '2026-05-03T00:00:00Z');
   db.close();
 });
 
@@ -3496,6 +3580,15 @@ test('renderPage exposes wallet alpha stake export controls in the admin drawer'
     scheduleQueue: [],
     alphaHolderBackfillActive: false,
     alphaHolderBackfillStartedAtIso: null,
+    subnetCoverageRows: [{
+      netuid: 64,
+      subnet_name: 'Chutes',
+      subnet_symbol: 'CHU',
+      snapshot_count: 2,
+      day_count: 2,
+      earliest_captured_at: '2026-05-01T00:00:00Z',
+      latest_captured_at: '2026-05-02T00:00:00Z',
+    }],
     subnetLabel: 'Green Compute (SN110)',
   });
 
@@ -3503,6 +3596,8 @@ test('renderPage exposes wallet alpha stake export controls in the admin drawer'
   assert.equal(html.includes('id="wallet-stake-export-start"'), true);
   assert.equal(html.includes('id="wallet-stake-export-end"'), true);
   assert.equal(html.includes('id="wallet-stake-export-btn"'), true);
+  assert.equal(html.includes('Historical coverage'), true);
+  assert.equal(html.includes('Chutes'), true);
 });
 
 test('experimental render uses an overview-first layout with collapsed details', () => {
