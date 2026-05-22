@@ -140,6 +140,7 @@ function loadConfig() {
   const taostatsWalletActivityBackfillDays = intOr(60, process.env.TAOSTATS_WALLET_ACTIVITY_BACKFILL_DAYS);
   const taostatsWalletActivitySyncDays = intOr(7, process.env.TAOSTATS_WALLET_ACTIVITY_SYNC_DAYS);
   const taostatsWalletActivitySyncIntervalMinutes = intOr(60, process.env.TAOSTATS_WALLET_ACTIVITY_SYNC_INTERVAL_MINUTES);
+  const taostatsSubnetCatalogSnapshotIntervalMinutes = intOr(10, process.env.TAOSTATS_SUBNET_CATALOG_SNAPSHOT_INTERVAL_MINUTES);
   const wallets = parseWalletConfigs(process.env);
 
   return {
@@ -161,6 +162,7 @@ function loadConfig() {
     taostatsWalletActivityBackfillDays,
     taostatsWalletActivitySyncDays,
     taostatsWalletActivitySyncIntervalMinutes,
+    taostatsSubnetCatalogSnapshotIntervalMinutes,
     wallets,
     userAgent: 'sn110-tracker/1.0 (+local dashboard)',
   };

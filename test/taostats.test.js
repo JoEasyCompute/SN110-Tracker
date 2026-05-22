@@ -2845,6 +2845,19 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
   });
   insertIngestRun(db, {
     netuid: 110,
+    started_at: '2026-05-16T00:08:30.000Z',
+    finished_at: '2026-05-16T00:09:00.000Z',
+    duration_ms: 30000,
+    source: 'subnet-catalog-snapshot',
+    fallback_used: false,
+    ok: true,
+    snapshot_id: null,
+    message: 'subnet table snapshot complete',
+    error: null,
+    detail_json: JSON.stringify({ fetched: 84, inserted: 84, skipped: 0, deleted: 0 }),
+  });
+  insertIngestRun(db, {
+    netuid: 110,
     started_at: '2026-05-16T00:09:00.000Z',
     finished_at: '2026-05-16T00:10:00.000Z',
     duration_ms: 60000,
@@ -2865,8 +2878,10 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
       adminAuthenticated: true,
       pollIntervalMinutes: 15,
       nextPollAtIso: '2026-05-16T01:00:00.000Z',
+      nextSubnetCatalogSnapshotAtIso: '2026-05-16T01:10:00.000Z',
       nextWalletActivitySyncAtIso: '2026-05-16T02:00:00.000Z',
       nextAlphaHolderSnapshotAtIso: '2026-05-17T00:00:00.000Z',
+      taostatsSubnetCatalogSnapshotIntervalMinutes: 10,
       ingestActive: true,
       activeIngestJob: {
         kind: 'subnet-ingest',
@@ -2879,15 +2894,17 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
     netuid: 110,
   });
   const html = renderPage(model);
-  assert.equal(model.scheduleStatus.length, 3);
-  assert.equal(model.scheduleQueue.length, 4);
+  assert.equal(model.scheduleStatus.length, 4);
+  assert.equal(model.scheduleQueue.length, 5);
   assert.equal(model.scheduleQueue[0].type, 'active');
   assert.equal(model.scheduleQueue[0].label, 'Subnet 110 ingest');
   assert.equal(model.scheduleQueue[1].key, 'schedule-polling');
-  assert.equal(model.scheduleQueue[2].key, 'schedule-wallet-activity');
-  assert.equal(model.scheduleQueue[3].key, 'schedule-alpha-holder');
+  assert.equal(model.scheduleQueue[2].key, 'schedule-subnet-catalog-snapshot');
+  assert.equal(model.scheduleQueue[3].key, 'schedule-wallet-activity');
+  assert.equal(model.scheduleQueue[4].key, 'schedule-alpha-holder');
   assert.equal(model.alphaHolderBackfillActive, true);
   assert.equal(model.scheduleStatus.find((row) => row.key === 'polling')?.lastRun?.source, 'scrape');
+  assert.equal(model.scheduleStatus.find((row) => row.key === 'subnet-catalog-snapshot')?.lastRun?.source, 'subnet-catalog-snapshot');
   assert.equal(model.scheduleStatus.find((row) => row.key === 'wallet-activity')?.lastRun?.source, 'wallet-activity');
   assert.equal(model.scheduleStatus.find((row) => row.key === 'alpha-holder')?.lastRun?.source, 'alpha-holder-snapshot-all');
   assert.equal(html.includes('Schedules & runs'), true);
@@ -2896,6 +2913,7 @@ test('renderPage shows hidden admin schedule status with last-run errors', () =>
   assert.equal(html.includes('Running job first, then the next scheduled work in order.'), true);
   assert.equal(html.includes('Background polling is paused while alpha-holder backfill is running'), true);
   assert.equal(html.includes('Subnet poll ingest'), true);
+  assert.equal(html.includes('Subnet table snapshot'), true);
   assert.equal(html.includes('Wallet activity sync'), true);
   assert.equal(html.includes('Alpha-holder snapshot'), true);
   assert.equal(html.includes('Subnet 110 ingest started'), true);
@@ -5130,6 +5148,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     'TAOSTATS_BACKFILL_FREQUENCY=by_day',
     'TAOSTATS_BACKFILL_ON_STARTUP=true',
     'TAOSTATS_BACKFILL_OVERWRITE=true',
+    'TAOSTATS_SUBNET_CATALOG_SNAPSHOT_INTERVAL_MINUTES=10',
     'TAOSTATS_WALLET_1_NAME=Treasury',
     'TAOSTATS_WALLET_1_COLDKEY=5WalletAlpha123456789ABCDEFGH',
     'TAOSTATS_WALLET_1_SS58=5WalletAlpha123456789ABCDEFGH',
@@ -5142,7 +5161,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     'TAOSTATS_WALLET_2_COLDKEY=5WalletBeta123456789ABCDEFGH',
   ].join('\n'));
 
-  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_ADMIN_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_COLDKEY', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_1_HOTKEY_1_NAME', 'TAOSTATS_WALLET_1_HOTKEY_1_SS58', 'TAOSTATS_WALLET_1_HOTKEY_1_NETUID', 'TAOSTATS_WALLET_1_HOTKEY_1_ROLE', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_COLDKEY', 'TAOSTATS_WALLET_2_SS58'];
+  const envKeys = ['PORT', 'TAOSTATS_NETUID', 'TAOSTATS_API_KEY', 'TAOSTATS_ADMIN_API_KEY', 'TAOSTATS_AUTH_HEADER', 'POLL_INTERVAL_MINUTES', 'TAOSTATS_PUBLIC_BASE_URL', 'TAOSTATS_BACKFILL_DAYS', 'TAOSTATS_BACKFILL_FREQUENCY', 'TAOSTATS_BACKFILL_ON_STARTUP', 'TAOSTATS_BACKFILL_OVERWRITE', 'TAOSTATS_SUBNET_CATALOG_SNAPSHOT_INTERVAL_MINUTES', 'TAOSTATS_WALLET_1_NAME', 'TAOSTATS_WALLET_1_COLDKEY', 'TAOSTATS_WALLET_1_SS58', 'TAOSTATS_WALLET_1_NETWORK', 'TAOSTATS_WALLET_1_HOTKEY_1_NAME', 'TAOSTATS_WALLET_1_HOTKEY_1_SS58', 'TAOSTATS_WALLET_1_HOTKEY_1_NETUID', 'TAOSTATS_WALLET_1_HOTKEY_1_ROLE', 'TAOSTATS_WALLET_2_NAME', 'TAOSTATS_WALLET_2_COLDKEY', 'TAOSTATS_WALLET_2_SS58'];
   const backup = Object.fromEntries(envKeys.map((key) => [key, Object.prototype.hasOwnProperty.call(process.env, key) ? process.env[key] : undefined]));
 
   try {
@@ -5163,6 +5182,7 @@ test('loadConfig reads environment values from a local .env file', () => {
     assert.equal(config.taostatsBackfillFrequency, 'by_day');
     assert.equal(config.taostatsBackfillOnStartup, true);
     assert.equal(config.taostatsBackfillOverwrite, true);
+    assert.equal(config.taostatsSubnetCatalogSnapshotIntervalMinutes, 10);
     assert.equal(config.wallets.length, 2);
     assert.equal(config.wallets[0].name, 'Treasury');
     assert.equal(config.wallets[0].coldkey, '5WalletAlpha123456789ABCDEFGH');

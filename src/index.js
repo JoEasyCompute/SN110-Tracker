@@ -23,6 +23,7 @@ async function main() {
   const ingestService = createIngestService({ db, config });
   let timer = null;
   let walletActivityTimer = null;
+  let subnetCatalogTimer = null;
   let alphaHolderTimer = null;
   let schedulerQueue = Promise.resolve();
   const isAlphaHolderBackfillActive = () => ingestService.isAlphaHolderBackfillActive();
@@ -194,6 +195,39 @@ async function main() {
     };
   };
 
+  const scheduleSubnetCatalogSnapshot = (minutes = config.taostatsSubnetCatalogSnapshotIntervalMinutes || 10) => {
+    if (!config.taostatsAuthHeader) {
+      return null;
+    }
+    const normalizedMinutes = Number.isFinite(Number(minutes)) && Number(minutes) > 0
+      ? Number(minutes)
+      : 10;
+    config.taostatsSubnetCatalogSnapshotIntervalMinutes = normalizedMinutes;
+    if (subnetCatalogTimer) {
+      subnetCatalogTimer.stop();
+      subnetCatalogTimer = null;
+    }
+    subnetCatalogTimer = createRecurringSerialScheduler({
+      initialDelayMs: normalizedMinutes * 60 * 1000,
+      getDefaultDelayMs: () => normalizedMinutes * 60 * 1000,
+      isPaused: () => ingestService.isActive() || isAlphaHolderBackfillActive(),
+      updateNextRunIso: (iso) => {
+        config.nextSubnetCatalogSnapshotAtIso = iso;
+      },
+      run: async () => {
+        const result = await ingestService.backfillSubnetCatalogSnapshots({ overwrite: false });
+        if (result?.skipped && result.reason === 'ingest already running') {
+          return { retryAfterMs: 30_000 };
+        }
+        return result;
+      },
+    });
+    return {
+      subnetCatalogSnapshotIntervalMinutes: normalizedMinutes,
+      nextSubnetCatalogSnapshotAtIso: config.nextSubnetCatalogSnapshotAtIso,
+    };
+  };
+
   const app = createDashboardServer({
     db,
     ingestService,
@@ -207,6 +241,7 @@ async function main() {
 
   schedulePolling(config.pollIntervalMinutes);
   scheduleWalletActivitySync(config.taostatsWalletActivitySyncIntervalMinutes);
+  scheduleSubnetCatalogSnapshot(config.taostatsSubnetCatalogSnapshotIntervalMinutes);
   scheduleAlphaHolderSnapshot();
   await app.start(config.port);
   console.log(`SN${config.netuid} dashboard running on http://localhost:${config.port}`);
@@ -221,6 +256,7 @@ async function main() {
     console.log(`Wallet activity sync: every ${config.taostatsWalletActivitySyncIntervalMinutes} minute${config.taostatsWalletActivitySyncIntervalMinutes === 1 ? '' : 's'} (recent ${config.taostatsWalletActivitySyncDays} days)`);
   }
   if (config.taostatsAuthHeader) {
+    console.log(`Subnet table snapshots: every ${config.taostatsSubnetCatalogSnapshotIntervalMinutes} minute${config.taostatsSubnetCatalogSnapshotIntervalMinutes === 1 ? '' : 's'}`);
     console.log('Alpha-holder snapshots: all subnets daily at UTC midnight');
   }
   if (isAlphaHolderBackfillActive()) {
@@ -259,6 +295,9 @@ async function main() {
     }
     if (walletActivityTimer) {
       walletActivityTimer.stop();
+    }
+    if (subnetCatalogTimer) {
+      subnetCatalogTimer.stop();
     }
     if (alphaHolderTimer) {
       alphaHolderTimer.stop();

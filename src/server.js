@@ -2448,7 +2448,7 @@ function buildScheduleQueuePreview(schedules = [], {
     .sort((left, right) => new Date(left.nextRunIso).getTime() - new Date(right.nextRunIso).getTime());
 
   queue.push(...upcoming);
-  return queue.slice(0, 4);
+  return queue.slice(0, 5);
 }
 
 function renderScheduleQueuePreview(queue = [], { paused = false, backfillStartedAtIso = null } = {}) {
@@ -2950,6 +2950,7 @@ function buildPageModel({ db, config, netuid }) {
     hotkeys: Array.isArray(wallet.hotkeys) ? wallet.hotkeys : [],
   }));
   const latestWalletActivityRun = getLatestIngestRunBySource(db, 'wallet-activity');
+  const latestSubnetCatalogSnapshotRun = getLatestIngestRunBySource(db, 'subnet-catalog-snapshot');
   const latestAlphaHolderRun = getLatestIngestRunBySource(db, 'alpha-holder-snapshot-all');
   const latestSubnetPollRun = getLatestIngestRunBySources(db, netuid, ['api', 'scrape']);
   const alphaHolderBackfillActive = String(getSetting(db, 'alpha_holder_backfill_active') || '').trim() === '1';
@@ -2969,6 +2970,17 @@ function buildPageModel({ db, config, netuid }) {
       enabled: true,
       paused: alphaHolderBackfillActive,
       lastRun: latestSubnetPollRun,
+    },
+    {
+      key: 'subnet-catalog-snapshot',
+      label: 'Subnet table snapshot',
+      title: 'Live subnet table snapshot',
+      description: 'Captures the full Taostats subnet table for every discovered subnet so cross-subnet comparisons stay fresh.',
+      cadenceText: formatPollInterval(config.taostatsSubnetCatalogSnapshotIntervalMinutes || 10),
+      nextRunIso: config.nextSubnetCatalogSnapshotAtIso ?? null,
+      enabled: Boolean(config.taostatsAuthHeader),
+      paused: alphaHolderBackfillActive,
+      lastRun: latestSubnetCatalogSnapshotRun,
     },
     {
       key: 'wallet-activity',
