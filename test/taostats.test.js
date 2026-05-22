@@ -1118,8 +1118,10 @@ test('historical per-subnet backfill stores the same historical window for every
   assert.equal(result.ok, true);
   assert.equal(result.inserted, 4);
   assert.equal(result.skipped, 0);
-  assert.equal(getRecentSnapshots(db, 64, 10).length, 2);
-  assert.equal(getRecentSnapshots(db, 65, 10).length, 2);
+  const recent64 = getRecentSnapshots(db, 64, 10);
+  const recent65 = getRecentSnapshots(db, 65, 10);
+  assert.equal(recent64.length, 2);
+  assert.equal(recent65.length, 2);
   db.close();
 });
 

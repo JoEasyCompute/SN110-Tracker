@@ -1301,6 +1301,35 @@ async function fetchHistoricalSnapshots({
     }));
   }
 
+  for (let index = 0; index < snapshots.length; index += 1) {
+    const current = snapshots[index];
+    const currentTime = new Date(current.captured_at).getTime();
+    if (!Number.isFinite(currentTime)) continue;
+    const cutoff = currentTime - 24 * 60 * 60 * 1000;
+    let prior = null;
+    for (let priorIndex = index - 1; priorIndex >= 0; priorIndex -= 1) {
+      const candidate = snapshots[priorIndex];
+      const candidateTime = new Date(candidate.captured_at).getTime();
+      if (Number.isFinite(candidateTime) && candidateTime <= cutoff && Number(candidate.netuid) === Number(current.netuid)) {
+        prior = candidate;
+        break;
+      }
+    }
+    if (!prior) continue;
+
+    const priorPrice = asNumber(prior.price_num);
+    const currentPrice = asNumber(current.price_num);
+    if (Number.isFinite(priorPrice) && priorPrice > 0 && Number.isFinite(currentPrice)) {
+      current.price_change_1_day_text = String(((currentPrice - priorPrice) / priorPrice) * 100);
+    }
+
+    const priorMarketCap = asNumber(prior.market_cap_num);
+    const currentMarketCap = asNumber(current.market_cap_num);
+    if (Number.isFinite(priorMarketCap) && priorMarketCap > 0 && Number.isFinite(currentMarketCap)) {
+      current.market_cap_change_1_day_text = String(((currentMarketCap - priorMarketCap) / priorMarketCap) * 100);
+    }
+  }
+
   return snapshots;
 }
 
