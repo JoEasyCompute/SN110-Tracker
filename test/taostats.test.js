@@ -3198,6 +3198,249 @@ test('ctrl-clicking a wallet card opens the transaction modal and renders the ti
             text: async () => '[]',
           };
         }
+        if (text.includes('/stake-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              history: [
+                { captured_at: '2026-04-27T00:00:00.000Z', balance: '100000000000' },
+                { captured_at: '2026-04-28T00:00:00.000Z', balance: '120000000000' },
+                { captured_at: '2026-04-29T00:00:00.000Z', balance: '110000000000' },
+                { captured_at: '2026-04-30T00:00:00.000Z', balance: '140000000000' },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
+        if (text.includes('/stake-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              address: '5WalletAlpha123456789ABCDEFGH',
+              days: 7,
+              history: [
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 100000000000,
+                  balance_as_tao_num: 100,
+                  captured_at: '2026-04-27T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 9,
+                  balance_num: 120000000000,
+                  balance_as_tao_num: 120,
+                  captured_at: '2026-04-28T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 110000000000,
+                  balance_as_tao_num: 110,
+                  captured_at: '2026-04-29T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 7,
+                  balance_num: 140000000000,
+                  balance_as_tao_num: 140,
+                  captured_at: '2026-04-30T00:00:00.000Z',
+                },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
+        if (text.includes('/stake-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              address: '5WalletAlpha123456789ABCDEFGH',
+              days: 7,
+              history: [
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 100000000000,
+                  balance_as_tao_num: 100,
+                  captured_at: '2026-04-27T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 9,
+                  balance_num: 120000000000,
+                  balance_as_tao_num: 120,
+                  captured_at: '2026-04-28T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 110000000000,
+                  balance_as_tao_num: 110,
+                  captured_at: '2026-04-29T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 7,
+                  balance_num: 140000000000,
+                  balance_as_tao_num: 140,
+                  captured_at: '2026-04-30T00:00:00.000Z',
+                },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
+        if (text.includes('/stake-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              address: '5WalletAlpha123456789ABCDEFGH',
+              days: 7,
+              history: [
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 100000000000,
+                  balance_as_tao_num: 100,
+                  captured_at: '2026-04-27T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 9,
+                  balance_num: 120000000000,
+                  balance_as_tao_num: 120,
+                  captured_at: '2026-04-28T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 110000000000,
+                  balance_as_tao_num: 110,
+                  captured_at: '2026-04-29T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 7,
+                  balance_num: 140000000000,
+                  balance_as_tao_num: 140,
+                  captured_at: '2026-04-30T00:00:00.000Z',
+                },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
+        if (text.includes('/stake-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              address: '5WalletAlpha123456789ABCDEFGH',
+              days: 7,
+              history: [
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 100000000000,
+                  balance_as_tao_num: 100,
+                  captured_at: '2026-04-27T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 9,
+                  balance_num: 120000000000,
+                  balance_as_tao_num: 120,
+                  captured_at: '2026-04-28T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 110000000000,
+                  balance_as_tao_num: 110,
+                  captured_at: '2026-04-29T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 7,
+                  balance_num: 140000000000,
+                  balance_as_tao_num: 140,
+                  captured_at: '2026-04-30T00:00:00.000Z',
+                },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
         return { ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' };
       };
       window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
@@ -3314,6 +3557,63 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
             text: async () => '[]',
           };
         }
+        if (text.includes('/stake-history')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              address: '5WalletAlpha123456789ABCDEFGH',
+              days: 7,
+              history: [
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 100000000000,
+                  balance_as_tao_num: 100,
+                  captured_at: '2026-04-27T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 9,
+                  balance_num: 120000000000,
+                  balance_as_tao_num: 120,
+                  captured_at: '2026-04-28T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 8,
+                  balance_num: 110000000000,
+                  balance_as_tao_num: 110,
+                  captured_at: '2026-04-29T00:00:00.000Z',
+                },
+                {
+                  wallet_name: 'Alpha Treasury',
+                  wallet_address_ss58: '5WalletAlpha123456789ABCDEFGH',
+                  hotkey_name: 'Miner One',
+                  hotkey_address_ss58: '5HotkeyOne',
+                  netuid: 111,
+                  subnet_rank: 7,
+                  balance_num: 140000000000,
+                  balance_as_tao_num: 140,
+                  captured_at: '2026-04-30T00:00:00.000Z',
+                },
+              ],
+            }),
+            text: async () => '[]',
+          };
+        }
         return { ok: true, status: 200, json: async () => ({ history: [] }), text: async () => '[]' };
       };
       window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
@@ -3336,7 +3636,7 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
 
   const historyModal = dom.window.document.getElementById('history-modal');
   const walletDetails = dom.window.document.getElementById('history-modal-wallet-details');
-  for (let i = 0; i < 60 && !walletDetails.textContent.includes('24h change:'); i += 1) {
+  for (let i = 0; i < 60 && !walletDetails.textContent.includes('α 50'); i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(historyModal.classList.contains('open'));
@@ -3346,6 +3646,19 @@ test('clicking a wallet card opens the history modal and shows alpha stake chang
   assert.equal(walletDetails.textContent.includes('Raw α from current subnet stake positions'), true);
   assert.equal(walletDetails.textContent.includes('24h change: +α 3'), true);
   assert.equal(walletDetails.textContent.includes('≈ +τ 0.3 at current price'), true);
+  assert.equal(walletDetails.textContent.includes('Cumulative α intake'), true);
+  assert.equal(walletDetails.textContent.includes('Positive intake since April 28, 2026'), true);
+  assert.equal(walletDetails.textContent.includes('α 50'), true);
+  const cumulativeStartInput = dom.window.document.getElementById('wallet-cumulative-alpha-start-date');
+  assert.ok(cumulativeStartInput);
+  assert.equal(cumulativeStartInput.value, '2026-04-28');
+  cumulativeStartInput.value = '2026-04-29';
+  cumulativeStartInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  for (let i = 0; i < 60 && !walletDetails.textContent.includes('α 30'); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(walletDetails.textContent.includes('Positive intake since April 29, 2026'), true);
+  assert.equal(walletDetails.textContent.includes('α 30'), true);
 
   dom.window.close();
   db.close();

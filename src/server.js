@@ -3544,6 +3544,8 @@ function renderDashboardClientScript({ netuid, config }) {
         modalHistoryDays: 7,
         modalTransactionsDays: 7,
         modalHistoryRequestId: 0,
+        walletStakeHistoryRequestId: 0,
+        walletCumulativeAlphaStartDate: null,
         modalTransactionsRequestId: 0,
         modalTransactionsCache: new Map(),
         modalHistoryWindowEndMs: null,
@@ -4846,6 +4848,47 @@ function renderDashboardClientScript({ netuid, config }) {
             : 'No current subnet stake positions were returned for this wallet.';
           const stakePositions = Array.isArray(metric.stakePositions) ? metric.stakePositions.slice(0, 20) : [];
           const configuredHotkeys = Array.isArray(metric.configuredHotkeys) ? metric.configuredHotkeys.slice(0, 20) : [];
+          const walletAddress = String(metric.walletAddress || metric.historyId || metric.rawValue || metric.sourceText || '').trim();
+          const walletAlphaStartDateStorageKey = 'sn110-wallet-cumulative-alpha-start-date-v1';
+          const defaultWalletAlphaStartDate = '2026-04-28';
+          const walletAlphaStartDateKey = walletAddress ? walletAlphaStartDateStorageKey + ':' + walletAddress : walletAlphaStartDateStorageKey;
+          const isWalletAlphaDateString = (text) => {
+            const value = String(text ?? '').trim();
+            return value.length === 10
+              && value[4] === '-'
+              && value[7] === '-'
+              && value.slice(0, 4).split('').every((ch) => ch >= '0' && ch <= '9')
+              && value.slice(5, 7).split('').every((ch) => ch >= '0' && ch <= '9')
+              && value.slice(8, 10).split('').every((ch) => ch >= '0' && ch <= '9');
+          };
+          const normalizeDateInputValue = (value, fallback = defaultWalletAlphaStartDate) => {
+            const text = String(value ?? '').trim();
+            if (!text) return fallback;
+            return isWalletAlphaDateString(text) ? text : fallback;
+          };
+          const readWalletAlphaStartDate = () => {
+            try {
+              return normalizeDateInputValue(localStorage.getItem(walletAlphaStartDateKey), defaultWalletAlphaStartDate);
+            } catch {
+              return defaultWalletAlphaStartDate;
+            }
+          };
+          const writeWalletAlphaStartDate = (value) => {
+            const normalized = normalizeDateInputValue(value, defaultWalletAlphaStartDate);
+            try {
+              localStorage.setItem(walletAlphaStartDateKey, normalized);
+            } catch (error) {
+              console.warn('Unable to save wallet alpha start date', error);
+            }
+            return normalized;
+          };
+          const formatWalletAlphaStartDate = (value) => {
+            const normalized = normalizeDateInputValue(value, defaultWalletAlphaStartDate);
+            const date = new Date(normalized + 'T00:00:00.000Z');
+            return Number.isNaN(date.getTime())
+              ? '—'
+              : date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+          };
           const configuredHotkeyMap = new Map(configuredHotkeys
             .filter((hotkey) => hotkey && hotkey.ss58)
             .map((hotkey) => [String(hotkey.ss58), hotkey]));
@@ -4921,6 +4964,37 @@ function renderDashboardClientScript({ netuid, config }) {
               totalsByCapture.set(capturedAt, (totalsByCapture.get(capturedAt) || 0) + raw);
             }
             return [...totalsByCapture.entries()].sort((a, b) => a[0] - b[0]);
+          })();
+          const walletAlphaStartDate = normalizeDateInputValue(state.walletCumulativeAlphaStartDate || readWalletAlphaStartDate(), defaultWalletAlphaStartDate);
+          const walletAlphaStartTime = new Date(walletAlphaStartDate + 'T00:00:00.000Z').getTime();
+          const walletAlphaCumulative = (() => {
+            if (!Number.isFinite(walletAlphaStartTime) || !alphaHistorySeries.length) return null;
+            const baselinePoint = [...alphaHistorySeries].reverse().find((point) => point[0] < walletAlphaStartTime) || alphaHistorySeries[0] || null;
+            let previousPoint = baselinePoint;
+            let started = false;
+            let cumulative = 0;
+            for (const point of alphaHistorySeries) {
+              if (point[0] < walletAlphaStartTime) {
+                continue;
+              }
+              started = true;
+              if (previousPoint && previousPoint !== point) {
+                const delta = point[1] - previousPoint[1];
+                if (Number.isFinite(delta) && delta > 0) {
+                  cumulative += delta;
+                }
+              }
+              previousPoint = point;
+            }
+            if (!started) return null;
+            return cumulative;
+          })();
+          const walletAlphaCumulativeHistoryStart = (() => {
+            if (!alphaHistorySeries.length || !Number.isFinite(walletAlphaStartTime)) return null;
+            const earliest = alphaHistorySeries[0][0];
+            return Number.isFinite(earliest) && earliest > walletAlphaStartTime
+              ? new Date(earliest).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+              : null;
           })();
           const alphaHistoryChangeRaw = alphaHistorySeries.length > 1
             ? (() => {
@@ -5049,6 +5123,13 @@ function renderDashboardClientScript({ netuid, config }) {
           const alphaChangeTaoText = Number.isFinite(alphaDailyChangeTao)
             ? '≈ ' + formatSignedTao(alphaDailyChangeTao, 2) + ' at current price'
             : 'Compared with the previous day';
+          const walletAlphaCumulativeText = Number.isFinite(walletAlphaCumulative)
+            ? formatAlpha(walletAlphaCumulative, 4)
+            : '—';
+          const walletAlphaCumulativeDateText = formatWalletAlphaStartDate(walletAlphaStartDate);
+          const walletAlphaCumulativeNote = walletAlphaCumulativeHistoryStart
+            ? 'Stored history starts on ' + walletAlphaCumulativeHistoryStart + ', so earlier activity is not counted.'
+            : 'Only positive alpha deltas are counted.';
           modalElements.walletDetails.innerHTML = [
             '<h4 class="wallet-details-title">Wallet breakdown</h4>',
             '<div class="wallet-breakdown-row">',
@@ -5079,11 +5160,22 @@ function renderDashboardClientScript({ netuid, config }) {
             '    <div class="subtext wallet-alpha-change">' + escapeHtml(alphaChangeText) + '</div>',
             '    <div class="subtext wallet-alpha-change">' + escapeHtml(alphaChangeTaoText) + '</div>',
             '  </div>',
+            '  <div class="wallet-breakdown-card wallet-alpha-cumulative-card">',
+            '    <div class="label">Cumulative α intake</div>',
+            '    <div class="value">' + escapeHtml(walletAlphaCumulativeText) + '</div>',
+            '    <div class="subtext">Positive intake since ' + escapeHtml(walletAlphaCumulativeDateText) + '</div>',
+            '    <div class="subtext">' + escapeHtml(walletAlphaCumulativeNote) + '</div>',
+            '  </div>',
             '  <div class="wallet-breakdown-card">',
             '    <div class="label">24h Change</div>',
             '    <div class="value">' + escapeHtml(formatWalletSignedAmount(change24h, 2, priceUsd)) + '</div>',
             '    <div class="subtext">Compared with the previous day</div>',
             '  </div>',
+            '</div>',
+            '<div class="wallet-alpha-cumulative-control">',
+            '  <label for="wallet-cumulative-alpha-start-date">Cumulative α start date</label>',
+            '  <input type="date" id="wallet-cumulative-alpha-start-date" value="' + escapeHtml(walletAlphaStartDate) + '" onchange="window.updateWalletCumulativeAlphaStartDate(this.value, this);">',
+            '  <span class="wallet-alpha-cumulative-control-note">Only positive deltas are counted.</span>',
             '</div>',
             '<div class="wallet-profile">',
             '  <h4 class="wallet-details-title">Wallet profile</h4>',
@@ -5188,6 +5280,105 @@ function renderDashboardClientScript({ netuid, config }) {
             ].join(''),
             '</div>',
           ].join('');
+          window.updateWalletCumulativeAlphaStartDate = (value, input) => {
+            const activeMetric = state.modalMetric;
+            const activeWalletAddress = activeMetric?.walletAddress || activeMetric?.historyId || activeMetric?.rawValue || activeMetric?.sourceText || '';
+            const rawValue = String(value ?? '').trim();
+            const nextValue = isWalletAlphaDateString(rawValue) ? rawValue : defaultWalletAlphaStartDate;
+            try {
+              localStorage.setItem(walletAlphaStartDateKey, nextValue);
+            } catch (error) {
+              console.warn('Unable to save wallet alpha start date', error);
+            }
+            state.walletCumulativeAlphaStartDate = nextValue;
+            if (input) input.value = nextValue;
+            if (!activeMetric || activeMetric.kind !== 'wallet' || !activeWalletAddress) return;
+            state.walletStakeHistoryRequestId += 1;
+            const requestId = state.walletStakeHistoryRequestId;
+            const parsedStart = new Date(nextValue + 'T00:00:00.000Z');
+            const daysSinceStart = Number.isNaN(parsedStart.getTime())
+              ? 30
+              : Math.max(30, Math.ceil((Date.now() - parsedStart.getTime()) / 86400000) + 2);
+            const fetchDays = Math.max(modalHistoryFetchDays(activeMetric, state.modalHistoryDays || 7), daysSinceStart);
+            const walletAlphaHistorySeries = (() => {
+              if (!Array.isArray(state.modalStakeHistory) || !state.modalStakeHistory.length) return [];
+              const totalsByCapture = new Map();
+              for (const row of state.modalStakeHistory) {
+                const capturedAt = row?.captured_at ? new Date(row.captured_at).getTime() : null;
+                if (!Number.isFinite(capturedAt)) continue;
+                const raw = toAlphaUnits(row.balance_num ?? row.balance ?? row.balance_as_tao_num ?? null);
+                if (!Number.isFinite(raw)) continue;
+                totalsByCapture.set(capturedAt, (totalsByCapture.get(capturedAt) || 0) + raw);
+              }
+              return [...totalsByCapture.entries()].sort((a, b) => a[0] - b[0]);
+            })();
+            const walletAlphaStartTime = new Date(nextValue + 'T00:00:00.000Z').getTime();
+            const walletAlphaCumulative = (() => {
+              if (!Number.isFinite(walletAlphaStartTime) || !walletAlphaHistorySeries.length) return null;
+              const baselinePoint = [...walletAlphaHistorySeries].reverse().find((point) => point[0] < walletAlphaStartTime) || walletAlphaHistorySeries[0] || null;
+              let previousPoint = baselinePoint;
+              let started = false;
+              let cumulative = 0;
+              for (const point of walletAlphaHistorySeries) {
+                if (point[0] < walletAlphaStartTime) {
+                  continue;
+                }
+                started = true;
+                if (previousPoint && previousPoint !== point) {
+                  const delta = point[1] - previousPoint[1];
+                  if (Number.isFinite(delta) && delta > 0) {
+                    cumulative += delta;
+                  }
+                }
+                previousPoint = point;
+              }
+              if (!started) return null;
+              return cumulative;
+            })();
+            const walletAlphaCumulativeCard = modalElements.walletDetails?.querySelector('.wallet-alpha-cumulative-card');
+            if (walletAlphaCumulativeCard) {
+              const valueNode = walletAlphaCumulativeCard.querySelector('.value');
+              const subtextNodes = walletAlphaCumulativeCard.querySelectorAll('.subtext');
+              if (valueNode) {
+                valueNode.textContent = Number.isFinite(walletAlphaCumulative)
+                  ? formatAlpha(walletAlphaCumulative, 4)
+                  : '—';
+              }
+              if (subtextNodes[0]) {
+                subtextNodes[0].textContent = 'Positive intake since ' + formatWalletAlphaStartDate(nextValue);
+              }
+              if (subtextNodes[1]) {
+                subtextNodes[1].textContent = walletAlphaCumulativeHistoryStart
+                  ? 'Stored history starts on ' + walletAlphaCumulativeHistoryStart + ', so earlier activity is not counted.'
+                  : 'Only positive alpha deltas are counted.';
+              }
+            }
+            void loadHistory(fetchDays, 'wallet-stake', activeWalletAddress).then((history) => {
+              if (requestId !== state.walletStakeHistoryRequestId) return;
+              if (state.modalMetric !== activeMetric) return;
+              state.modalStakeHistory = Array.isArray(history) ? history : [];
+              try {
+                renderWalletDetails(activeMetric);
+              } catch (error) {
+                console.warn('Unable to refresh wallet alpha intake for', activeMetric.label, error);
+              }
+              try {
+                renderAlphaHistoryChart();
+              } catch (error) {
+                console.warn('Unable to refresh wallet alpha chart for', activeMetric.label, error);
+              }
+            }).catch((error) => {
+              console.warn('Unable to reload wallet stake history for cumulative alpha intake', error);
+            });
+          };
+          if (modalElements.walletDetails && modalElements.walletDetails.dataset.walletCumulativeAlphaBound !== 'true') {
+            modalElements.walletDetails.dataset.walletCumulativeAlphaBound = 'true';
+            modalElements.walletDetails.addEventListener('change', (event) => {
+              const target = event?.target;
+              if (!target || target.id !== 'wallet-cumulative-alpha-start-date') return;
+              window.updateWalletCumulativeAlphaStartDate(target.value, target);
+            });
+          }
         } catch (error) {
           console.warn('Unable to render wallet details for', metric.label, error);
           if (modalElements.walletDetails) {
@@ -6906,13 +7097,25 @@ function renderDashboardClientScript({ netuid, config }) {
 
       async function loadWalletStakeHistory(metric, days) {
         if (!metric || metric.kind !== 'wallet') return [];
-        const requestId = state.modalHistoryRequestId;
+        const requestId = ++state.walletStakeHistoryRequestId;
         const address = metric.historyId || metric.walletAddress || metric.rawValue || metric.sourceText || '';
         if (!address) return [];
-        const fetchDays = Math.max(1, Number(days || 30));
+        const storedStartDate = (() => {
+          try {
+            const key = 'sn110-wallet-cumulative-alpha-start-date-v1:' + address;
+            return String(localStorage.getItem(key) || '2026-04-28').trim() || '2026-04-28';
+          } catch {
+            return '2026-04-28';
+          }
+        })();
+        const parsedStart = new Date(storedStartDate + 'T00:00:00.000Z');
+        const daysSinceStart = Number.isNaN(parsedStart.getTime())
+          ? 30
+          : Math.max(30, Math.ceil((Date.now() - parsedStart.getTime()) / 86400000) + 2);
+        const fetchDays = Math.max(1, Number(days || 30), daysSinceStart);
         try {
           const history = await loadHistory(fetchDays, 'wallet-stake', address);
-          if (requestId !== state.modalHistoryRequestId) return [];
+          if (requestId !== state.walletStakeHistoryRequestId) return [];
           return history;
         } catch (error) {
           console.warn('Unable to load wallet stake history for', metric.label, error);
@@ -9718,6 +9921,32 @@ function renderPage(model, { experimental = false } = {}) {
         margin-top: 4px;
         color: var(--muted);
         font-size: 12px;
+      }
+      .wallet-alpha-cumulative-control {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 12px;
+        margin: 12px 0 6px;
+        color: var(--muted);
+      }
+      .wallet-alpha-cumulative-control label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .wallet-alpha-cumulative-control input[type="date"] {
+        min-width: 170px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(143, 163, 184, 0.18);
+        border-radius: 10px;
+        color: var(--text);
+        padding: 8px 10px;
+        font: inherit;
+      }
+      .wallet-alpha-cumulative-control-note {
+        font-size: 12px;
+        color: var(--muted);
       }
       .wallet-positions {
         margin-top: 16px;
