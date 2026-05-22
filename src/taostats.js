@@ -745,7 +745,7 @@ async function fetchFromApi({ netuid, taostatsBaseUrl, taostatsPublicBaseUrl, ta
   return snapshot;
 }
 
-async function fetchFromPublicPage({ netuid, taostatsPublicBaseUrl, rateLimiter = null }) {
+async function fetchFromPublicPage({ netuid, taostatsPublicBaseUrl, rateLimiter = null, includeHolders = true }) {
   const url = `${taostatsPublicBaseUrl.replace(/\/$/, '')}/subnets/${netuid}`;
   const { text: html } = await fetchText(url, { rateLimiter });
   const payload = extractEscapedJsonObject(html, '\\"dtaoSubnet\\":{');
@@ -754,12 +754,14 @@ async function fetchFromPublicPage({ netuid, taostatsPublicBaseUrl, rateLimiter 
     sourceUrl: url,
     netuid,
   });
-  try {
-    const holders = await fetchSubnetHoldersCount({ netuid, taostatsPublicBaseUrl, rateLimiter });
-    snapshot.alpha_holders_text = holders.holderCount === null ? null : String(holders.holderCount);
-    snapshot.alpha_holders_num = holders.holderCount;
-  } catch {
-    // Non-fatal enrichment: keep the subnet snapshot even if the holders count page fails.
+  if (includeHolders) {
+    try {
+      const holders = await fetchSubnetHoldersCount({ netuid, taostatsPublicBaseUrl, rateLimiter });
+      snapshot.alpha_holders_text = holders.holderCount === null ? null : String(holders.holderCount);
+      snapshot.alpha_holders_num = holders.holderCount;
+    } catch {
+      // Non-fatal enrichment: keep the subnet snapshot even if the holders count page fails.
+    }
   }
   return snapshot;
 }

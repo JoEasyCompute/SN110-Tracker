@@ -841,9 +841,9 @@ test('ingestOnce refreshes subnet metadata without tripping the catalog refresh 
   db.close();
 });
 
-test('subnet catalog backfill repairs zero price and market cap values from the live subnet snapshot', async () => {
+test('subnet catalog backfill pulls the richer live subnet snapshot fields from the public page', async () => {
   const db = openDatabase(':memory:');
-  const latestCalls = [];
+  const pageCalls = [];
   const taostats = {
     fetchSubnetLatestCatalog: async () => ([
       {
@@ -861,40 +861,45 @@ test('subnet catalog backfill repairs zero price and market cap values from the 
         alpha_staked: '200',
       },
     ]),
-    fetchLatestSnapshot: async ({ netuid }) => {
-      latestCalls.push(netuid);
-      return {
-        snapshot: normalizeSnapshot({
-          netuid,
-          block_number: 110001,
-          timestamp: '2026-05-14T00:00:00Z',
-          name: 'Green Compute',
-          symbol: 'GC',
-          price: '0.0085',
-          market_cap: '123456789',
-          liquidity: '100',
-          total_tao: '200',
-          total_alpha: '300',
-          alpha_in_pool: '300',
-          alpha_staked: '200',
-          emission: '1',
-          projected_emission: '1',
-          incentive_burn: '0',
-          recycled_24_hours: '0',
-          recycled_lifetime: '0',
-          recycled_since_registration: '0',
-          neuron_registration_cost: '0',
-          active_keys: 1,
-          max_neurons: 1,
-          net_flow_1_day: '1',
-          net_flow_7_days: '1',
-          net_flow_30_days: '1',
-          root_sell: 'NO',
-        }, { source: 'api', sourceUrl: 'https://example.invalid/api/subnet/latest/v1', netuid }),
-        source: 'api',
-        fallbackUsed: false,
-        detail: { source: 'api' },
-      };
+    fetchFromPublicPage: async ({ netuid }) => {
+      pageCalls.push(netuid);
+      return normalizeSnapshot({
+        netuid,
+        block_number: 110001,
+        timestamp: '2026-05-14T00:00:00Z',
+        name: 'Green Compute',
+        symbol: 'GC',
+        price: '0.0085',
+        market_cap: '123456789',
+        liquidity: '987654321',
+        total_tao: '222',
+        total_alpha: '333',
+        alpha_in_pool: '234',
+        alpha_staked: '99',
+        root_prop: '0.271',
+        market_cap_change_1_day: '-13.0',
+        price_change_1_day: '-13.2',
+        price_change_1_hour: '-2.9',
+        price_change_1_week: '16.0',
+        price_change_1_month: '32.7',
+        tao_volume_24_hr: '5361116266413',
+        tao_volume_24_hr_change_1_day: '-10.6',
+        alpha_volume_24_hr: '5361116266413',
+        alpha_volume_24_hr_change_1_day: '-10.6',
+        emission: '1',
+        projected_emission: '1',
+        incentive_burn: '0',
+        recycled_24_hours: '0',
+        recycled_lifetime: '0',
+        recycled_since_registration: '0',
+        neuron_registration_cost: '0',
+        active_keys: 1,
+        max_neurons: 1,
+        net_flow_1_day: '1',
+        net_flow_7_days: '1',
+        net_flow_30_days: '1',
+        root_sell: 'NO',
+      }, { source: 'scrape', sourceUrl: `https://example.invalid/subnets/${netuid}`, netuid });
     },
   };
   const service = createIngestService({
@@ -911,10 +916,13 @@ test('subnet catalog backfill repairs zero price and market cap values from the 
 
   const result = await service.backfillSubnetCatalogSnapshots({ overwrite: true });
   assert.equal(result.ok, true);
-  assert.deepEqual(latestCalls, [110]);
+  assert.deepEqual(pageCalls, [110]);
   const latest = getLatestSnapshot(db, 110);
   assert.equal(latest.price_num, 0.0085);
   assert.equal(latest.market_cap_num, 123456789);
+  assert.equal(latest.liquidity_num, 987654321);
+  assert.equal(latest.root_prop_text, '0.271');
+  assert.equal(latest.price_change_1_day_text, '-13.2');
   assert.equal(latest.source, 'subnet-catalog-snapshot');
   db.close();
 });
@@ -974,6 +982,64 @@ test('subnet table snapshot backfill stores the live catalog rows for every subn
         root_sell: 'NO',
       },
     ]),
+    fetchFromPublicPage: async ({ netuid }) => {
+      const row = netuid === 64
+        ? {
+            netuid,
+            block_number: 640001,
+            timestamp: '2026-05-14T00:00:00Z',
+            name: 'Chutes',
+            symbol: 'CHU',
+            price: '1.0',
+            market_cap: '100',
+            liquidity: '50',
+            total_tao: '1000',
+            total_alpha: '2000',
+            alpha_in_pool: '1000',
+            alpha_staked: '1000',
+            root_prop: '50',
+            emission: '10',
+            projected_emission: '11',
+            incentive_burn: '0.1',
+            recycled_24_hours: '1000',
+            excess_tao: '7500000',
+            neuron_registration_cost: '500000',
+            active_keys: 100,
+            max_neurons: 256,
+            net_flow_1_day: '20',
+            net_flow_7_days: '30',
+            net_flow_30_days: '40',
+            root_sell: 'NO',
+          }
+        : {
+            netuid,
+            block_number: 650001,
+            timestamp: '2026-05-14T00:00:00Z',
+            name: 'Mantis',
+            symbol: 'MAN',
+            price: '2.0',
+            market_cap: '200',
+            liquidity: '75',
+            total_tao: '2000',
+            total_alpha: '4000',
+            alpha_in_pool: '2000',
+            alpha_staked: '2000',
+            root_prop: '25',
+            emission: '15',
+            projected_emission: '16',
+            incentive_burn: '0.2',
+            recycled_24_hours: '2000',
+            excess_tao: '7500000',
+            neuron_registration_cost: '600000',
+            active_keys: 200,
+            max_neurons: 512,
+            net_flow_1_day: '25',
+            net_flow_7_days: '35',
+            net_flow_30_days: '45',
+            root_sell: 'NO',
+          };
+      return normalizeSnapshot(row, { source: 'scrape', sourceUrl: `https://example.invalid/subnets/${netuid}`, netuid });
+    },
   };
   const service = createIngestService({
     db,
