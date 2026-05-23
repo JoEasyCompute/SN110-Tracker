@@ -1,6 +1,6 @@
 {
   "project": "sn110-tracker",
-  "updated_at": "2026-05-22T05:02:12.883Z",
+  "updated_at": "2026-05-23T12:47:16.317Z",
   "key_facts": [
     "Dashboard tracks Taostats subnet 110 using plain JavaScript Node.js and local SQLite.",
     "Live poll intervals are limited to 60/120/240 minutes, persisted in SQLite app_settings, and can be changed from the admin drawer when TAOSTATS_ADMIN_API_KEY is configured.",
@@ -60,7 +60,10 @@
     "The Chain Buys 1D backfill admin action now surfaces the actual server skip reason (for example ingest already running) instead of only showing a generic failure message.",
     "Chain Buys 1D should be derived from Taostats excess_tao as a daily value (per-block excess TAO × 7200), matching the official subnet table rather than using the raw per-block value directly.",
     "The Chain Buys 1D backfill now supports an overwrite checkbox in the admin drawer so previously stored values can be replaced in place for a selected date range.",
-    "Chain Buys 1D is now converted from raw excess_tao units to TAO/day using raoToTao(excess_tao) × 7200, and the admin backfill supports overwrite so previously stored bad values can be corrected in place."
+    "Chain Buys 1D is now converted from raw excess_tao units to TAO/day using raoToTao(excess_tao) × 7200, and the admin backfill supports overwrite so previously stored bad values can be corrected in place.",
+    "The subnet table snapshot backfill now uses the live public Taostats subnet page so catalog snapshots keep price, market cap, liquidity, root share, and 24h change fields aligned with the current view.",
+    "Historical per-subnet backfill now derives 24h change fields within each subnet’s own history, so the historical comparison rows do not bleed across netuids.",
+    "Subnet table snapshots now run every 30 minutes instead of every 10 minutes."
   ],
   "notes": [
     "The admin drawer now has a subnet table snapshot action that captures the live Taostats /subnets catalog for every subnet into the local snapshots table, so the team can track cross-subnet comparisons before deciding which cards to surface.",
